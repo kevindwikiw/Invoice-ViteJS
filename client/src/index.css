@@ -1,0 +1,260 @@
+@import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;500;600&family=Manrope:wght@300;400;500;600&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ============================================
+   DARK MOODY EDITORIAL - Photographer Style
+   ============================================ */
+
+:root {
+    /* Fonts */
+    --font-display: 'Playfair Display', Georgia, serif;
+    --font-body: 'Manrope', -apple-system, sans-serif;
+
+    /* Dark Moody Palette */
+    --bg-deep: #0a0a0a;
+    --bg-card: #111111;
+    --bg-elevated: #1a1a1a;
+    --bg-hover: #222222;
+
+    --text-primary: #f5f5f5;
+    --text-secondary: #a0a0a0;
+    --text-muted: #606060;
+
+    --border: #252525;
+    --border-light: #1f1f1f;
+
+    /* Warm accent - like darkroom light */
+    --accent: #c4a35a;
+    --accent-muted: rgba(196, 163, 90, 0.15);
+
+    font-family: var(--font-body);
+    font-weight: 400;
+    -webkit-font-smoothing: antialiased;
+}
+
+/* Light mode override */
+.light {
+    --bg-deep: #fafaf8;
+    --bg-card: #ffffff;
+    --bg-elevated: #f5f5f3;
+    --bg-hover: #f0efe8;
+    --text-primary: #1a1a1a;
+    --text-secondary: #666666;
+    --text-muted: #999999;
+    --border: #e8e6e0;
+    --border-light: #f5f4f0;
+    --accent: #8b7340;
+    --accent-muted: rgba(139, 115, 64, 0.1);
+}
+
+body {
+    background: var(--bg-deep);
+    color: var(--text-primary);
+    transition: background-color 0.3s ease, color 0.3s ease;
+}
+
+/* Ensure all text inherits properly */
+* {
+    transition: background-color 0.3s ease, border-color 0.3s ease, color 0.2s ease;
+}
+
+/* ============================================
+   TYPOGRAPHY - Editorial Style
+   ============================================ */
+@layer base {
+    h1 {
+        font-family: var(--font-display);
+        font-weight: 400;
+        font-size: 2.75rem;
+        line-height: 1.1;
+        letter-spacing: -0.02em;
+        color: var(--text-primary);
+    }
+
+    h2 {
+        font-family: var(--font-display);
+        font-weight: 400;
+        font-size: 1.5rem;
+        letter-spacing: -0.01em;
+        color: var(--text-primary);
+    }
+
+    h3 {
+        font-family: var(--font-body);
+        font-weight: 500;
+        font-size: 0.6875rem;
+        letter-spacing: 0.2em;
+        text-transform: uppercase;
+        color: var(--text-muted);
+    }
+
+    p,
+    span,
+    div,
+    label {
+        color: inherit;
+    }
+}
+
+/* ============================================
+   FILM STRIP ACCENT
+   ============================================ */
+.film-border {
+    position: relative;
+}
+
+.film-border::before,
+.film-border::after {
+    content: '';
+    position: absolute;
+    left: 0;
+    right: 0;
+    height: 1px;
+    background: repeating-linear-gradient(90deg,
+            var(--border) 0px,
+            var(--border) 4px,
+            transparent 4px,
+            transparent 8px);
+}
+
+.film-border::before {
+    top: 0;
+}
+
+.film-border::after {
+    bottom: 0;
+}
+
+/* ============================================
+   BUTTONS
+   ============================================ */
+.btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.625rem;
+    padding: 0.875rem 1.75rem;
+    font-family: var(--font-body);
+    font-size: 0.6875rem;
+    font-weight: 500;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    transition: all 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+    border: 1px solid transparent;
+}
+
+.btn-primary {
+    background: var(--accent);
+    color: var(--bg-deep);
+    border-color: var(--accent);
+}
+
+.btn-primary:hover {
+    background: transparent;
+    color: var(--accent);
+}
+
+.btn-ghost {
+    background: transparent;
+    color: var(--text-secondary);
+    border-color: var(--border);
+}
+
+.btn-ghost:hover {
+    border-color: var(--text-secondary);
+    color: var(--text-primary);
+}
+
+/* ============================================
+   INPUTS
+   ============================================ */
+input,
+select,
+textarea {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    padding: 1rem 1.25rem;
+    font-size: 0.875rem;
+    font-family: var(--font-body);
+    color: var(--text-primary);
+    transition: border-color 0.3s ease, background-color 0.3s ease;
+    width: 100%;
+}
+
+input:focus,
+select:focus,
+textarea:focus {
+    outline: none;
+    border-color: var(--accent);
+}
+
+input::placeholder,
+textarea::placeholder {
+    color: var(--text-muted);
+}
+
+/* ============================================
+   SCROLLBAR
+   ============================================ */
+::-webkit-scrollbar {
+    width: 2px;
+}
+
+::-webkit-scrollbar-thumb {
+    background: var(--accent);
+}
+
+/* ============================================
+   SAFE AREAS
+   ============================================ */
+.safe-top {
+    padding-top: env(safe-area-inset-top);
+}
+
+.safe-bottom {
+    padding-bottom: env(safe-area-inset-bottom);
+}
+
+/* ============================================
+   DARK MODE TAILWIND OVERRIDES
+   ============================================ */
+.dark .bg-white {
+    background-color: var(--bg-card) !important;
+}
+
+.dark .text-surface-900 {
+    color: var(--text-primary) !important;
+}
+
+.dark .border-surface-200 {
+    border-color: var(--border) !important;
+}
+
+/* ============================================
+   LIGHT MODE TAILWIND OVERRIDES
+   ============================================ */
+.light .bg-white {
+    background-color: var(--bg-card) !important;
+}
+
+.light .text-surface-900 {
+    color: var(--text-primary) !important;
+}
+
+.light .border-surface-200 {
+    border-color: var(--border) !important;
+}
+
+/* Force text colors to use variables */
+.light h1,
+.light h2 {
+    color: var(--text-primary) !important;
+}
+
+.dark h1,
+.dark h2 {
+    color: var(--text-primary) !important;
+}
