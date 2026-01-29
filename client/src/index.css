@@ -33,6 +33,7 @@
     font-family: var(--font-body);
     font-weight: 400;
     -webkit-font-smoothing: antialiased;
+    scroll-behavior: smooth;
 }
 
 /* Light mode override */
@@ -56,10 +57,7 @@ body {
     transition: background-color 0.3s ease, color 0.3s ease;
 }
 
-/* Ensure all text inherits properly */
-* {
-    transition: background-color 0.3s ease, border-color 0.3s ease, color 0.2s ease;
-}
+/* Removed universal transition * {} as it causes major performance/scroll lag */
 
 /* ============================================
    TYPOGRAPHY - Editorial Style
@@ -200,10 +198,38 @@ textarea::placeholder {
    SCROLLBAR
    ============================================ */
 ::-webkit-scrollbar {
-    width: 2px;
+    width: 6px;
+    height: 6px;
+}
+
+::-webkit-scrollbar-track {
+    background: transparent;
 }
 
 ::-webkit-scrollbar-thumb {
+    background: #333;
+    border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: var(--accent);
+}
+
+/* Custom Scrollbar Utility for Modules/Cards */
+.custom-scrollbar::-webkit-scrollbar {
+    width: 4px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb {
+    background: #333;
+    border-radius: 2px;
+}
+
+.custom-scrollbar:hover::-webkit-scrollbar-thumb {
     background: var(--accent);
 }
 

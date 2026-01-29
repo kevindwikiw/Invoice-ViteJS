@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react';
-import { Link, Outlet } from '@tanstack/react-router';
-import { LayoutDashboard, PlusCircle, Package, Settings, FileClock, Menu, X, Moon, Sun } from 'lucide-react';
+import { Link, Outlet, useNavigate } from '@tanstack/react-router';
+import { PlusCircle, Package, FileClock, Menu, X, Moon, Sun, LogOut, Users, Shield } from 'lucide-react';
 import clsx from 'clsx';
+import { useAuth, getRoleLabel, getRoleColor } from '../context/auth';
 
 const SidebarItem = ({ to, icon: Icon, label, onClick }: { to: string, icon: any, label: string, onClick?: () => void }) => {
     return (
@@ -24,6 +25,8 @@ const SidebarItem = ({ to, icon: Icon, label, onClick }: { to: string, icon: any
 
 export const Layout = () => {
     const [sidebarOpen, setSidebarOpen] = useState(false);
+    const { user, logout, hasPermission, isAuthenticated } = useAuth();
+    const navigate = useNavigate();
 
     const [darkMode, setDarkMode] = useState(() => {
         if (typeof window !== 'undefined') {
@@ -44,6 +47,20 @@ export const Layout = () => {
         }
         localStorage.setItem('darkMode', String(darkMode));
     }, [darkMode]);
+
+    // Redirect to login if not authenticated
+    useEffect(() => {
+        if (!isAuthenticated) {
+            navigate({ to: '/login' });
+        }
+    }, [isAuthenticated, navigate]);
+
+    const handleLogout = () => {
+        logout();
+        navigate({ to: '/login' });
+    };
+
+    if (!user) return null;
 
     return (
         <div className="flex min-h-screen" style={{ background: 'var(--bg-deep)' }}>
@@ -71,7 +88,7 @@ export const Layout = () => {
                         <img
                             src="/logo.png"
                             alt="Logo"
-                            className="h-10 w-auto object-contain"
+                            className="h-24 w-auto object-contain"
                             style={{ filter: darkMode ? 'none' : 'invert(1)' }}
                         />
                     </div>
@@ -84,55 +101,65 @@ export const Layout = () => {
                     </button>
                 </div>
 
-                {/* Nav */}
-                <nav className="flex-1 py-6">
-                    <div className="px-4 mb-3">
-                        <span
-                            className="text-xs tracking-widest uppercase"
-                            style={{ color: 'var(--text-muted)', fontFamily: 'var(--font-body)' }}
-                        >
-                            Menu
-                        </span>
+                {/* User Info */}
+                <div className="px-4 py-4" style={{ borderBottom: '1px solid var(--border)' }}>
+                    <div className="flex items-center gap-3">
+                        <div className="w-9 h-9 rounded-full bg-[var(--accent)] flex items-center justify-center text-[var(--bg-deep)] font-bold text-sm">
+                            {user.name.charAt(0).toUpperCase()}
+                        </div>
+                        <div className="flex-1 min-w-0">
+                            <p className="text-sm font-medium text-[var(--text-primary)] truncate">{user.name}</p>
+                            <div className={clsx("inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-bold uppercase tracking-wider border mt-1", getRoleColor(user.role))}>
+                                <Shield size={10} />
+                                {getRoleLabel(user.role)}
+                            </div>
+                        </div>
                     </div>
-                    <SidebarItem to="/" icon={LayoutDashboard} label="Dashboard" onClick={() => setSidebarOpen(false)} />
+                </div>
+
+                {/* Nav */}
+                <nav className="flex-1 py-6 overflow-y-auto">
+                    <div className="px-4 mb-3">
+                        <span className="text-xs tracking-widest uppercase" style={{ color: 'var(--text-muted)' }}>Menu</span>
+                    </div>
                     <SidebarItem to="/create" icon={PlusCircle} label="Create Invoice" onClick={() => setSidebarOpen(false)} />
                     <SidebarItem to="/history" icon={FileClock} label="History" onClick={() => setSidebarOpen(false)} />
 
                     <div className="px-4 mt-8 mb-3">
-                        <span
-                            className="text-xs tracking-widest uppercase"
-                            style={{ color: 'var(--text-muted)', fontFamily: 'var(--font-body)' }}
-                        >
-                            Manage
-                        </span>
+                        <span className="text-xs tracking-widest uppercase" style={{ color: 'var(--text-muted)' }}>Manage</span>
                     </div>
-                    <SidebarItem to="/packages" icon={Package} label="Packages" onClick={() => setSidebarOpen(false)} />
-                    <SidebarItem to="/settings" icon={Settings} label="Settings" onClick={() => setSidebarOpen(false)} />
+                    <SidebarItem to="/" icon={Package} label="Packages" onClick={() => setSidebarOpen(false)} />
+
+                    {/* SuperAdmin Only: User Management */}
+                    {hasPermission('manage_users') && (
+                        <SidebarItem to="/users" icon={Users} label="User Management" onClick={() => setSidebarOpen(false)} />
+                    )}
                 </nav>
 
-                {/* Theme Toggle */}
-                <div className="p-4" style={{ borderTop: '1px solid var(--border)' }}>
+                {/* Bottom Section */}
+                <div style={{ borderTop: '1px solid var(--border)' }}>
+                    {/* Theme Toggle */}
                     <button
                         onClick={() => setDarkMode(!darkMode)}
-                        className="w-full flex items-center justify-between px-3 py-2.5 text-sm transition-all hover:bg-[var(--bg-hover)]"
-                        style={{ color: 'var(--text-secondary)', fontFamily: 'var(--font-body)' }}
+                        className="w-full flex items-center justify-between px-4 py-3 text-sm transition-all hover:bg-[var(--bg-hover)]"
+                        style={{ color: 'var(--text-secondary)' }}
                     >
                         <span className="flex items-center gap-3">
                             {darkMode ? <Moon size={16} /> : <Sun size={16} />}
                             <span className="tracking-wide">{darkMode ? 'Dark Mode' : 'Light Mode'}</span>
                         </span>
-                        <div
-                            className="w-10 h-5 rounded-full relative transition-colors"
-                            style={{ background: darkMode ? 'var(--accent)' : 'var(--border)' }}
-                        >
-                            <div
-                                className={clsx(
-                                    "absolute top-0.5 w-4 h-4 rounded-full transition-transform",
-                                    darkMode ? "translate-x-5" : "translate-x-0.5"
-                                )}
-                                style={{ background: 'var(--bg-deep)' }}
-                            />
+                        <div className="w-10 h-5 rounded-full relative transition-colors" style={{ background: darkMode ? 'var(--accent)' : 'var(--border)' }}>
+                            <div className={clsx("absolute top-0.5 w-4 h-4 rounded-full transition-transform", darkMode ? "translate-x-5" : "translate-x-0.5")} style={{ background: 'var(--bg-deep)' }} />
                         </div>
+                    </button>
+
+                    {/* Logout */}
+                    <button
+                        onClick={handleLogout}
+                        className="w-full flex items-center gap-3 px-4 py-3 text-sm transition-all hover:bg-red-500/10 text-red-400 hover:text-red-300"
+                    >
+                        <LogOut size={16} />
+                        <span className="tracking-wide">Logout</span>
                     </button>
                 </div>
             </aside>
@@ -154,16 +181,13 @@ export const Layout = () => {
                     <img
                         src="/logo.png"
                         alt="Logo"
-                        className="h-8 w-auto object-contain"
+                        className="h-12 w-auto object-contain"
                         style={{ filter: darkMode ? 'none' : 'invert(1)' }}
                     />
-                    <button
-                        onClick={() => setDarkMode(!darkMode)}
-                        className="p-2 -mr-2 hover:opacity-70 transition-opacity"
-                        style={{ color: 'var(--text-primary)' }}
-                    >
-                        {darkMode ? <Sun size={18} /> : <Moon size={18} />}
-                    </button>
+                    <div className={clsx("flex items-center gap-1 px-2 py-1 rounded text-[9px] font-bold uppercase tracking-wider border", getRoleColor(user.role))}>
+                        <Shield size={10} />
+                        {getRoleLabel(user.role)}
+                    </div>
                 </header>
 
                 <div className="safe-bottom">

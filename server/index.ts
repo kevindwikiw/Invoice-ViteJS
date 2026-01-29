@@ -2,8 +2,11 @@ import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { Database } from "bun:sqlite";
 import { drizzle } from "drizzle-orm/bun-sqlite";
-import { packages, invoices, appConfig } from "./db/schema";
+import { packages, invoices, appConfig, users } from "./db/schema";
 import { eq, desc } from "drizzle-orm";
+import authRoutes from "./routes/auth";
+import usersRoutes from "./routes/users";
+import { authMiddleware } from "./middleware/auth";
 
 const app = new Hono();
 
@@ -16,9 +19,23 @@ app.get("/", (c) => {
     return c.text("Invoice App V2 API Running 🚀");
 });
 
+// --- PUBLIC ROUTES ---
+// Auth routes (login is public)
+app.route("/api/auth", authRoutes);
+
+// --- PROTECTED ROUTES (require auth) ---
+// Apply auth middleware to all /api routes except /api/auth
+app.use("/api/packages/*", authMiddleware);
+app.use("/api/invoices/*", authMiddleware);
+app.use("/api/users/*", authMiddleware);
+app.use("/api/config/*", authMiddleware);
+
+// Users routes (admin and superadmin only - checked in route)
+app.route("/api/users", usersRoutes);
+
 // --- PACKAGES ---
 // Get packages (with optional 'all' query param for including archived)
-app.get("/api/packages", async (c) => {
+app.get("/api/packages", authMiddleware, async (c) => {
     try {
         const all = c.req.query("all");
         if (all === "true") {
@@ -35,8 +52,13 @@ app.get("/api/packages", async (c) => {
     }
 });
 
-// Create package
+// Create package (admin/superadmin only)
 app.post("/api/packages", async (c) => {
+    const user = c.get("user") as { role: string } | undefined;
+    if (!user || (user.role !== "admin" && user.role !== "superadmin")) {
+        return c.json({ error: "Permission denied" }, 403);
+    }
+
     try {
         const body = await c.req.json();
         const { name, price, category, description } = body;
@@ -53,8 +75,13 @@ app.post("/api/packages", async (c) => {
     }
 });
 
-// Update package
+// Update package (admin/superadmin only)
 app.put("/api/packages/:id", async (c) => {
+    const user = c.get("user") as { role: string } | undefined;
+    if (!user || (user.role !== "admin" && user.role !== "superadmin")) {
+        return c.json({ error: "Permission denied" }, 403);
+    }
+
     try {
         const id = c.req.param("id");
         const body = await c.req.json();
@@ -71,8 +98,13 @@ app.put("/api/packages/:id", async (c) => {
     }
 });
 
-// Toggle package status (archive/restore)
+// Toggle package status (admin/superadmin only)
 app.patch("/api/packages/:id/status", async (c) => {
+    const user = c.get("user") as { role: string } | undefined;
+    if (!user || (user.role !== "admin" && user.role !== "superadmin")) {
+        return c.json({ error: "Permission denied" }, 403);
+    }
+
     try {
         const id = c.req.param("id");
         const body = await c.req.json();
@@ -87,8 +119,13 @@ app.patch("/api/packages/:id/status", async (c) => {
     }
 });
 
-// Delete package
+// Delete package (admin/superadmin only)
 app.delete("/api/packages/:id", async (c) => {
+    const user = c.get("user") as { role: string } | undefined;
+    if (!user || (user.role !== "admin" && user.role !== "superadmin")) {
+        return c.json({ error: "Permission denied" }, 403);
+    }
+
     try {
         const id = c.req.param("id");
         sqlite.prepare(`DELETE FROM packages WHERE id = ?`).run(Number(id));
@@ -100,7 +137,7 @@ app.delete("/api/packages/:id", async (c) => {
 });
 
 // --- INVOICES ---
-app.get("/api/invoices", async (c) => {
+app.get("/api/invoices", authMiddleware, async (c) => {
     try {
         // Basic list for history
         const result = await db.select().from(invoices).orderBy(desc(invoices.id)).limit(100);
@@ -178,7 +215,7 @@ app.post("/api/invoices", async (c) => {
 });
 
 // --- CONFIG ---
-app.get("/api/config", async (c) => {
+app.get("/api/config", authMiddleware, async (c) => {
     try {
         const result = await db.select().from(appConfig);
         const config: Record<string, string | null> = {};
