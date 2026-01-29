@@ -1,40 +1,67 @@
-import { createRouter, createRoute, createRootRoute } from '@tanstack/react-router'
-import Dashboard from './pages/Dashboard'
+import { createRouter, createRoute, createRootRoute, Outlet } from '@tanstack/react-router'
 import CreateInvoice from './pages/CreateInvoice'
 import { InvoiceDetail } from './pages/InvoiceDetail'
 import PackagesPage from './pages/Packages'
+import Login from './pages/Login'
+import UserManagement from './pages/UserManagement'
 import { Layout } from './components/Layout'
 
-// Root route renders the Layout which contains the Outlet for child routes
+// Root route - Just the shell
 const rootRoute = createRootRoute({
+    component: () => <Outlet />,
+})
+
+
+// Layout Route (Authenticated Area)
+const layoutRoute = createRoute({
+    getParentRoute: () => rootRoute,
+    id: '_layout',
     component: Layout,
 })
 
-const indexRoute = createRoute({
+// Login Route (Unauthenticated)
+const loginRoute = createRoute({
     getParentRoute: () => rootRoute,
+    path: '/login',
+    component: Login,
+})
+
+// App Routes (Children of Layout)
+const indexRoute = createRoute({
+    getParentRoute: () => layoutRoute,
     path: '/',
-    component: Dashboard,
+    component: PackagesPage,
 })
 
 const createInvoiceRoute = createRoute({
-    getParentRoute: () => rootRoute,
+    getParentRoute: () => layoutRoute,
     path: '/create',
     component: CreateInvoice,
 })
 
 const invoiceDetailRoute = createRoute({
-    getParentRoute: () => rootRoute,
+    getParentRoute: () => layoutRoute,
     path: '/invoices/$invoiceId',
     component: InvoiceDetail,
 })
 
-const packagesRoute = createRoute({
-    getParentRoute: () => rootRoute,
-    path: '/packages',
-    component: PackagesPage,
+// User Management Route (SuperAdmin only - access control in component)
+const userManagementRoute = createRoute({
+    getParentRoute: () => layoutRoute,
+    path: '/users',
+    component: UserManagement,
 })
 
-const routeTree = rootRoute.addChildren([indexRoute, createInvoiceRoute, invoiceDetailRoute, packagesRoute])
+// Build Tree
+const routeTree = rootRoute.addChildren([
+    loginRoute,
+    layoutRoute.addChildren([
+        indexRoute,
+        createInvoiceRoute,
+        invoiceDetailRoute,
+        userManagementRoute
+    ])
+])
 
 export const router = createRouter({ routeTree })
 

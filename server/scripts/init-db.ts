@@ -45,4 +45,51 @@ db.run(`
 `);
 console.log("Table 'app_config' ready.");
 
+// Users table for auth
+db.run(`
+  CREATE TABLE IF NOT EXISTS users (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    email TEXT NOT NULL UNIQUE,
+    name TEXT NOT NULL,
+    password_hash TEXT NOT NULL,
+    role TEXT NOT NULL DEFAULT 'employee',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+  )
+`);
+console.log("Table 'users' ready.");
+
+// Seed default users (if not exist)
+const existingUsers = db.query("SELECT COUNT(*) as count FROM users").get() as { count: number };
+if (existingUsers.count === 0) {
+  console.log("Seeding default users...");
+
+  // Using Bun's built-in password hashing
+  const hashPassword = async (password: string) => {
+    return await Bun.password.hash(password, {
+      algorithm: "bcrypt",
+      cost: 10,
+    });
+  };
+
+  const seedUsers = async () => {
+    const devHash = await hashPassword("dev123");
+    const adminHash = await hashPassword("admin123");
+    const staffHash = await hashPassword("staff123");
+
+    db.run(`INSERT INTO users (email, name, password_hash, role) VALUES (?, ?, ?, ?)`,
+      ["dev@orbit.com", "Developer", devHash, "superadmin"]);
+    db.run(`INSERT INTO users (email, name, password_hash, role) VALUES (?, ?, ?, ?)`,
+      ["admin@orbit.com", "Admin", adminHash, "admin"]);
+    db.run(`INSERT INTO users (email, name, password_hash, role) VALUES (?, ?, ?, ?)`,
+      ["staff@orbit.com", "Staff", staffHash, "employee"]);
+
+    console.log("Default users seeded:");
+    console.log("  - dev@orbit.com (SuperAdmin) / dev123");
+    console.log("  - admin@orbit.com (Admin) / admin123");
+    console.log("  - staff@orbit.com (Employee) / staff123");
+  };
+
+  await seedUsers();
+}
+
 console.log("Database initialized successfully at db/sqlite.db");
