@@ -92,4 +92,49 @@ if (existingUsers.count === 0) {
   await seedUsers();
 }
 
+// Audit Logs table for security monitoring
+db.run(`
+  CREATE TABLE IF NOT EXISTS audit_logs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    event_type TEXT NOT NULL,
+    user_id INTEGER,
+    email TEXT,
+    ip_address TEXT,
+    user_agent TEXT,
+    success INTEGER DEFAULT 0,
+    details TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+  )
+`);
+console.log("Table 'audit_logs' ready.");
+
+// Refresh tokens table
+db.run(`
+  CREATE TABLE IF NOT EXISTS refresh_tokens (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    token TEXT NOT NULL UNIQUE,
+    expires_at TIMESTAMP NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    revoked INTEGER DEFAULT 0
+  )
+`);
+console.log("Table 'refresh_tokens' ready.");
+
+// Sequences table for atomic counters
+db.run(`
+  CREATE TABLE IF NOT EXISTS sequences (
+    name TEXT PRIMARY KEY,
+    prefix TEXT,
+    padding INTEGER DEFAULT 5,
+    last_value INTEGER DEFAULT 0
+  )
+`);
+// Seed invoice sequence if not exists
+const seq = db.query("SELECT name FROM sequences WHERE name = 'invoice'").get();
+if (!seq) {
+  db.run("INSERT INTO sequences (name, prefix, padding, last_value) VALUES (?, ?, ?, ?)", ["invoice", "INV", 5, 0]);
+}
+console.log("Table 'sequences' ready.");
+
 console.log("Database initialized successfully at db/sqlite.db");

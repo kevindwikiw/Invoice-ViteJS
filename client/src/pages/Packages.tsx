@@ -19,18 +19,11 @@ type SortMode = 'price-desc' | 'price-asc' | 'name-asc';
 // ============ UTILS ============
 const formatPrice = (n: number) => new Intl.NumberFormat('id-ID').format(n);
 
-function getAuthHeaders(): HeadersInit {
-    const token = localStorage.getItem('orbit_token');
-    const headers: HeadersInit = { 'Content-Type': 'application/json' };
-    if (token) {
-        (headers as Record<string, string>)['Authorization'] = `Bearer ${token}`;
-    }
-    return headers;
-}
+// Use fetchWithAuth from context for auto-refresh support
+import { fetchWithAuth } from '../context/auth';
 
-async function fetchJSON<T>(input: RequestInfo, init?: RequestInit): Promise<T> {
-    const headers = { ...getAuthHeaders(), ...(init?.headers || {}) };
-    const res = await fetch(input, { ...init, headers });
+async function fetchJSON<T>(url: string, init?: RequestInit): Promise<T> {
+    const res = await fetchWithAuth(url, init);
     if (!res.ok) throw new Error(await res.text() || `Request failed: ${res.status}`);
     return res.json();
 }
@@ -38,13 +31,13 @@ async function fetchJSON<T>(input: RequestInfo, init?: RequestInit): Promise<T> 
 // ============ HOOKS ============
 function usePackages() {
     const queryClient = useQueryClient();
-    const query = useQuery<PackageData[]>({ queryKey: ['packages', 'all'], queryFn: () => fetchJSON<PackageData[]>('/api/packages?all=true') });
+    const query = useQuery<PackageData[]>({ queryKey: ['packages', 'all'], queryFn: () => fetchJSON<PackageData[]>('/packages?all=true') });
     const invalidate = () => queryClient.invalidateQueries({ queryKey: ['packages'] });
 
-    const create = useMutation({ mutationFn: (d: any) => fetchJSON('/api/packages', { method: 'POST', body: JSON.stringify(d) }), onSuccess: invalidate });
-    const update = useMutation({ mutationFn: ({ id, ...d }: any) => fetchJSON(`/api/packages/${id}`, { method: 'PUT', body: JSON.stringify(d) }), onSuccess: invalidate });
-    const remove = useMutation({ mutationFn: (id: number) => fetchJSON(`/api/packages/${id}`, { method: 'DELETE' }), onSuccess: invalidate });
-    const toggle = useMutation({ mutationFn: ({ id, isActive }: any) => fetchJSON(`/api/packages/${id}/status`, { method: 'PATCH', body: JSON.stringify({ isActive }) }), onSuccess: invalidate });
+    const create = useMutation({ mutationFn: (d: any) => fetchJSON('/packages', { method: 'POST', body: JSON.stringify(d) }), onSuccess: invalidate });
+    const update = useMutation({ mutationFn: ({ id, ...d }: any) => fetchJSON(`/packages/${id}`, { method: 'PUT', body: JSON.stringify(d) }), onSuccess: invalidate });
+    const remove = useMutation({ mutationFn: (id: number) => fetchJSON(`/packages/${id}`, { method: 'DELETE' }), onSuccess: invalidate });
+    const toggle = useMutation({ mutationFn: ({ id, isActive }: any) => fetchJSON(`/packages/${id}/status`, { method: 'PATCH', body: JSON.stringify({ isActive }) }), onSuccess: invalidate });
 
     return { query, create, update, remove, toggle };
 }
@@ -66,7 +59,9 @@ export default function PackagesPage() {
     const canManagePackages = hasPermission('manage_packages');
 
     const { query, create, update, remove, toggle } = usePackages();
-    const { data: packages = [], isLoading } = query;
+    const packages = Array.isArray(query.data) ? query.data : [];
+    const isLoading = query.isLoading;
+
 
     // Filter & Sort Logic
     const processedData = useMemo(() => {

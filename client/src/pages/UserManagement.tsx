@@ -84,11 +84,16 @@ export default function UserManagement() {
             <div className="max-w-4xl mx-auto">
                 {/* Header */}
                 <div className="flex items-center justify-between mb-10">
-                    <div>
-                        <h1 className="text-3xl text-[var(--text-primary)] mb-2" style={{ fontFamily: 'var(--font-display)' }}>
-                            User Management
-                        </h1>
-                        <p className="text-[var(--text-muted)] text-sm">Manage team members and their roles</p>
+                    <div className="flex items-center gap-3">
+                        <div className="p-2.5 bg-[var(--accent-muted)] rounded-xl">
+                            <Users className="h-8 w-8 text-[var(--accent)]" />
+                        </div>
+                        <div>
+                            <h1 className="text-4xl text-[var(--text-primary)] mb-1" style={{ fontFamily: 'var(--font-display)' }}>
+                                User Management
+                            </h1>
+                            <p className="text-[var(--text-muted)] text-sm">Manage team members and their roles</p>
+                        </div>
                     </div>
                     <button
                         onClick={() => setShowModal(true)}

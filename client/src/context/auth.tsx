@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useEffect, type ReactNode } from 'react';
+import { createContext, useContext, useState, useEffect, useCallback, type ReactNode } from 'react';
 
 // ============ TYPES ============
 export type UserRole = 'superadmin' | 'admin' | 'employee';
@@ -13,9 +13,8 @@ export interface User {
 interface AuthContextType {
     user: User | null;
     isAuthenticated: boolean;
-    token: string | null;
     login: (email: string, password: string) => Promise<{ success: boolean; error?: string }>;
-    logout: () => void;
+    logout: () => Promise<void>;
     hasPermission: (action: Permission) => boolean;
     allUsers: User[];
     fetchUsers: () => Promise<void>;
@@ -59,21 +58,140 @@ const ROLE_PERMISSIONS: Record<UserRole, Permission[]> = {
     ]
 };
 
-// ============ API HELPER ============
+// ============ TOKEN MANAGEMENT ============
 const API_BASE = '/api';
 
-async function fetchWithAuth(url: string, options: RequestInit = {}) {
-    const token = localStorage.getItem('orbit_token');
-    const headers: HeadersInit = {
-        'Content-Type': 'application/json',
-        ...(options.headers || {}),
-    };
+// Store tokens
+let accessToken: string | null = null;
+let refreshToken: string | null = null;
+let tokenExpiresAt: number = 0;
+let refreshingPromise: Promise<boolean> | null = null; // Lock for refresh
 
-    if (token) {
-        (headers as Record<string, string>)['Authorization'] = `Bearer ${token}`;
+// Load tokens from localStorage
+function loadTokens() {
+    accessToken = localStorage.getItem('orbit_access_token');
+    refreshToken = localStorage.getItem('orbit_refresh_token');
+    tokenExpiresAt = parseInt(localStorage.getItem('orbit_token_expires') || '0');
+}
+
+// Save tokens to localStorage
+function saveTokens(access: string, refresh: string, expiresIn: number) {
+    accessToken = access;
+    refreshToken = refresh;
+    tokenExpiresAt = Date.now() + (expiresIn * 1000) - 60000; // 1 min buffer
+
+    localStorage.setItem('orbit_access_token', access);
+    localStorage.setItem('orbit_refresh_token', refresh);
+    localStorage.setItem('orbit_token_expires', String(tokenExpiresAt));
+}
+
+// Clear tokens
+function clearTokens() {
+    accessToken = null;
+    refreshToken = null;
+    tokenExpiresAt = 0;
+
+    localStorage.removeItem('orbit_access_token');
+    localStorage.removeItem('orbit_refresh_token');
+    localStorage.removeItem('orbit_token_expires');
+    localStorage.removeItem('orbit_user');
+    localStorage.removeItem('isAuthenticated');
+}
+
+// Refresh the access token (with lock)
+async function refreshAccessToken(): Promise<boolean> {
+    if (!refreshToken) return false;
+    if (refreshingPromise) return refreshingPromise;
+
+    refreshingPromise = (async () => {
+        try {
+            const res = await fetch(`${API_BASE}/auth/refresh`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ refreshToken }),
+            });
+
+            if (!res.ok) {
+                clearTokens();
+                return false;
+            }
+
+            const data = await res.json();
+            accessToken = data.accessToken;
+            tokenExpiresAt = Date.now() + (data.expiresIn * 1000) - 60000;
+
+            localStorage.setItem('orbit_access_token', data.accessToken);
+            localStorage.setItem('orbit_token_expires', String(tokenExpiresAt));
+
+            return true;
+        } catch {
+            clearTokens();
+            return false;
+        } finally {
+            refreshingPromise = null;
+        }
+    })();
+
+    return refreshingPromise;
+}
+
+// Get valid access token (refresh if needed)
+async function getValidToken(): Promise<string | null> {
+    if (!accessToken) {
+        loadTokens();
     }
 
-    return fetch(`${API_BASE}${url}`, { ...options, headers });
+    // Check if token is expired or about to expire
+    if (tokenExpiresAt < Date.now()) {
+        const refreshed = await refreshAccessToken();
+        if (!refreshed) return null;
+    }
+
+    return accessToken;
+}
+
+// Fetch with auth (auto-refresh)
+export async function fetchWithAuth(url: string, options: RequestInit = {}): Promise<Response> {
+    const token = await getValidToken();
+
+    if (!token) {
+        throw new Error('Not authenticated');
+    }
+
+    const headers: Record<string, string> = {
+        'Authorization': `Bearer ${token}`,
+        ...(options.headers as Record<string, string> || {}),
+    };
+
+    if (!(options.body instanceof FormData)) {
+        headers['Content-Type'] = 'application/json';
+    }
+
+    const res = await fetch(`${API_BASE}${url}`, { ...options, headers });
+
+    // If 401, try to refresh and retry once
+    if (res.status === 401) {
+        const refreshed = await refreshAccessToken();
+        if (refreshed) {
+            const retryHeaders: Record<string, string> = {
+                'Authorization': `Bearer ${accessToken}`,
+                ...(options.headers as Record<string, string> || {}),
+            };
+
+            if (!(options.body instanceof FormData)) {
+                retryHeaders['Content-Type'] = 'application/json';
+            }
+
+            return fetch(`${API_BASE}${url}`, { ...options, headers: retryHeaders });
+        } else {
+            // Refresh failed, force logout (redirect will happen via auth state change)
+            clearTokens();
+            window.dispatchEvent(new Event('orbit:auth-failed'));
+            throw new Error('Session expired');
+        }
+    }
+
+    return res;
 }
 
 // ============ CONTEXT ============
@@ -81,18 +199,38 @@ const AuthContext = createContext<AuthContextType | null>(null);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
     const [user, setUser] = useState<User | null>(null);
-    const [token, setToken] = useState<string | null>(null);
     const [users, setUsers] = useState<User[]>([]);
+    const [isReady, setIsReady] = useState(false);
 
-    // Load token and user on mount
+    // Load user on mount & listen to storage
     useEffect(() => {
-        const savedToken = localStorage.getItem('orbit_token');
-        const savedUser = localStorage.getItem('orbit_user');
+        const initAuth = () => {
+            loadTokens();
+            const savedUser = localStorage.getItem('orbit_user');
 
-        if (savedToken && savedUser) {
-            setToken(savedToken);
-            setUser(JSON.parse(savedUser));
-        }
+            if (savedUser && accessToken) {
+                try {
+                    setUser(JSON.parse(savedUser));
+                } catch {
+                    clearTokens();
+                    setUser(null);
+                }
+            } else {
+                setUser(null);
+            }
+            setIsReady(true);
+        };
+
+        const handleStorage = (e: StorageEvent) => {
+            if (e.key === 'orbit_access_token' || e.key === 'orbit_user') {
+                initAuth();
+            }
+        };
+
+        window.addEventListener('storage', handleStorage);
+        initAuth();
+
+        return () => window.removeEventListener('storage', handleStorage);
     }, []);
 
     const login = async (email: string, password: string): Promise<{ success: boolean; error?: string }> => {
@@ -109,10 +247,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
                 return { success: false, error: data.error || 'Login failed' };
             }
 
-            // Store token and user
-            setToken(data.token);
+            // Store tokens
+            saveTokens(data.accessToken, data.refreshToken, data.expiresIn);
+
+            // Store user
             setUser(data.user);
-            localStorage.setItem('orbit_token', data.token);
             localStorage.setItem('orbit_user', JSON.stringify(data.user));
             localStorage.setItem('isAuthenticated', 'true');
 
@@ -122,14 +261,29 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         }
     };
 
-    const logout = () => {
+    const logout = useCallback(async () => {
+        const oldRefresh = refreshToken; // capture before clearing
+
         setUser(null);
-        setToken(null);
         setUsers([]);
-        localStorage.removeItem('orbit_token');
-        localStorage.removeItem('orbit_user');
-        localStorage.removeItem('isAuthenticated');
-    };
+        clearTokens();
+
+        // Notify other tabs immediately
+        window.dispatchEvent(new Event('storage'));
+
+        // Call server logout to revoke refresh token
+        if (oldRefresh) {
+            try {
+                await fetch(`${API_BASE}/auth/logout`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ refreshToken: oldRefresh }),
+                });
+            } catch {
+                // Ignore errors
+            }
+        }
+    }, []);
 
     const hasPermission = (action: Permission): boolean => {
         if (!user) return false;
@@ -161,7 +315,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
                 return { success: false, error: data.error || 'Failed to create user' };
             }
 
-            // Refresh users list
             await fetchUsers();
             return { success: true };
         } catch (e) {
@@ -180,7 +333,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
                 return { success: false, error: data.error || 'Failed to delete user' };
             }
 
-            // Refresh users list
             await fetchUsers();
             return { success: true };
         } catch (e) {
@@ -191,8 +343,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return (
         <AuthContext.Provider value={{
             user,
-            isAuthenticated: !!user && !!token,
-            token,
+            isAuthenticated: !!user && !!accessToken,
             login,
             logout,
             hasPermission,
@@ -201,7 +352,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             addUser,
             removeUser
         }}>
-            {children}
+            {isReady ? children : null}
         </AuthContext.Provider>
     );
 }
@@ -230,6 +381,3 @@ export function getRoleColor(role: UserRole): string {
         case 'employee': return 'bg-blue-500/20 text-blue-400 border-blue-500/50';
     }
 }
-
-// Export fetch helper for other components to use
-export { fetchWithAuth };
