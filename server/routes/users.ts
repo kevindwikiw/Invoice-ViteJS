@@ -63,6 +63,13 @@ users.post("/", async (c) => {
             return c.json({ error: "Email already exists" }, 400);
         }
 
+        // Validate role - whitelist only valid roles
+        const validRoles = ["superadmin", "admin", "employee"];
+        const userRole = role || "employee";
+        if (!validRoles.includes(userRole)) {
+            return c.json({ error: "Invalid role. Must be: superadmin, admin, or employee" }, 400);
+        }
+
         // Hash password
         const passwordHash = await Bun.password.hash(password, {
             algorithm: "bcrypt",
@@ -73,7 +80,7 @@ users.post("/", async (c) => {
         const result = sqlite.prepare(`
             INSERT INTO users (email, name, password_hash, role)
             VALUES (?, ?, ?, ?)
-        `).run(email.toLowerCase(), name, passwordHash, role || "employee");
+        `).run(email.toLowerCase(), name, passwordHash, userRole);
 
         return c.json({
             id: Number(result.lastInsertRowid),
