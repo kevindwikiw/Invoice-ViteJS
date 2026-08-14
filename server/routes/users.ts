@@ -9,7 +9,7 @@ import {
 } from "../permissions";
 
 const users = new Hono();
-const sqlite = new Database("db/sqlite.db");
+const sqlite = new Database(process.env.SQLITE_PATH || "db/sqlite.db");
 
 // Auto-create user activity logs table & index
 try {

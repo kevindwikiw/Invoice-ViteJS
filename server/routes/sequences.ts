@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import { Database } from "bun:sqlite";
 
 const sequencesRouter = new Hono();
-const sqlite = new Database("db/sqlite.db");
+const sqlite = new Database(process.env.SQLITE_PATH || "db/sqlite.db");
 
 sequencesRouter.get("/invoice", async (c) => {
     try {

@@ -5,7 +5,7 @@ import { resetRateLimit } from "../middleware/rate-limit";
 import { getEffectivePermissions, getPermissionOverrides } from "../permissions";
 
 const auth = new Hono();
-const sqlite = new Database("db/sqlite.db");
+const sqlite = new Database(process.env.SQLITE_PATH || "db/sqlite.db");
 
 // Auto-create required auth tables if missing
 try {

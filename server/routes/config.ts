@@ -4,7 +4,7 @@ import { drizzle } from "drizzle-orm/bun-sqlite";
 import { appConfig } from "../db/schema";
 
 const configRouter = new Hono();
-const sqlite = new Database("db/sqlite.db");
+const sqlite = new Database(process.env.SQLITE_PATH || "db/sqlite.db");
 const db = drizzle(sqlite);
 
 try {

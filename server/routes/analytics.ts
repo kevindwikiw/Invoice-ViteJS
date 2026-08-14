@@ -6,7 +6,7 @@ import { eq, desc } from "drizzle-orm";
 import { hasFeaturePermission } from "../permissions";
 
 const analyticsRouter = new Hono();
-const sqlite = new Database("db/sqlite.db");
+const sqlite = new Database(process.env.SQLITE_PATH || "db/sqlite.db");
 const db = drizzle(sqlite);
 
 type AuthUser = {

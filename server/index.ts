@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { Database } from "bun:sqlite";
 import { mkdir } from "node:fs/promises";
-import { basename, join } from "node:path";
+import { basename, join, resolve } from "node:path";
 import authRoutes from "./routes/auth";
 import usersRoutes from "./routes/users";
 import packagesRoutes from "./routes/packages";
@@ -27,7 +27,7 @@ type AppEnv = {
     };
 };
 
-const PROOF_DIR = "uploads/proofs";
+const PROOF_DIR = process.env.UPLOAD_DIR || "uploads/proofs";
 await mkdir(PROOF_DIR, { recursive: true });
 
 if (!process.env.JWT_SECRET || process.env.JWT_SECRET.length < 32) {
@@ -36,7 +36,8 @@ if (!process.env.JWT_SECRET || process.env.JWT_SECRET.length < 32) {
     process.exit(1);
 }
 
-const sqlite = new Database("db/sqlite.db");
+const SQLITE_PATH = process.env.SQLITE_PATH || "db/sqlite.db";
+const sqlite = new Database(SQLITE_PATH);
 
 try {
     const invoiceColumns = sqlite.prepare("PRAGMA table_info(invoices)").all() as Array<{ name: string }>;
@@ -89,7 +90,8 @@ app.use("/*", cors({
     allowHeaders: ["Content-Type", "Authorization"],
 }));
 
-app.get("/", (c) => c.text("Invoice App V2 API Running"));
+app.get("/api/health", (c) => c.json({ ok: true, service: "invoice-api" }));
+app.get("/healthz", (c) => c.json({ ok: true }));
 
 // Proof files contain private payment evidence. They must never be served as
 // anonymous static assets; the client fetches them with its bearer token.
@@ -130,10 +132,43 @@ app.route("/api/config", configRoutes);
 app.route("/api/analytics", analyticsRoutes);
 app.route("/api/sequences", sequencesRoutes);
 
-console.log("Server running on http://localhost:3000");
+// In production the API and the Rsbuild output are served from one Fly app.
+// Keeping the SPA fallback here makes direct refreshes such as /history work
+// without exposing server files or requiring a second public origin.
+const STATIC_DIR = resolve(process.env.STATIC_DIR || join(process.cwd(), "../client/dist"));
+const serveClientFile = async (path: string) => {
+    const requestedPath = path === "/" ? "index.html" : path.replace(/^\/+/, "");
+    const filePath = resolve(STATIC_DIR, requestedPath);
+    if (requestedPath.split(/[\\/]/).includes("..") || !filePath.startsWith(STATIC_DIR)) {
+        return null;
+    }
+    const file = Bun.file(filePath);
+    return (await file.exists()) ? file : null;
+};
+
+app.get("*", async (c) => {
+    if (c.req.path.startsWith("/api/") || c.req.path.startsWith("/uploads/")) {
+        return c.notFound();
+    }
+
+    const requestedFile = await serveClientFile(c.req.path);
+    if (requestedFile) {
+        return c.body(requestedFile.stream(), 200, {
+            "Content-Type": requestedFile.type || "application/octet-stream",
+            "Cache-Control": c.req.path.startsWith("/assets/") ? "public, max-age=31536000, immutable" : "no-cache",
+        });
+    }
+
+    const indexFile = await serveClientFile("/");
+    if (!indexFile) return c.text("Frontend build not found", 503);
+    return c.html(await indexFile.text());
+});
+
+const port = Number(process.env.PORT || 3000);
+console.log(`Server running on port ${port}`);
 console.log(`CORS allowed origins: ${allowedOrigins.join(", ")}`);
 
 export default {
-    port: 3000,
+    port,
     fetch: app.fetch,
 };

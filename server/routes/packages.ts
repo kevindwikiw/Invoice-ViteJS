@@ -5,7 +5,7 @@ import { packages } from "../db/schema";
 import { eq } from "drizzle-orm";
 
 const packagesRouter = new Hono();
-const sqlite = new Database("db/sqlite.db");
+const sqlite = new Database(process.env.SQLITE_PATH || "db/sqlite.db");
 const db = drizzle(sqlite);
 
 packagesRouter.get("/", async (c) => {
