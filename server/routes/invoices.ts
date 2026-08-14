@@ -55,7 +55,8 @@ function legacyProofs(invoiceData: unknown): string[] {
                 ?? (proof as Record<string, unknown>).data_url
                 ?? (proof as Record<string, unknown>).base64
                 ?? (proof as Record<string, unknown>).b64;
-            return typeof candidate === "string" && candidate.length > 0 ? [candidate] : [];
+            if (typeof candidate !== "string" || candidate.length === 0) return [];
+            return [candidate.startsWith("data:") ? candidate : `data:image/jpeg;base64,${candidate}`];
         });
     } catch {
         return [];
