@@ -53,6 +53,15 @@ fly deploy
 fly ssh console -C "bun run scripts/init-db.ts"
 ```
 
+For batch secret setup, copy `fly.secrets.env.example` to the ignored
+`fly.secrets.env`, replace the placeholders locally, then run:
+
+```powershell
+Get-Content fly.secrets.env | fly secrets import -a invoice-web-v2
+```
+
+The file is ignored by Git and must never be committed.
+
 The volume is required because the current Hono server still uses Bun's
 SQLite driver for its runtime database and stores private proof files on disk.
 Those paths are mounted under `/data` and are not committed to Git.
