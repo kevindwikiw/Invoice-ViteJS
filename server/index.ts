@@ -40,12 +40,20 @@ const SQLITE_PATH = process.env.SQLITE_PATH || "db/sqlite.db";
 const sqlite = new Database(SQLITE_PATH);
 
 try {
-    const invoiceColumns = sqlite.prepare("PRAGMA table_info(invoices)").all() as Array<{ name: string }>;
-    if (!invoiceColumns.some((column) => column.name === "payment_proofs")) {
-        sqlite.prepare("ALTER TABLE invoices ADD COLUMN payment_proofs TEXT").run();
-    }
-    if (!invoiceColumns.some((column) => column.name === "is_archived")) {
-        sqlite.prepare("ALTER TABLE invoices ADD COLUMN is_archived INTEGER DEFAULT 0").run();
+    // A brand-new Fly volume has no tables yet. The full schema is created by
+    // scripts/init-db.ts; only run additive migrations when the base table
+    // already exists so the health endpoint can come up for first boot.
+    const invoicesTable = sqlite
+        .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'invoices'")
+        .get() as { name: string } | null;
+    if (invoicesTable) {
+        const invoiceColumns = sqlite.prepare("PRAGMA table_info(invoices)").all() as Array<{ name: string }>;
+        if (!invoiceColumns.some((column) => column.name === "payment_proofs")) {
+            sqlite.prepare("ALTER TABLE invoices ADD COLUMN payment_proofs TEXT").run();
+        }
+        if (!invoiceColumns.some((column) => column.name === "is_archived")) {
+            sqlite.prepare("ALTER TABLE invoices ADD COLUMN is_archived INTEGER DEFAULT 0").run();
+        }
     }
 
     sqlite.run(`
