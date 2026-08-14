@@ -23,7 +23,7 @@ export const loginRateLimiter = async (c: Context, next: Next) => {
     const maxAttempts = parseInt(process.env.RATE_LIMIT_MAX_ATTEMPTS || "5");
 
     // Get client IP
-    const ip = c.req.header("x-forwarded-for")?.split(",")[0].trim()
+    const ip = c.req.header("x-forwarded-for")?.split(",")[0]?.trim()
         || c.req.header("x-real-ip")
         || "unknown";
 

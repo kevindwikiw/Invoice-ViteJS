@@ -19,6 +19,20 @@ export const invoices = sqliteTable("invoices", {
     invoiceData: text("invoice_data"), // Stores JSON string of full payload
     pdfBlob: blob("pdf_blob", { mode: "buffer" }),
     paymentProofs: text("payment_proofs"), // JSON array of filenames
+    isArchived: integer("is_archived").default(0),
+    createdAt: text("created_at").default(sql`CURRENT_TIMESTAMP`),
+});
+
+export const invoiceActivityLogs = sqliteTable("invoice_activity_logs", {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    invoiceId: integer("invoice_id").notNull(),
+    action: text("action").notNull(),
+    actorId: integer("actor_id"),
+    actorEmail: text("actor_email"),
+    actorName: text("actor_name"),
+    actorRole: text("actor_role"),
+    details: text("details"),
+    ipAddress: text("ip_address"),
     createdAt: text("created_at").default(sql`CURRENT_TIMESTAMP`),
 });
 
@@ -33,6 +47,14 @@ export const users = sqliteTable("users", {
     name: text("name").notNull(),
     passwordHash: text("password_hash").notNull(),
     role: text("role").notNull().default("employee"), // superadmin, admin, employee
+    createdAt: text("created_at").default(sql`CURRENT_TIMESTAMP`),
+});
+
+export const userPermissions = sqliteTable("user_permissions", {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    userId: integer("user_id").notNull(),
+    permissionKey: text("permission_key").notNull(),
+    effect: text("effect").notNull(), // grant | deny
     createdAt: text("created_at").default(sql`CURRENT_TIMESTAMP`),
 });
 

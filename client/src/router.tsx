@@ -1,12 +1,14 @@
-import { createRouter, createRoute, createRootRoute, Outlet } from '@tanstack/react-router'
-import CreateInvoice from './pages/CreateInvoice'
-import { InvoiceDetail } from './pages/InvoiceDetail'
-import PackagesPage from './pages/Packages'
-import InvoiceHistory from './pages/InvoiceHistory'
-import Login from './pages/Login'
-import UserManagement from './pages/UserManagement'
-import Analytics from './pages/Analytics'
-import { Layout } from './components/Layout'
+import { createRouter, createRoute, createRootRoute, lazyRouteComponent, Outlet } from '@tanstack/react-router'
+import { GlobalSidebar } from './components/GlobalSidebar'
+
+const LoginRoute = lazyRouteComponent(() => import('./pages/Login'))
+const PackagesRoute = lazyRouteComponent(() => import('./pages/Packages'))
+const CreateInvoiceRoute = lazyRouteComponent(() => import('./pages/CreateInvoice'))
+const InvoiceDetailRoute = lazyRouteComponent(() => import('./pages/InvoiceDetail'), 'InvoiceDetail')
+const InvoiceHistoryRoute = lazyRouteComponent(() => import('./pages/InvoiceHistory'))
+const UserManagementRoute = lazyRouteComponent(() => import('./pages/UserManagement'))
+const AnalyticsRoute = lazyRouteComponent(() => import('./pages/Analytics'))
+const InvoiceActivityRoute = lazyRouteComponent(() => import('./pages/InvoiceActivity'))
 
 // Root route - Just the shell
 const rootRoute = createRootRoute({
@@ -17,27 +19,27 @@ const rootRoute = createRootRoute({
 const layoutRoute = createRoute({
     getParentRoute: () => rootRoute,
     id: '_layout',
-    component: Layout,
+    component: GlobalSidebar,
 })
 
 // Login Route (Unauthenticated)
 const loginRoute = createRoute({
     getParentRoute: () => rootRoute,
     path: '/login',
-    component: Login,
+    component: LoginRoute,
 })
 
-// App Routes (Children of Layout)
+// App Routes (Children of GlobalSidebar/Layout)
 const indexRoute = createRoute({
     getParentRoute: () => layoutRoute,
     path: '/',
-    component: PackagesPage,
+    component: PackagesRoute,
 })
 
 const createInvoiceRoute = createRoute({
     getParentRoute: () => layoutRoute,
     path: '/create',
-    component: CreateInvoice,
+    component: CreateInvoiceRoute,
     validateSearch: (search: Record<string, unknown>) => ({
         editId: search.editId as number | undefined,
     }),
@@ -46,26 +48,32 @@ const createInvoiceRoute = createRoute({
 const invoiceDetailRoute = createRoute({
     getParentRoute: () => layoutRoute,
     path: '/invoices/$invoiceId',
-    component: InvoiceDetail,
+    component: InvoiceDetailRoute,
 })
 
 const historyRoute = createRoute({
     getParentRoute: () => layoutRoute,
     path: '/history',
-    component: InvoiceHistory,
+    component: InvoiceHistoryRoute,
 })
 
 // User Management Route (SuperAdmin only - access control in component)
 const userManagementRoute = createRoute({
     getParentRoute: () => layoutRoute,
     path: '/users',
-    component: UserManagement,
+    component: UserManagementRoute,
 })
 
 const analyticsRoute = createRoute({
     getParentRoute: () => layoutRoute,
     path: '/analytics',
-    component: Analytics,
+    component: AnalyticsRoute,
+})
+
+const auditLogsRoute = createRoute({
+    getParentRoute: () => layoutRoute,
+    path: '/activity',
+    component: InvoiceActivityRoute,
 })
 
 // Build Tree
@@ -77,11 +85,19 @@ const routeTree = rootRoute.addChildren([
         invoiceDetailRoute,
         historyRoute,
         analyticsRoute,
+        auditLogsRoute,
         userManagementRoute
     ])
 ])
 
-export const router = createRouter({ routeTree })
+export const router = createRouter({
+    routeTree,
+    defaultPendingComponent: () => (
+        <div className="flex min-h-screen items-center justify-center bg-[var(--bg-deep)] text-[var(--text-muted)]">
+            <span className="animate-pulse text-xs font-bold uppercase tracking-[0.2em]">Loading workspace</span>
+        </div>
+    ),
+})
 
 declare module '@tanstack/react-router' {
     interface Register {

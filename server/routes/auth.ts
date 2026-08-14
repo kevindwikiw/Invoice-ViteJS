@@ -2,18 +2,45 @@ import { Hono } from "hono";
 import { sign } from "hono/jwt";
 import { Database } from "bun:sqlite";
 import { resetRateLimit } from "../middleware/rate-limit";
+import { getEffectivePermissions, getPermissionOverrides } from "../permissions";
 
 const auth = new Hono();
 const sqlite = new Database("db/sqlite.db");
 
+// Auto-create required auth tables if missing
+try {
+    sqlite.run(`
+        CREATE TABLE IF NOT EXISTS refresh_tokens (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            token TEXT NOT NULL UNIQUE,
+            expires_at DATETIME NOT NULL,
+            revoked INTEGER DEFAULT 0,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        );
+    `);
+    sqlite.run(`
+        CREATE TABLE IF NOT EXISTS audit_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            event_type TEXT NOT NULL,
+            user_id INTEGER,
+            email TEXT,
+            ip_address TEXT,
+            user_agent TEXT,
+            success INTEGER DEFAULT 1,
+            details TEXT,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        );
+    `);
+} catch (e) {
+    console.error("Failed to initialize auth tables:", e);
+}
+
 // ============ HELPERS ============
 function generateRefreshToken(): string {
-    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-    let token = '';
-    for (let i = 0; i < 64; i++) {
-        token += chars.charAt(Math.floor(Math.random() * chars.length));
-    }
-    return token;
+    // UUIDs are generated from a cryptographically secure random source in Bun.
+    // Do not use Math.random() for bearer credentials.
+    return `${crypto.randomUUID().replaceAll('-', '')}${crypto.randomUUID().replaceAll('-', '')}`;
 }
 
 function logAudit(event: string, data: {
@@ -107,6 +134,8 @@ auth.post("/login", async (c) => {
 
         // Log successful login
         logAudit("LOGIN_SUCCESS", { userId: user.id, email, ip, userAgent, success: true });
+        const permissionOverrides = getPermissionOverrides(sqlite, user.id);
+        const featurePermissions = getEffectivePermissions(user.role, permissionOverrides);
 
         return c.json({
             accessToken,
@@ -117,6 +146,8 @@ auth.post("/login", async (c) => {
                 email: user.email,
                 name: user.name,
                 role: user.role,
+                featurePermissions,
+                permissionOverrides,
             },
         });
     } catch (e) {
@@ -142,7 +173,7 @@ auth.post("/refresh", async (c) => {
             SELECT rt.*, u.email, u.name, u.role 
             FROM refresh_tokens rt
             JOIN users u ON rt.user_id = u.id
-            WHERE rt.token = ? AND rt.revoked = 0 AND rt.expires_at > datetime('now')
+            WHERE rt.token = ? AND rt.revoked = 0 AND julianday(rt.expires_at) > julianday('now')
         `).get(refreshToken) as {
             id: number;
             user_id: number;
@@ -156,7 +187,18 @@ auth.post("/refresh", async (c) => {
             return c.json({ error: "Invalid or expired refresh token" }, 401);
         }
 
-        // Generate new access token
+        // Rotate the refresh token before issuing a new access token. The
+        // conditional update makes concurrent refresh requests single-use:
+        // only the first request can consume the old token.
+        const consumed = sqlite.prepare(
+            `UPDATE refresh_tokens SET revoked = 1 WHERE id = ? AND revoked = 0`
+        ).run(tokenData.id);
+        if (consumed.changes !== 1) {
+            logAudit("REFRESH_REPLAY", { userId: tokenData.user_id, email: tokenData.email, ip, userAgent, success: false, details: "Refresh token already consumed" });
+            return c.json({ error: "Invalid or expired refresh token" }, 401);
+        }
+
+        // Generate a new access token
         const accessPayload = {
             sub: tokenData.user_id,
             email: tokenData.email,
@@ -168,11 +210,30 @@ auth.post("/refresh", async (c) => {
         const secret = process.env.JWT_SECRET || "fallback-secret-key";
         const accessToken = await sign(accessPayload, secret, "HS256");
 
+        const nextRefreshToken = generateRefreshToken();
+        const nextRefreshExpiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
+        sqlite.prepare(`
+            INSERT INTO refresh_tokens (user_id, token, expires_at)
+            VALUES (?, ?, ?)
+        `).run(tokenData.user_id, nextRefreshToken, nextRefreshExpiresAt);
+
         logAudit("TOKEN_REFRESH", { userId: tokenData.user_id, email: tokenData.email, ip, userAgent, success: true });
+
+        const permissionOverrides = getPermissionOverrides(sqlite, tokenData.user_id);
+        const featurePermissions = getEffectivePermissions(tokenData.role, permissionOverrides);
 
         return c.json({
             accessToken,
+            refreshToken: nextRefreshToken,
             expiresIn: 900,
+            user: {
+                id: tokenData.user_id,
+                email: tokenData.email,
+                name: tokenData.name,
+                role: tokenData.role,
+                featurePermissions,
+                permissionOverrides,
+            },
         });
     } catch (e) {
         console.error("Refresh error:", e);
@@ -204,11 +265,21 @@ auth.post("/logout", async (c) => {
 
 // ============ GET CURRENT USER ============
 auth.get("/me", async (c) => {
-    const user = c.get("user");
+    const user = (c.get("user" as any) || c.get("jwtPayload" as any)) as { sub?: number; role?: string; email?: string; name?: string } | undefined;
     if (!user) {
         return c.json({ error: "Not authenticated" }, 401);
     }
-    return c.json({ user });
+
+    const permissionOverrides = getPermissionOverrides(sqlite, Number(user.sub || 0));
+    const featurePermissions = getEffectivePermissions(String(user.role || "employee"), permissionOverrides);
+
+    return c.json({
+        user: {
+            ...user,
+            featurePermissions,
+            permissionOverrides,
+        },
+    });
 });
 
 export default auth;

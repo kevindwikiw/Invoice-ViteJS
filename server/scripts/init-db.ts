@@ -31,10 +31,32 @@ db.run(`
     total_amount REAL,
     invoice_data TEXT,
     pdf_blob BLOB,
+    is_archived INTEGER DEFAULT 0,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
   )
 `);
 console.log("Table 'invoices' ready.");
+
+// Invoice Activity Logs
+db.run(`
+  CREATE TABLE IF NOT EXISTS invoice_activity_logs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    invoice_id INTEGER NOT NULL,
+    action TEXT NOT NULL,
+    actor_id INTEGER,
+    actor_email TEXT,
+    actor_name TEXT,
+    actor_role TEXT,
+    details TEXT,
+    ip_address TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+  )
+`);
+db.run(`
+  CREATE INDEX IF NOT EXISTS idx_invoice_activity_logs_invoice_id
+  ON invoice_activity_logs(invoice_id, created_at DESC)
+`);
+console.log("Table 'invoice_activity_logs' ready.");
 
 // Config
 db.run(`
@@ -58,6 +80,23 @@ db.run(`
 `);
 console.log("Table 'users' ready.");
 
+// Granular user permissions for feature-level RBAC
+db.run(`
+  CREATE TABLE IF NOT EXISTS user_permissions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    permission_key TEXT NOT NULL,
+    effect TEXT NOT NULL CHECK(effect IN ('grant', 'deny')),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(user_id, permission_key)
+  )
+`);
+db.run(`
+  CREATE INDEX IF NOT EXISTS idx_user_permissions_user_id
+  ON user_permissions(user_id)
+`);
+console.log("Table 'user_permissions' ready.");
+
 // Seed default users (if not exist)
 const existingUsers = db.query("SELECT COUNT(*) as count FROM users").get() as { count: number };
 if (existingUsers.count === 0) {
@@ -72,9 +111,21 @@ if (existingUsers.count === 0) {
   };
 
   const seedUsers = async () => {
-    const devHash = await hashPassword("REDACTED_SEED_PASSWORD");
-    const adminHash = await hashPassword("REDACTED_SEED_PASSWORD");
-    const staffHash = await hashPassword("REDACTED_SEED_PASSWORD");
+    const seedPasswords = {
+      superadmin: process.env.SEED_SUPERADMIN_PASSWORD,
+      admin: process.env.SEED_ADMIN_PASSWORD,
+      employee: process.env.SEED_EMPLOYEE_PASSWORD,
+    };
+    const missing = Object.entries(seedPasswords)
+      .filter(([, password]) => !password || password.length < 12)
+      .map(([role]) => role);
+    if (missing.length > 0) {
+      throw new Error(`Missing strong seed password(s): ${missing.join(", ")}. Set them in server/.env before initializing the database.`);
+    }
+
+    const devHash = await hashPassword(seedPasswords.superadmin!);
+    const adminHash = await hashPassword(seedPasswords.admin!);
+    const staffHash = await hashPassword(seedPasswords.employee!);
 
     db.run(`INSERT INTO users (email, name, password_hash, role) VALUES (?, ?, ?, ?)`,
       ["dev@orbit.com", "Developer", devHash, "superadmin"]);
@@ -83,10 +134,7 @@ if (existingUsers.count === 0) {
     db.run(`INSERT INTO users (email, name, password_hash, role) VALUES (?, ?, ?, ?)`,
       ["staff@orbit.com", "Staff", staffHash, "employee"]);
 
-    console.log("Default users seeded:");
-    console.log("  - dev@orbit.com (SuperAdmin) / REDACTED_SEED_PASSWORD");
-    console.log("  - admin@orbit.com (Admin) / REDACTED_SEED_PASSWORD");
-    console.log("  - staff@orbit.com (Employee) / REDACTED_SEED_PASSWORD");
+    console.log("Seed users created. Store their credentials securely; they are not printed by this script.");
   };
 
   await seedUsers();

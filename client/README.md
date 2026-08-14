@@ -1,73 +1,80 @@
-# React + TypeScript + Vite
+# Invoice App Client
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+React frontend powered by Rsbuild/Rspack. Bun remains the package manager and
+script runner, while the API remains on Bun + Hono.
 
-Currently, two official plugins are available:
+## Development
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) (or [oxc](https://oxc.rs) when used in [rolldown-vite](https://vite.dev/guide/rolldown)) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+Start the Hono API in one terminal:
 
-## React Compiler
-
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
-
-## Expanding the ESLint configuration
-
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
-
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
-
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+```powershell
+cd server
+bun run index.ts
 ```
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+Start the Rsbuild frontend in a second terminal:
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
+```powershell
+cd client
+bun install
+bun run dev
+```
 
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+Open `http://localhost:5174`. The Rsbuild dev server proxies `/api` and `/uploads`
+to Hono at `http://localhost:3000`.
+
+The dev server is pinned to IPv4 and uses a single listener on port `5174` for
+Windows compatibility. Route-level dynamic imports still produce separate chunks.
+
+Set `API_PROXY_TARGET` before `bun run dev` if Hono is available at a different
+development URL.
+
+## Production build
+
+```powershell
+bun run build
+bun run preview
+```
+
+The production files are written to `dist/`. `preview` is intended for local
+verification of that build.
+
+Deploy `dist/` with a static web server. The public web server must:
+
+- fall back unknown frontend routes to `index.html` for the SPA router;
+- reverse proxy `/api` and `/uploads` to the Bun + Hono server.
+
+The frontend deliberately uses same-origin URLs for API calls and uploaded files,
+so Hono remains API-only and no production API origin is embedded in the bundle.
+
+## Checks
+
+```powershell
+bun run lint
+bun run typecheck
+```
+
+## Automated smoke test
+
+Install the Chromium test browser once:
+
+```powershell
+bun x playwright install chromium
+```
+
+Then run the critical workflow suite:
+
+```powershell
+bun run test:smoke
+```
+
+The suite starts Hono and Rsbuild, signs in, creates a temporary invoice, uploads
+a proof, downloads the generated PDF, verifies Invoice Audit Logs, and cleans up
+the temporary invoice. Supply a non-production test account without committing
+credentials:
+
+```powershell
+$env:E2E_EMAIL = 'admin@example.com'
+$env:E2E_PASSWORD = 'your-password'
+bun run test:smoke
 ```

@@ -1,13 +1,39 @@
+/* eslint-disable react-refresh/only-export-components -- context, hook, and display helpers intentionally share this module. */
 import { createContext, useContext, useState, useEffect, useCallback, type ReactNode } from 'react';
+import {
+    apiFetch,
+    clearAuthTokens,
+    fetchWithAuth,
+    getRefreshToken,
+    hasAccessToken,
+    loadAuthTokens,
+    saveAuthTokens,
+} from '../lib/api';
 
 // ============ TYPES ============
 export type UserRole = 'superadmin' | 'admin' | 'employee';
+export type FeaturePermission = 'view_market_insights' | 'view_billing_history' | 'edit_billing_history' | 'view_audit_logs';
+export type PermissionEffect = 'grant' | 'deny';
+export type PermissionOverrideMode = PermissionEffect | 'inherit';
+
+export type FeaturePermissionMap = Record<FeaturePermission, boolean>;
+export type PermissionOverrideMap = Partial<Record<FeaturePermission, PermissionEffect>>;
 
 export interface User {
     id: number;
     email: string;
     name: string;
     role: UserRole;
+    featurePermissions?: FeaturePermissionMap;
+    permissionOverrides?: PermissionOverrideMap;
+}
+
+export interface UserPermissionResponse {
+    userId: number;
+    role: UserRole;
+    permissions: Array<{ key: FeaturePermission; override: PermissionOverrideMode; effective: boolean }>;
+    permissionOverrides: PermissionOverrideMap;
+    featurePermissions: FeaturePermissionMap;
 }
 
 interface AuthContextType {
@@ -16,10 +42,6 @@ interface AuthContextType {
     login: (email: string, password: string) => Promise<{ success: boolean; error?: string }>;
     logout: () => Promise<void>;
     hasPermission: (action: Permission) => boolean;
-    allUsers: User[];
-    fetchUsers: () => Promise<void>;
-    addUser: (user: { email: string; name: string; password: string; role: UserRole }) => Promise<{ success: boolean; error?: string }>;
-    removeUser: (userId: number) => Promise<{ success: boolean; error?: string }>;
 }
 
 // ============ PERMISSIONS ============
@@ -30,7 +52,8 @@ type Permission =
     | 'create_invoices'
     | 'edit_invoices'
     | 'download_invoices'
-    | 'delete_history';
+    | 'delete_history'
+    | FeaturePermission;
 
 const ROLE_PERMISSIONS: Record<UserRole, Permission[]> = {
     superadmin: [
@@ -40,7 +63,11 @@ const ROLE_PERMISSIONS: Record<UserRole, Permission[]> = {
         'create_invoices',
         'edit_invoices',
         'download_invoices',
-        'delete_history'
+        'delete_history',
+        'view_market_insights',
+        'view_billing_history',
+        'edit_billing_history',
+        'view_audit_logs',
     ],
     admin: [
         'manage_users',
@@ -49,170 +76,68 @@ const ROLE_PERMISSIONS: Record<UserRole, Permission[]> = {
         'create_invoices',
         'edit_invoices',
         'download_invoices',
-        'delete_history'
+        'delete_history',
+        'view_market_insights',
+        'view_billing_history',
+        'edit_billing_history',
+        'view_audit_logs',
     ],
     employee: [
         'create_invoices',
         'edit_invoices',
-        'download_invoices'
+        'download_invoices',
+        'view_billing_history',
     ]
 };
 
-// ============ TOKEN MANAGEMENT ============
-const API_BASE = '/api';
-
-// Store tokens
-let accessToken: string | null = null;
-let refreshToken: string | null = null;
-let tokenExpiresAt: number = 0;
-let refreshingPromise: Promise<boolean> | null = null; // Lock for refresh
-
-// Load tokens from localStorage
-function loadTokens() {
-    accessToken = localStorage.getItem('orbit_access_token');
-    refreshToken = localStorage.getItem('orbit_refresh_token');
-    tokenExpiresAt = parseInt(localStorage.getItem('orbit_token_expires') || '0');
-}
-
-// Save tokens to localStorage
-function saveTokens(access: string, refresh: string, expiresIn: number) {
-    accessToken = access;
-    refreshToken = refresh;
-    tokenExpiresAt = Date.now() + (expiresIn * 1000) - 60000; // 1 min buffer
-
-    localStorage.setItem('orbit_access_token', access);
-    localStorage.setItem('orbit_refresh_token', refresh);
-    localStorage.setItem('orbit_token_expires', String(tokenExpiresAt));
-}
-
-// Clear tokens
-function clearTokens() {
-    accessToken = null;
-    refreshToken = null;
-    tokenExpiresAt = 0;
-
-    localStorage.removeItem('orbit_access_token');
-    localStorage.removeItem('orbit_refresh_token');
-    localStorage.removeItem('orbit_token_expires');
-    localStorage.removeItem('orbit_user');
-    localStorage.removeItem('isAuthenticated');
-}
-
-// Refresh the access token (with lock)
-async function refreshAccessToken(): Promise<boolean> {
-    if (!refreshToken) return false;
-    if (refreshingPromise) return refreshingPromise;
-
-    refreshingPromise = (async () => {
-        try {
-            const res = await fetch(`${API_BASE}/auth/refresh`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ refreshToken }),
-            });
-
-            if (!res.ok) {
-                clearTokens();
-                return false;
-            }
-
-            const data = await res.json();
-            accessToken = data.accessToken;
-            tokenExpiresAt = Date.now() + (data.expiresIn * 1000) - 60000;
-
-            localStorage.setItem('orbit_access_token', data.accessToken);
-            localStorage.setItem('orbit_token_expires', String(tokenExpiresAt));
-
-            return true;
-        } catch {
-            clearTokens();
-            return false;
-        } finally {
-            refreshingPromise = null;
-        }
-    })();
-
-    return refreshingPromise;
-}
-
-// Get valid access token (refresh if needed)
-async function getValidToken(): Promise<string | null> {
-    if (!accessToken) {
-        loadTokens();
-    }
-
-    // Check if token is expired or about to expire
-    if (tokenExpiresAt < Date.now()) {
-        const refreshed = await refreshAccessToken();
-        if (!refreshed) return null;
-    }
-
-    return accessToken;
-}
-
-// Fetch with auth (auto-refresh)
-export async function fetchWithAuth(url: string, options: RequestInit = {}): Promise<Response> {
-    const token = await getValidToken();
-
-    if (!token) {
-        throw new Error('Not authenticated');
-    }
-
-    const headers: Record<string, string> = {
-        'Authorization': `Bearer ${token}`,
-        ...(options.headers as Record<string, string> || {}),
-    };
-
-    if (!(options.body instanceof FormData)) {
-        headers['Content-Type'] = 'application/json';
-    }
-
-    const res = await fetch(`${API_BASE}${url}`, { ...options, headers });
-
-    // If 401, try to refresh and retry once
-    if (res.status === 401) {
-        const refreshed = await refreshAccessToken();
-        if (refreshed) {
-            const retryHeaders: Record<string, string> = {
-                'Authorization': `Bearer ${accessToken}`,
-                ...(options.headers as Record<string, string> || {}),
-            };
-
-            if (!(options.body instanceof FormData)) {
-                retryHeaders['Content-Type'] = 'application/json';
-            }
-
-            return fetch(`${API_BASE}${url}`, { ...options, headers: retryHeaders });
-        } else {
-            // Refresh failed, force logout (redirect will happen via auth state change)
-            clearTokens();
-            window.dispatchEvent(new Event('orbit:auth-failed'));
-            throw new Error('Session expired');
-        }
-    }
-
-    return res;
-}
+const FEATURE_PERMISSIONS: FeaturePermission[] = ['view_market_insights', 'view_billing_history', 'edit_billing_history', 'view_audit_logs'];
 
 // ============ CONTEXT ============
 const AuthContext = createContext<AuthContextType | null>(null);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
     const [user, setUser] = useState<User | null>(null);
-    const [users, setUsers] = useState<User[]>([]);
     const [isReady, setIsReady] = useState(false);
+
+    const mergeUserPermissionState = useCallback((baseUser: User, data: { featurePermissions?: FeaturePermissionMap; permissionOverrides?: PermissionOverrideMap }): User => {
+        return {
+            ...baseUser,
+            featurePermissions: data.featurePermissions || baseUser.featurePermissions,
+            permissionOverrides: data.permissionOverrides || baseUser.permissionOverrides,
+        };
+    }, []);
+
+    const syncUserPermissionProfile = useCallback(async (targetUser: User | null) => {
+        if (!targetUser) return;
+        try {
+            const res = await fetchWithAuth(`/users/${targetUser.id}/permissions`);
+            if (!res.ok) return;
+            const data = await res.json() as UserPermissionResponse;
+            setUser(prev => {
+                const seed = prev && prev.id === targetUser.id ? prev : targetUser;
+                const merged = mergeUserPermissionState(seed, {
+                    featurePermissions: data.featurePermissions,
+                    permissionOverrides: data.permissionOverrides,
+                });
+                localStorage.setItem('orbit_user', JSON.stringify(merged));
+                return merged;
+            });
+        } catch (e) {
+            console.error('Failed to sync permission profile:', e);
+        }
+    }, [mergeUserPermissionState]);
 
     // Load user on mount & listen to storage
     useEffect(() => {
         const initAuth = () => {
-            loadTokens();
+            loadAuthTokens();
             const savedUser = localStorage.getItem('orbit_user');
 
-            if (savedUser && accessToken) {
+            if (savedUser && hasAccessToken()) {
                 try {
                     setUser(JSON.parse(savedUser));
                 } catch {
-                    clearTokens();
+                    clearAuthTokens();
                     setUser(null);
                 }
             } else {
@@ -226,16 +151,54 @@ export function AuthProvider({ children }: { children: ReactNode }) {
                 initAuth();
             }
         };
+        const handleTokenRefreshed = (event: Event) => {
+            const refreshedUser = (event as CustomEvent<User | null>).detail || null;
+            if (refreshedUser) {
+                setUser(() => {
+                    const merged = mergeUserPermissionState(refreshedUser, {
+                        featurePermissions: refreshedUser.featurePermissions,
+                        permissionOverrides: refreshedUser.permissionOverrides,
+                    });
+                    localStorage.setItem('orbit_user', JSON.stringify(merged));
+                    return merged;
+                });
+            } else {
+                const currentRaw = localStorage.getItem('orbit_user');
+                if (currentRaw) {
+                    try {
+                        const currentUser = JSON.parse(currentRaw) as User;
+                        void syncUserPermissionProfile(currentUser);
+                    } catch {
+                        // Ignore malformed cached user data and continue auth initialization.
+                    }
+                }
+            }
+        };
 
         window.addEventListener('storage', handleStorage);
+        window.addEventListener('orbit:token-refreshed', handleTokenRefreshed as EventListener);
         initAuth();
 
-        return () => window.removeEventListener('storage', handleStorage);
-    }, []);
+        return () => {
+            window.removeEventListener('storage', handleStorage);
+            window.removeEventListener('orbit:token-refreshed', handleTokenRefreshed as EventListener);
+        };
+    }, [mergeUserPermissionState, syncUserPermissionProfile]);
+
+    useEffect(() => {
+        if (!isReady || !user) return;
+        const hasEffective = !!user.featurePermissions && FEATURE_PERMISSIONS.every((key) => typeof user.featurePermissions?.[key] === 'boolean');
+        if (hasEffective) return;
+
+        const timer = window.setTimeout(() => {
+            void syncUserPermissionProfile(user);
+        }, 0);
+        return () => window.clearTimeout(timer);
+    }, [isReady, user, syncUserPermissionProfile]);
 
     const login = async (email: string, password: string): Promise<{ success: boolean; error?: string }> => {
         try {
-            const res = await fetch(`${API_BASE}/auth/login`, {
+            const res = await apiFetch('/auth/login', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ email, password }),
@@ -248,25 +211,25 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             }
 
             // Store tokens
-            saveTokens(data.accessToken, data.refreshToken, data.expiresIn);
+            saveAuthTokens(data.accessToken, data.refreshToken, data.expiresIn);
 
             // Store user
             setUser(data.user);
             localStorage.setItem('orbit_user', JSON.stringify(data.user));
             localStorage.setItem('isAuthenticated', 'true');
+            await syncUserPermissionProfile(data.user as User);
 
             return { success: true };
-        } catch (e) {
+        } catch {
             return { success: false, error: 'Network error' };
         }
     };
 
     const logout = useCallback(async () => {
-        const oldRefresh = refreshToken; // capture before clearing
+        const oldRefresh = getRefreshToken();
 
         setUser(null);
-        setUsers([]);
-        clearTokens();
+        clearAuthTokens();
 
         // Notify other tabs immediately
         window.dispatchEvent(new Event('storage'));
@@ -274,7 +237,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         // Call server logout to revoke refresh token
         if (oldRefresh) {
             try {
-                await fetch(`${API_BASE}/auth/logout`, {
+                await apiFetch('/auth/logout', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ refreshToken: oldRefresh }),
@@ -285,75 +248,32 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         }
     }, []);
 
-    const hasPermission = (action: Permission): boolean => {
+    const hasPermission = useCallback((action: Permission): boolean => {
         if (!user) return false;
+
+        if (FEATURE_PERMISSIONS.includes(action as FeaturePermission)) {
+            const key = action as FeaturePermission;
+            const override = user.permissionOverrides?.[key];
+            if (override === 'deny') return false;
+            if (override === 'grant') return true;
+            if (user.featurePermissions && typeof user.featurePermissions[key] === 'boolean') {
+                return !!user.featurePermissions[key];
+            }
+        }
+
         return ROLE_PERMISSIONS[user.role].includes(action);
-    };
-
-    const fetchUsers = async () => {
-        try {
-            const res = await fetchWithAuth('/users');
-            if (res.ok) {
-                const data = await res.json();
-                setUsers(data);
-            }
-        } catch (e) {
-            console.error('Failed to fetch users:', e);
-        }
-    };
-
-    const addUser = async (newUser: { email: string; name: string; password: string; role: UserRole }): Promise<{ success: boolean; error?: string }> => {
-        try {
-            const res = await fetchWithAuth('/users', {
-                method: 'POST',
-                body: JSON.stringify(newUser),
-            });
-
-            const data = await res.json();
-
-            if (!res.ok) {
-                return { success: false, error: data.error || 'Failed to create user' };
-            }
-
-            await fetchUsers();
-            return { success: true };
-        } catch (e) {
-            return { success: false, error: 'Network error' };
-        }
-    };
-
-    const removeUser = async (userId: number): Promise<{ success: boolean; error?: string }> => {
-        try {
-            const res = await fetchWithAuth(`/users/${userId}`, {
-                method: 'DELETE',
-            });
-
-            if (!res.ok) {
-                const data = await res.json();
-                return { success: false, error: data.error || 'Failed to delete user' };
-            }
-
-            await fetchUsers();
-            return { success: true };
-        } catch (e) {
-            return { success: false, error: 'Network error' };
-        }
-    };
+    }, [user]);
 
     return (
         <AuthContext.Provider value={{
             user,
-            isAuthenticated: !!user && !!accessToken,
+            isAuthenticated: !!user && hasAccessToken(),
             login,
             logout,
             hasPermission,
-            allUsers: users,
-            fetchUsers,
-            addUser,
-            removeUser
         }}>
-            {isReady ? children : null}
-        </AuthContext.Provider>
+            { isReady? children: null }
+        </AuthContext.Provider >
     );
 }
 

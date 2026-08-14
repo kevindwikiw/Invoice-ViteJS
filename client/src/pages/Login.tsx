@@ -1,32 +1,43 @@
-import { useState } from 'react';
+import { useState, lazy, Suspense, memo } from 'react';
 import { useNavigate } from '@tanstack/react-router';
-import { Loader2, ArrowRight, AlertCircle } from 'lucide-react';
-import BlackHoleHero from '../components/BlackHoleHero';
+import { Loader2, ArrowRight, AlertCircle, Sun, Moon } from 'lucide-react';
 import { useAuth } from '../context/auth';
+import orbitLogo from '../assets/pdf/logo.png';
+import { useDarkMode } from '../hooks/useDarkMode';
 
-function OrbitLogo({ className = "" }: { className?: string }) {
+const BlackHoleHero = lazy(() => import('../components/BlackHoleHero'));
+
+const OrbitLogo = memo(function OrbitLogo({ className = "", darkMode = true }: { className?: string; darkMode?: boolean }) {
     return (
         <div className={`flex items-center gap-3 ${className}`}>
-            <img src="/logo.png" alt="Orbit Logo" className="h-10 w-auto" />
+            <img
+                src={orbitLogo}
+                alt="Orbit Logo"
+                width={792}
+                height={296}
+                className="h-auto w-32 object-contain sm:w-36 lg:w-40"
+                style={{ filter: darkMode ? 'none' : 'invert(1)' }}
+            />
         </div>
     );
-}
+});
 
 export default function Login() {
     const [loading, setLoading] = useState(false);
-    const [email, setEmail] = useState('');
-    const [password, setPassword] = useState('');
     const [error, setError] = useState('');
     const navigate = useNavigate();
     const { login } = useAuth();
 
-    const handleLogin = async (e: React.FormEvent) => {
+    const [darkMode, setDarkMode] = useDarkMode();
+
+    const handleLogin = async (e: React.FormEvent<HTMLFormElement>) => {
         e.preventDefault();
+        const formData = new FormData(e.currentTarget);
+        const email = String(formData.get('email') ?? '');
+        const password = String(formData.get('password') ?? '');
+
         setError('');
         setLoading(true);
-
-        // Simulate network delay
-        await new Promise(r => setTimeout(r, 800));
 
         const result = await login(email, password);
 
@@ -40,31 +51,47 @@ export default function Login() {
     };
 
     return (
-        <div className="min-h-screen w-full flex flex-col lg:flex-row bg-[#0a0a0a] text-[var(--text-primary)]">
+        <div
+            className="blackhole-interaction-shell min-h-screen w-full flex flex-col lg:flex-row bg-[var(--bg-deep)] text-[var(--text-primary)]"
+        >
 
-            {/* Left Side: Black Hole Hero */}
-            <div className="w-full lg:w-3/5 relative p-3 sm:p-4 lg:p-8 flex flex-col min-h-[200px] sm:min-h-[280px] lg:min-h-0">
-                <BlackHoleHero className="w-full h-full min-h-[180px] sm:min-h-[260px] lg:min-h-full rounded-2xl lg:rounded-3xl overflow-hidden shadow-2xl border border-white/5" />
+            {/* Theme Toggle — top right corner */}
+            <button
+                onClick={() => setDarkMode(prev => !prev)}
+                className="absolute top-4 right-4 z-50 flex h-9 w-9 items-center justify-center rounded-full border border-[var(--border)] bg-[var(--bg-elevated)] text-[var(--text-muted)] transition-colors hover:text-[var(--text-primary)]"
+                title={darkMode ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
+            >
+                {darkMode ? <Sun size={15} /> : <Moon size={15} />}
+            </button>
 
-                {/* Logo overlay on hero (mobile only) */}
-                <div className="absolute top-6 left-1/2 -translate-x-1/2 lg:hidden">
-                    <OrbitLogo />
+            {/* Left Side: Lazy Loaded Black Hole Hero */}
+            <div className="relative flex h-[280px] sm:h-[320px] lg:h-auto lg:min-h-screen w-full flex-col lg:w-3/5 p-3 sm:p-4 lg:p-8 shrink-0 lg:shrink">
+                <Suspense fallback={<div className="h-full w-full flex-1 rounded-2xl lg:rounded-3xl bg-[var(--bg-elevated)]/30 border border-[var(--border)] animate-pulse" />}>
+                    <BlackHoleHero
+                        contentClassName="pt-14 sm:pt-16 lg:pt-0"
+                        className={`h-full w-full flex-1 overflow-hidden transition-[box-shadow,border-radius] duration-300 ${darkMode ? 'rounded-2xl lg:rounded-3xl shadow-2xl' : 'rounded-none'}`}
+                    />
+                </Suspense>
+
+                <div className="pointer-events-none absolute left-1/2 top-6 z-10 -translate-x-1/2 sm:top-8 lg:hidden">
+                    <OrbitLogo darkMode={darkMode} />
                 </div>
             </div>
 
             {/* Right Side: Login Form */}
-            <div className="w-full lg:w-2/5 flex flex-1 items-center justify-center p-6 sm:p-8 lg:p-12">
+            <div className="w-full lg:w-2/5 flex flex-1 items-center justify-center p-6 sm:p-8 lg:p-12 shrink-0 lg:shrink">
                 <div className="w-full max-w-sm mx-auto text-center lg:text-left">
-                    {/* Logo (desktop only) */}
-                    <div className="hidden lg:block mb-10">
-                        <OrbitLogo />
+                    <div className="mb-10 hidden justify-center lg:flex">
+                        <OrbitLogo darkMode={darkMode} />
                     </div>
 
                     <div className="mb-6 sm:mb-8">
-                        <h1 className="text-xl sm:text-2xl font-medium tracking-tight text-white mb-2" style={{ fontFamily: 'var(--font-display)' }}>
+                        <h1 className="text-xl sm:text-2xl font-medium tracking-tight mb-2 font-display text-[var(--text-primary)]">
                             Access Control
                         </h1>
-                        <p className="text-neutral-500 text-sm">Please authenticate to continue.</p>
+                        <p className="text-sm text-[var(--text-muted)]">
+                            Please authenticate to continue.
+                        </p>
                     </div>
 
                     {/* Error Message */}
@@ -75,58 +102,54 @@ export default function Login() {
                         </div>
                     )}
 
-                    <form onSubmit={handleLogin} className="space-y-4 sm:space-y-5 text-left">
+                    <form onSubmit={handleLogin} className="space-y-4 text-left sm:space-y-5">
                         <div className="space-y-1.5">
-                            <label className="text-[10px] uppercase font-bold text-neutral-500 tracking-widest">Email Address</label>
+                            <label
+                                htmlFor="login-email"
+                                className="text-[10px] uppercase font-bold tracking-widest text-[var(--text-muted)]"
+                            >
+                                Email Address
+                            </label>
                             <input
+                                id="login-email"
+                                name="email"
                                 type="email"
-                                value={email}
-                                onChange={e => setEmail(e.target.value)}
-                                className="w-full bg-[#111] border border-neutral-800 rounded-lg px-4 py-3 text-sm text-[var(--text-primary)] focus:border-[#c4a35a] outline-none transition-all placeholder-neutral-700 hover:border-neutral-700"
-                                placeholder="admin@orbit.com"
+                                autoComplete="email"
+                                required
+                                disabled={loading}
+                                className="w-full rounded-lg px-4 py-3 text-sm outline-none transition-colors duration-200 border border-[var(--border)] focus:border-[var(--accent)] bg-[var(--bg-card)] text-[var(--text-primary)] disabled:opacity-50 disabled:cursor-not-allowed"
+                                placeholder="name@company.com"
                             />
                         </div>
                         <div className="space-y-1.5">
-                            <label className="text-[10px] uppercase font-bold text-neutral-500 tracking-widest">Password</label>
+                            <label
+                                htmlFor="login-password"
+                                className="text-[10px] uppercase font-bold tracking-widest text-[var(--text-muted)]"
+                            >
+                                Password
+                            </label>
                             <input
+                                id="login-password"
+                                name="password"
                                 type="password"
-                                value={password}
-                                onChange={e => setPassword(e.target.value)}
-                                className="w-full bg-[#111] border border-neutral-800 rounded-lg px-4 py-3 text-sm text-[var(--text-primary)] focus:border-[#c4a35a] outline-none transition-all placeholder-neutral-700 hover:border-neutral-700"
+                                autoComplete="current-password"
+                                required
+                                disabled={loading}
+                                className="w-full rounded-lg px-4 py-3 text-sm outline-none transition-colors duration-200 border border-[var(--border)] focus:border-[var(--accent)] bg-[var(--bg-card)] text-[var(--text-primary)] disabled:opacity-50 disabled:cursor-not-allowed"
                                 placeholder="••••••••"
                             />
                         </div>
 
                         <button
                             type="submit"
-                            disabled={loading || !email || !password}
-                            className="w-full bg-[#c4a35a] text-[#0a0a0a] font-bold uppercase text-xs tracking-widest py-3.5 rounded-lg hover:bg-[#d4b47d] transition-all flex items-center justify-center gap-2 shadow-[0_0_20px_rgba(196,163,90,0.2)] hover:shadow-[0_0_30px_rgba(196,163,90,0.4)] disabled:opacity-50 disabled:cursor-not-allowed transform active:scale-[0.98]"
+                            disabled={loading}
+                            className="flex w-full items-center justify-center gap-2 rounded-lg bg-[var(--accent)] py-3.5 text-xs font-bold uppercase tracking-widest text-white shadow-[0_0_20px_rgba(196,163,90,0.2)] transition-colors disabled:cursor-not-allowed disabled:opacity-50 dark:text-[#0a0a0a]"
                         >
                             {loading ? <Loader2 size={16} className="animate-spin" /> : <>Sign In <ArrowRight size={16} /></>}
                         </button>
                     </form>
 
-                    {/* Demo Credentials */}
-                    <div className="mt-6 p-4 bg-neutral-900/50 border border-neutral-800 rounded-lg">
-                        <p className="text-[10px] uppercase font-bold text-neutral-500 tracking-widest mb-3">Demo Accounts</p>
-                        <div className="space-y-2 text-xs">
-                            <div className="flex justify-between text-neutral-400">
-                                <span>dev@orbit.com</span>
-                                <span className="text-purple-400">SuperAdmin</span>
-                            </div>
-                            <div className="flex justify-between text-neutral-400">
-                                <span>admin@orbit.com</span>
-                                <span className="text-amber-400">Admin</span>
-                            </div>
-                            <div className="flex justify-between text-neutral-400">
-                                <span>staff@orbit.com</span>
-                                <span className="text-blue-400">Karyawan</span>
-                            </div>
-                        </div>
-                        <p className="text-[10px] text-neutral-600 mt-2">Password: [role]123</p>
-                    </div>
-
-                    <div className="mt-6 sm:mt-8 pt-6 sm:pt-8 border-t border-white/5 flex items-center justify-between text-[9px] sm:text-[10px] text-neutral-600 uppercase tracking-wider">
+                    <div className="mt-8 flex items-center justify-between border-t border-[var(--border)] pt-6 text-[9px] uppercase tracking-wider text-[var(--text-muted)] sm:mt-10 sm:text-[10px]">
                         <span>Orbit System v2.0</span>
                         <span>Secure Connection</span>
                     </div>

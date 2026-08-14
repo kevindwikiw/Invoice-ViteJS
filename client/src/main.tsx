@@ -1,7 +1,3 @@
-import { Buffer } from 'buffer'
-  // Polyfill Node.js Buffer for @react-pdf/renderer image support
-  ; (window as any).Buffer = Buffer
-
 import React from 'react'
 import ReactDOM from 'react-dom/client'
 import App from './App.tsx'
@@ -11,7 +7,19 @@ import { AuthProvider } from './context/auth.tsx'
 
 import { ToastProvider } from './context/ToastContext.tsx'
 
-const queryClient = new QueryClient()
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      staleTime: 30_000,
+      gcTime: 15 * 60_000,
+      refetchOnWindowFocus: false,
+      retry: 1,
+    },
+    mutations: {
+      retry: 0,
+    },
+  },
+})
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
@@ -24,4 +32,3 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
     </QueryClientProvider>
   </React.StrictMode>,
 )
-

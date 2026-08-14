@@ -6,7 +6,7 @@ interface BillItemsProps {
     items: InvoiceItem[];
     selectedRowIds: Set<string>;
     toggleSelection: (id: string) => void;
-    updateItem: (id: string, field: keyof InvoiceItem, value: any) => void;
+    updateItem: <Key extends keyof InvoiceItem>(id: string, field: Key, value: InvoiceItem[Key]) => void;
     deleteItem: (id: string) => void;
     unmergeBundle: (id: string) => void;
     onShowMergeModal: () => void;
@@ -17,14 +17,15 @@ interface BillItemsProps {
     rupiah: (n: number) => string;
     cashbackStepUp: (val: number) => number;
     cashbackStepDown: (val: number) => number;
-    // Payment Terms Props
+    canIncreaseCashback: boolean;
     paymentTerms: PaymentTerm[];
-    updatePaymentTerm: (id: string, field: keyof PaymentTerm, value: any) => void;
+    updatePaymentTerm: <Key extends keyof PaymentTerm>(id: string, field: Key, value: PaymentTerm[Key]) => void;
     stepPaymentTerm: (id: string, dir: 'up' | 'down') => void;
     removePaymentTerm: (id: string) => void;
     addPaymentTerm: () => void;
-    fillRemaining: () => void;
     remaining: number;
+    canAddPaymentTerm: boolean;
+    hasError?: boolean;
 }
 
 export function BillItems({
@@ -42,32 +43,55 @@ export function BillItems({
     rupiah,
     cashbackStepUp,
     cashbackStepDown,
+    canIncreaseCashback,
     paymentTerms,
     updatePaymentTerm,
     stepPaymentTerm,
     removePaymentTerm,
     addPaymentTerm,
-    fillRemaining,
-    remaining
+    remaining,
+    canAddPaymentTerm,
+    hasError,
 }: BillItemsProps) {
     return (
         <>
+
             {items.length === 0 ? (
-                <div className="text-center py-12 border border-dashed border-[var(--border)] rounded-lg bg-[var(--bg-elevated)]/50">
-                    <div className="w-12 h-12 rounded-full bg-[var(--bg-elevated)] flex items-center justify-center mx-auto mb-3 text-[var(--text-muted)]">
-                        <ShoppingCart size={20} />
+                <div className={clsx(
+                    "relative border-2 border-dashed rounded-2xl py-12 text-center transition-all group overflow-hidden bg-[var(--bg-card)]",
+                    hasError 
+                        ? "border-red-500 bg-red-500/5 animate-shake shadow-[0_0_15px_rgba(239,68,68,0.1)]" 
+                        : "border-[var(--border)] hover:border-[var(--accent)]/40 hover:bg-[var(--accent)]/[0.02]"
+                )}>
+                    <div className="relative z-10 flex flex-col items-center">
+                        <div className={clsx(
+                            "w-16 h-16 rounded-2xl flex items-center justify-center border transition-all duration-500 mb-4",
+                            hasError
+                                ? "bg-red-500/10 border-red-500/50 text-red-500"
+                                : "bg-[var(--bg-elevated)] border-[var(--border)] text-[var(--text-muted)] group-hover:scale-110 group-hover:border-[var(--accent)]/40"
+                        )}>
+                            <ShoppingCart size={28} className={!hasError ? "group-hover:text-[var(--accent)] transition-colors" : ""} />
+                        </div>
+                        <div className="space-y-1">
+                            <h3 className={clsx("text-sm font-bold", hasError ? "text-red-500" : "text-[var(--text-primary)]")}>
+                                {hasError ? "Items Mandatory" : "Your Cart is Empty"}
+                            </h3>
+                            <p className="text-[9px] text-[var(--text-muted)] uppercase tracking-[0.15em] font-medium max-w-xs mx-auto leading-relaxed px-4">
+                                {hasError 
+                                    ? "You must select at least one package to proceed with invoice creation." 
+                                    : "Select packages from the right sidebar to add items to this invoice."}
+                            </p>
+                        </div>
                     </div>
-                    <p className="text-[var(--text-muted)] text-sm">Your cart is empty.</p>
-                    <p className="text-[var(--text-muted)] text-xs mt-1">Select packages from the sidebar to add items.</p>
                 </div>
             ) : (
                 <>
                     {/* Table Header (Desktop) */}
-                    <div className="hidden md:grid grid-cols-[1fr_80px_180px_40px] gap-4 px-2 py-2 text-[10px] font-bold uppercase tracking-[0.2em] text-[var(--text-muted)] border-b border-[var(--border)]/60">
-                        <div className="text-left">Service / Item</div>
-                        <div className="text-left pl-1">Qty</div>
-                        <div className="text-right">Price</div>
-                        <div className="text-right pr-1">Actions</div>
+                    <div className="hidden md:grid grid-cols-[1fr_80px_180px_40px] gap-4 border-b border-[var(--border)] bg-[var(--bg-elevated)]/30 px-2 py-3 text-[10px] font-bold uppercase tracking-[0.2em] text-[var(--text-muted)]">
+                        <div className="pl-7 text-left">Service / Item</div>
+                        <div className="text-center">Qty</div>
+                        <div className="text-center">Price</div>
+                        <div className="text-center">Actions</div>
                     </div>
 
                     {/* Merge Button Header */}
@@ -93,6 +117,9 @@ export function BillItems({
                                         <div className="pt-1">
                                             {!item.isBundle ? (
                                                 <input
+                                                    id={`item-select-desktop-${item.id}`}
+                                                    name={`itemSelectDesktop-${item.id}`}
+                                                    aria-label={`Select ${item.desc}`}
                                                     type="checkbox"
                                                     checked={selectedRowIds.has(item.id)}
                                                     onChange={() => toggleSelection(item.id)}
@@ -105,11 +132,14 @@ export function BillItems({
                                         <div className="w-full text-left">
                                             <div className="flex items-center gap-2 relative">
                                                 <input
+                                                    id={`item-description-desktop-${item.id}`}
+                                                    name={`itemDescriptionDesktop-${item.id}`}
+                                                    aria-label={`Description for ${item.desc}`}
                                                     type="text"
                                                     value={item.desc}
                                                     onChange={(e) => updateItem(item.id, 'desc', e.target.value)}
                                                     className={clsx(
-                                                        "w-full bg-transparent border-none p-0 text-sm focus:ring-0 placeholder-[var(--text-muted)] leading-tight",
+                                                        "w-full bg-transparent border-none p-0 text-sm focus:ring-0 placeholder-[var(--text-muted)] leading-tight font-display",
                                                         item.isBundle ? "text-[var(--accent)] font-semibold" : "text-[var(--text-primary)] font-semibold"
                                                     )}
                                                 />
@@ -147,18 +177,18 @@ export function BillItems({
                                             )}
                                         </div>
                                     </div>
-                                    <div className="text-left text-sm text-[var(--text-primary)] font-medium pl-1">
+                                    <div className="text-center text-sm font-medium text-[var(--text-primary)]">
                                         {item.qty}
                                     </div>
-                                    <div className="text-right">
-                                        <div className="flex justify-end items-center gap-2">
-                                            <span className="text-[11px] font-bold text-[var(--accent)] opacity-60 w-5 text-right shrink-0">Rp</span>
-                                            <span className="text-sm font-bold text-[var(--text-primary)] w-28 text-right tabular-nums">
+                                    <div className="flex h-8 items-center justify-end px-2">
+                                        <div className="flex items-center gap-2">
+                                            <span className="w-5 shrink-0 text-right text-[10px] font-bold text-[var(--accent)] opacity-60">Rp</span>
+                                            <span className="w-28 text-right text-sm font-medium tabular-nums text-[var(--text-primary)] font-display">
                                                 {item.price.toLocaleString('id-ID')}
                                             </span>
                                         </div>
                                     </div>
-                                    <div className="text-right flex items-center justify-end gap-1">
+                                    <div className="flex items-center justify-center gap-1">
                                         {item.isBundle && (
                                             <button
                                                 onClick={() => unmergeBundle(item.id)}
@@ -183,6 +213,9 @@ export function BillItems({
                                         <div className="pt-0.5 shrink-0 text-left">
                                             {!item.isBundle ? (
                                                 <input
+                                                    id={`item-select-mobile-${item.id}`}
+                                                    name={`itemSelectMobile-${item.id}`}
+                                                    aria-label={`Select ${item.desc}`}
                                                     type="checkbox"
                                                     checked={selectedRowIds.has(item.id)}
                                                     onChange={() => toggleSelection(item.id)}
@@ -194,6 +227,9 @@ export function BillItems({
                                         </div>
                                         <div className="flex-1 min-w-0 text-left">
                                             <input
+                                                id={`item-description-mobile-${item.id}`}
+                                                name={`itemDescriptionMobile-${item.id}`}
+                                                aria-label={`Description for ${item.desc}`}
                                                 type="text"
                                                 value={item.desc}
                                                 onChange={(e) => updateItem(item.id, 'desc', e.target.value)}
@@ -217,8 +253,10 @@ export function BillItems({
                                     </div>
                                     <div className="flex items-center justify-between pl-7">
                                         <div className="flex-1 text-left">
-                                            <label className="mb-0.5 block text-[10px] font-medium font-sans uppercase tracking-[0.2em] text-[var(--text-muted)]">Price</label>
+                                            <label htmlFor={`item-price-mobile-${item.id}`} className="mb-0.5 block text-[10px] font-medium font-sans uppercase tracking-[0.2em] text-[var(--text-muted)]">Price</label>
                                             <input
+                                                id={`item-price-mobile-${item.id}`}
+                                                name={`itemPriceMobile-${item.id}`}
                                                 type="number"
                                                 value={item.price}
                                                 onChange={(e) => updateItem(item.id, 'price', Number(e.target.value))}
@@ -230,7 +268,7 @@ export function BillItems({
                                             />
                                         </div>
                                         <div className="flex items-center gap-3 bg-[var(--bg-elevated)] rounded-full px-4 py-1 border border-[var(--border)]">
-                                            <span className="font-mono text-xs font-bold w-4 text-center">{item.qty}</span>
+                                            <span className="font-mono-var text-xs font-bold w-4 text-center">{item.qty}</span>
                                         </div>
                                     </div>
                                 </div>
@@ -245,10 +283,10 @@ export function BillItems({
                                 <div className="col-span-2 text-right pr-6">
                                     <span className="text-[10px] font-bold uppercase tracking-[0.2em] text-[var(--text-muted)]">Subtotal</span>
                                 </div>
-                                <div className="text-right">
-                                    <div className="flex justify-end items-center gap-2">
-                                        <span className="text-[11px] font-bold text-[var(--accent)] opacity-60 w-5 text-right shrink-0">Rp</span>
-                                        <span className="text-sm font-bold text-[var(--text-primary)] w-28 text-right tabular-nums">
+                                <div className="flex h-8 w-[180px] items-center justify-end px-2">
+                                    <div className="flex items-center gap-2">
+                                        <span className="w-5 shrink-0 text-right text-[10px] font-bold text-[var(--accent)] opacity-60">Rp</span>
+                                        <span className="w-28 text-right text-sm font-medium tabular-nums text-[var(--text-primary)] font-display">
                                             {subtotal.toLocaleString('id-ID')}
                                         </span>
                                     </div>
@@ -258,30 +296,35 @@ export function BillItems({
 
                             <div className="grid grid-cols-[1fr_80px_180px_40px] gap-4 px-2 items-center">
                                 <div className="col-span-2 text-right pr-6">
-                                    <span className="text-[10px] font-bold uppercase tracking-[0.2em] text-[var(--text-muted)]">Cashback</span>
+                                    <label htmlFor="cashback-amount" className="text-[10px] font-bold uppercase tracking-[0.2em] text-[var(--text-muted)]">Cashback</label>
                                 </div>
                                 <div className="text-left py-1">
                                     <div className="flex items-center border border-[var(--border)] rounded-md px-2 py-1 bg-transparent gap-2 h-8 w-[180px] justify-between">
                                         <button
                                             type="button"
                                             onClick={() => setCashback((prev) => cashbackStepDown(prev))}
-                                            className="text-[var(--text-muted)] hover:text-[var(--accent)] text-xs h-5 w-4 flex items-center justify-center transition-colors shrink-0"
+                                            disabled={cashback === 0}
+                                            className="flex h-5 w-4 shrink-0 items-center justify-center text-xs text-[var(--text-muted)] transition-colors hover:text-[var(--accent)] disabled:cursor-not-allowed disabled:opacity-30"
                                         >
                                             -
                                         </button>
                                         <div className="flex-1 flex justify-end items-center gap-2">
                                             <span className="text-[11px] font-bold text-[var(--accent)] opacity-60 w-5 text-right shrink-0">Rp</span>
                                             <input
+                                                id="cashback-amount"
+                                                name="cashbackAmount"
+                                                aria-label="Cashback amount"
                                                 type="text"
                                                 value={cashback.toLocaleString('id-ID')}
                                                 readOnly
-                                                className="w-28 bg-transparent border-none p-0 text-sm text-right text-[var(--text-primary)] font-bold outline-none tabular-nums"
+                                                className="w-28 bg-transparent border-none p-0 text-sm text-right text-[var(--text-primary)] font-bold outline-none tabular-nums font-display"
                                             />
                                         </div>
                                         <button
                                             type="button"
                                             onClick={() => setCashback((prev) => cashbackStepUp(prev))}
-                                            className="text-[var(--accent)] hover:opacity-70 text-xs h-5 w-4 flex items-center justify-center transition-colors shrink-0"
+                                            disabled={!canIncreaseCashback}
+                                            className="flex h-5 w-4 shrink-0 items-center justify-center text-xs text-[var(--accent)] transition-colors hover:opacity-70 disabled:cursor-not-allowed disabled:opacity-30"
                                         >
                                             +
                                         </button>
@@ -297,11 +340,13 @@ export function BillItems({
                                     </div>
                                     <div className="flex justify-start">
                                         <div className={clsx(
-                                            "text-[9px] uppercase font-bold px-2.5 py-1 rounded-full tracking-widest transition-all",
+                                            "text-[9px] uppercase font-bold px-2.5 py-1 rounded-full tracking-widest transition-all whitespace-nowrap",
                                             remaining === 0 ? "text-emerald-500 bg-emerald-500/10 border border-emerald-500/20" :
-                                                "text-orange-500 bg-orange-500/10 border border-orange-500/20 shadow-sm shadow-orange-500/5"
+                                                remaining < 0
+                                                    ? "text-red-500 bg-red-500/10 border border-red-500/20"
+                                                    : "text-orange-500 bg-orange-500/10 border border-orange-500/20 shadow-sm shadow-orange-500/5"
                                         )}>
-                                            {remaining === 0 ? 'Balanced' : `Unallocated: ${rupiah(remaining)}`}
+                                            {remaining === 0 ? 'Auto balanced' : remaining < 0 ? `Overallocated: ${rupiah(Math.abs(remaining))}` : `Unallocated: ${rupiah(remaining)}`}
                                         </div>
                                     </div>
                                     <div></div>
@@ -311,42 +356,52 @@ export function BillItems({
                                     <div key={term.id} className="group relative grid grid-cols-[1fr_80px_180px_40px] gap-4 px-2 items-center py-0.5 transition-all hover:bg-[var(--bg-elevated)]/20 rounded-md">
                                         <div className="col-span-2 text-right pr-6">
                                             <input
+                                                id={`payment-term-label-${term.id}`}
+                                                name={`paymentTermLabel-${term.id}`}
+                                                aria-label={`Label for ${term.label}`}
                                                 type="text"
                                                 value={term.label}
                                                 onChange={(e) => updatePaymentTerm(term.id, 'label', e.target.value)}
                                                 disabled={term.locked}
-                                                className="w-full bg-transparent border-none p-0 text-[10px] text-right text-[var(--text-secondary)] font-medium uppercase tracking-widest focus:ring-0 disabled:opacity-70 outline-none"
+                                                className="w-full bg-transparent border-none p-0 text-[10px] text-right text-[var(--text-secondary)] font-bold uppercase tracking-[0.2em] focus:ring-0 disabled:opacity-70 outline-none font-sans"
                                             />
                                         </div>
                                         <div className="flex items-center">
                                             <div className="flex items-center border border-[var(--border)] rounded-md px-2 py-1 bg-transparent gap-2 h-8 w-[180px] justify-between">
                                                 <button
+                                                    type="button"
                                                     onClick={() => stepPaymentTerm(term.id, 'down')}
-                                                    className="text-[var(--text-muted)] hover:text-[var(--accent)] text-xs h-5 w-4 flex items-center justify-center transition-colors shrink-0"
+                                                    disabled={term.id === 'full'}
+                                                    className="flex h-5 w-4 shrink-0 items-center justify-center text-xs text-[var(--text-muted)] transition-colors hover:text-[var(--accent)] disabled:cursor-not-allowed disabled:opacity-30"
                                                 >
                                                     -
                                                 </button>
                                                 <div className="flex-1 flex justify-end items-center gap-2">
                                                     <span className="text-[10px] font-bold text-[var(--accent)] opacity-60 w-5 text-right shrink-0">Rp</span>
                                                     {term.locked ? (
-                                                        <span className="text-[14px] font-bold text-[var(--text-primary)] w-28 text-right tabular-nums py-[2px] h-8 flex items-center justify-end leading-none">
+                                                        <span className="text-[14px] font-bold text-[var(--text-primary)] w-28 text-right tabular-nums py-[2px] h-8 flex items-center justify-end leading-none font-display text-lg">
                                                             {term.amount.toLocaleString('id-ID')}
                                                         </span>
                                                     ) : (
                                                         <input
+                                                            id={`payment-term-amount-${term.id}`}
+                                                            name={`paymentTermAmount-${term.id}`}
+                                                            aria-label={`Amount for ${term.label}`}
                                                             type="text"
                                                             value={term.amount.toLocaleString('id-ID')}
                                                             onChange={(e) => {
                                                                 const val = e.target.value.replace(/\D/g, '');
                                                                 updatePaymentTerm(term.id, 'amount', Number(val));
                                                             }}
-                                                            className="w-28 bg-transparent border-none p-0 text-[14px] text-right text-[var(--text-primary)] font-bold focus:ring-0 outline-none tabular-nums h-8 leading-none"
+                                                            className="w-28 bg-transparent border-none p-0 text-[14px] text-right text-[var(--text-primary)] font-bold focus:ring-0 outline-none tabular-nums h-8 leading-none font-display text-lg"
                                                         />
                                                     )}
                                                 </div>
                                                 <button
+                                                    type="button"
                                                     onClick={() => stepPaymentTerm(term.id, 'up')}
-                                                    className="text-[var(--accent)] hover:opacity-70 text-xs h-5 w-4 flex items-center justify-center transition-colors shrink-0"
+                                                    disabled={term.id === 'full'}
+                                                    className="flex h-5 w-4 shrink-0 items-center justify-center text-xs text-[var(--accent)] transition-colors hover:opacity-70 disabled:cursor-not-allowed disabled:opacity-30"
                                                 >
                                                     +
                                                 </button>
@@ -366,19 +421,18 @@ export function BillItems({
                                 <div className="grid grid-cols-[1fr_80px_180px_40px] gap-4 px-2 pt-2 items-center">
                                     <div className="col-span-2"></div>
                                     <div className="flex gap-2 w-[180px]">
-                                        <button onClick={addPaymentTerm} className="flex-1 py-1 text-[8px] font-bold uppercase tracking-widest text-[var(--text-muted)] hover:text-[var(--accent)] transition-colors border border-dashed border-[var(--border)] rounded">+ Termin</button>
-                                        {remaining > 0 && <button onClick={fillRemaining} className="px-2 py-1 text-[8px] font-bold uppercase tracking-widest bg-[var(--accent)] text-[var(--bg-deep)] rounded hover:opacity-90 transition-opacity">Allocate</button>}
+                                        <button type="button" onClick={addPaymentTerm} disabled={!canAddPaymentTerm} className="flex-1 rounded border border-dashed border-[var(--border)] py-1 text-[8px] font-bold uppercase tracking-widest text-[var(--text-muted)] transition-colors hover:text-[var(--accent)] disabled:cursor-not-allowed disabled:opacity-35">+ Termin</button>
                                     </div>
                                     <div></div>
                                 </div>
                             </div>
 
-                            {/* Grand Total Row: Always Visible, Right Aligned */}
-                            <div className="flex justify-between items-end w-full mt-12 pt-8 border-t-2 border-[var(--border)]/40 px-2">
-                                <span className="text-[13px] font-bold uppercase tracking-[0.25em] text-[var(--text-muted)] pb-1" style={{ fontFamily: 'var(--font-display)' }}>Grand Total</span>
-                                <div className="flex items-baseline gap-3">
-                                    <span className="text-xl font-bold text-[var(--accent)] opacity-60">Rp</span>
-                                    <span className="not-italic font-bold tracking-tight text-[var(--accent)] text-5xl tabular-nums leading-none">
+                            {/* Grand Total Row */}
+                            <div className="flex justify-between items-center w-full mt-12 pt-8 border-t-2 border-[var(--border)]/40 px-2">
+                                <span className="text-[10px] font-bold uppercase tracking-[0.2em] text-[var(--text-muted)]">Grand Total</span>
+                                <div className="flex items-baseline gap-2">
+                                    <span className="w-5 text-right text-[10px] font-bold text-[var(--accent)] opacity-60">Rp</span>
+                                    <span className="w-28 text-right text-2xl font-semibold leading-none tracking-tight tabular-nums text-[var(--text-primary)] font-display">
                                         {grandTotal.toLocaleString('id-ID')}
                                     </span>
                                 </div>
@@ -390,3 +444,4 @@ export function BillItems({
         </>
     );
 }
+

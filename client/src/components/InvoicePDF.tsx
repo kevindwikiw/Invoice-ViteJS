@@ -57,6 +57,11 @@ const COLORS = {
 // Types (dibikin lebih rapih)
 // ======================
 type BundleSrc = { desc: string; details: string };
+type RawRecord = Record<string, unknown>;
+
+const asRecord = (value: unknown): RawRecord => (
+    typeof value === 'object' && value !== null ? value as RawRecord : {}
+);
 
 type InvoiceItem = {
     name?: string;
@@ -102,6 +107,7 @@ type InvoiceData = {
     footerIG?: unknown;
     footerPhone?: unknown;
     waTemplate?: unknown;
+    notes?: unknown;
 };
 
 type Invoice = {
@@ -145,6 +151,35 @@ const splitLinesSafe = (v: unknown): string[] => {
         .split("\n")
         .map((x) => x.trim())
         .filter(Boolean);
+};
+
+const formatHoursWithDuration = (hoursStr: string): string => {
+    if (!hoursStr) return "";
+    const parts = hoursStr.split("-").map((p) => p.trim());
+    if (parts.length !== 2) return hoursStr;
+
+    const parseTime = (t: string) => {
+        // Handle both 15.00 and 15:00
+        const [h, m] = t.replace(".", ":").split(":").map(Number);
+        return isNaN(h) || isNaN(m) ? null : h * 60 + m;
+    };
+
+    const start = parseTime(parts[0]);
+    const end = parseTime(parts[1]);
+
+    if (start === null || end === null) return hoursStr;
+
+    let diff = end - start;
+    if (diff < 0) diff += 24 * 60; // Overnight
+
+    const h = Math.floor(diff / 60);
+    const m = diff % 60;
+
+    let duration = "";
+    if (h > 0) duration += `${h} Hour${h > 1 ? "s" : ""}`;
+    if (m > 0) duration += (duration ? " " : "") + `${m} Min${m > 1 ? "s" : ""}`;
+
+    return duration ? `${hoursStr} (${duration})` : hoursStr;
 };
 
 const parseInvoiceData = (raw: unknown): InvoiceData => {
@@ -226,19 +261,23 @@ const formatDateSafe = (dateLike: unknown, timeZone = DEFAULT_TIMEZONE): string 
 const normalizeItems = (data: InvoiceData): InvoiceItem[] => {
     if (!Array.isArray(data.items)) return [];
 
-    return data.items.map((raw: any) => {
-        const isBundle = Boolean(raw?.isBundle || raw?._bundle);
+    return data.items.map((rawValue) => {
+        const raw = asRecord(rawValue);
+        const isBundle = Boolean(raw.isBundle || raw._bundle);
 
-        const bundleSrcRaw = Array.isArray(raw?._bundleSrc)
+        const bundleSrcRaw = Array.isArray(raw._bundleSrc)
             ? raw._bundleSrc
-            : Array.isArray(raw?._bundle_src)
+            : Array.isArray(raw._bundle_src)
                 ? raw._bundle_src
                 : [];
 
-        const bundleSrc: BundleSrc[] = (bundleSrcRaw ?? []).map((b: any) => ({
-            desc: s(b?.desc ?? b?.Description, ""),
-            details: s(b?.details ?? b?.Details, ""),
-        }));
+        const bundleSrc: BundleSrc[] = (bundleSrcRaw ?? []).map((bundleValue) => {
+            const bundle = asRecord(bundleValue);
+            return {
+                desc: s(bundle.desc ?? bundle.Description, ""),
+                details: s(bundle.details ?? bundle.Details, ""),
+            };
+        });
 
         return {
             name: s(raw?.name ?? raw?.Name, ""),
@@ -368,7 +407,7 @@ const styles = StyleSheet.create({
     // Metadata (NEW GRID, SEJAJAR, RAPET KE HEADER)
     // ======================
     metaContainer: {
-        marginTop: TOP_BAR_H + mm(12),
+        marginTop: TOP_BAR_H + mm(4),
         flexDirection: "row",
         alignItems: "flex-start",
         width: CONTENT_WIDTH,
@@ -506,7 +545,7 @@ const styles = StyleSheet.create({
     textMed: { fontSize: 10 },
     textItalic: { fontFamily: "Helvetica-Oblique" },
 
-    infoBlock: { marginBottom: mm(8) },
+    infoBlock: { marginBottom: mm(4) },
     infoHeader: {
         fontSize: 9,
         fontFamily: "Helvetica-Bold",
@@ -541,9 +580,6 @@ const styles = StyleSheet.create({
     footerText: { fontSize: 6, lineHeight: 1, color: COLORS.WHITE },
 });
 
-// ======================
-// Subcomponents
-// ======================
 // ======================
 // Subcomponents
 // ======================
@@ -660,7 +696,8 @@ export const InvoicePDF = ({ invoice, proofs = [] }: { invoice: Invoice; proofs?
         const weddingDate = (data.weddingDate ?? invoice?.date ?? "") as unknown;
         const dateStr = formatDateSafe(weddingDate, tz);
         const venue = s(data.venue, "");
-        const hours = s(data.hours, ""); // Extract Hours
+        const hours = s(data.hours, ""); 
+        const notes = s(data.notes, ""); 
 
         const defaultTerms =
             "Booking fee is non-refundable.\nFull payment is required before event.\nEdit process takes 2-4 weeks.";
@@ -677,18 +714,14 @@ export const InvoicePDF = ({ invoice, proofs = [] }: { invoice: Invoice; proofs?
         const footerPhone = s(data.footerPhone, "0813-2333-1506");
 
         const hasCashback = cashback > 0;
-        const hasEventDetails = Boolean(dateStr || venue);
+        const hasEventDetails = Boolean(dateStr || venue || hours);
 
         return (
             <Document>
                 <Page size="A4" style={styles.page}>
                     <Header />
 
-                    {/* Metadata */}
-                    {/* Metadata: Matches User Reference */}
-                    {/* Metadata: Clean Split Design */}
-                    {/* Metadata: Right Cluster Design */}
-                    <View style={[styles.metaContainer, { justifyContent: 'flex-end', alignItems: 'flex-start' }]}>
+                    <View style={[styles.metaContainer, { marginTop: TOP_BAR_H + mm(4), justifyContent: 'flex-end', alignItems: 'flex-start' }]}>
                         {/* INVOICE TO (Right Aligned Cluster) */}
                         <View style={{ marginRight: 20, alignItems: 'flex-end' }}>
                             <Text style={{ fontFamily: 'Helvetica-Bold', fontSize: 8, color: COLORS.DARK_GRAY, textTransform: 'uppercase', marginBottom: 2, textAlign: 'right' }}>
@@ -714,16 +747,14 @@ export const InvoicePDF = ({ invoice, proofs = [] }: { invoice: Invoice; proofs?
                                     {invoiceNo}
                                 </Text>
                             </View>
-                            <View style={{ flexDirection: 'row' }}>
+                            <View style={{ flexDirection: 'row', marginBottom: 2 }}>
                                 <Text style={{ fontSize: 9, fontFamily: 'Helvetica', color: COLORS.DARK_GRAY, textAlign: 'right', marginRight: 4 }}>
-                                    Date:
+                                    Created:
                                 </Text>
                                 <Text style={{ fontSize: 9, fontFamily: 'Helvetica', color: COLORS.BLACK, textAlign: 'right' }}>
                                     {dateStr}
                                 </Text>
                             </View>
-                            {/* Venue / Hours (Optional) */}
-
                         </View>
                     </View>
 
@@ -833,7 +864,7 @@ export const InvoicePDF = ({ invoice, proofs = [] }: { invoice: Invoice; proofs?
                     </View>
 
                     {/* Post-table */}
-                    <View style={styles.postTable}>
+                    <View style={styles.postTable} wrap={false}>
                         <View style={styles.postLeft}>
                             {hasEventDetails ? (
                                 <View style={styles.infoBlock}>
@@ -852,6 +883,14 @@ export const InvoicePDF = ({ invoice, proofs = [] }: { invoice: Invoice; proofs?
                                             <Text style={styles.infoLabel}>Venue</Text>
                                             <Text style={{ width: 10, textAlign: "center", fontSize: 8 }}>:</Text>
                                             <Text style={[styles.infoVal, { flex: 1 }]}>{venue}</Text>
+                                        </View>
+                                    ) : null}
+
+                                    {hours ? (
+                                        <View style={styles.infoRow}>
+                                            <Text style={styles.infoLabel}>Time</Text>
+                                            <Text style={{ width: 10, textAlign: "center", fontSize: 8 }}>:</Text>
+                                            <Text style={styles.infoVal}>{formatHoursWithDuration(hours)}</Text>
                                         </View>
                                     ) : null}
                                 </View>
@@ -879,17 +918,9 @@ export const InvoicePDF = ({ invoice, proofs = [] }: { invoice: Invoice; proofs?
                                 </View>
                             </View>
 
-                            {termsLines.length ? (
-                                <View style={styles.infoBlock}>
-                                    <Text style={styles.infoHeader}>TERMS & CONDITIONS:</Text>
-                                    {termsLines.map((l, i) => (
-                                        <View key={i} style={{ flexDirection: "row", marginBottom: 2 }}>
-                                            <Text style={{ width: 15, fontSize: 8 }}>{String(i + 1)}.</Text>
-                                            <Text style={{ flex: 1, fontSize: 8, color: COLORS.DARK_GRAY }}>{l}</Text>
-                                        </View>
-                                    ))}
-                                </View>
-                            ) : null}
+                            {/* NOTES moved to right column below pricing */}
+
+                            {/* TERMS moved to parallel row below */}
                         </View>
 
                         <View style={styles.postRight}>
@@ -951,9 +982,38 @@ export const InvoicePDF = ({ invoice, proofs = [] }: { invoice: Invoice; proofs?
                                 </Text>
                             </View>
 
+                            {/* NOTES moved to parallel row below */}
+
                             {/* Closed the postRight view */}
                         </View>
                         {/* Closed the postTable view */}
+                    </View>
+
+                    {/* PARALLEL ROW: TERMS (Left) & NOTES (Right) */}
+                    <View style={{ flexDirection: "row", marginTop: mm(4) }} wrap={false}>
+                        <View style={{ width: LEFT_INFO_W, paddingRight: mm(6) }}>
+                            {termsLines.length ? (
+                                <View style={styles.infoBlock}>
+                                    <Text style={styles.infoHeader}>TERMS & CONDITIONS:</Text>
+                                    {termsLines.map((l, i) => (
+                                        <View key={i} style={{ flexDirection: "row", marginBottom: 1 }}>
+                                            <Text style={{ width: 12, fontSize: 6.5 }}>{String(i + 1)}.</Text>
+                                            <Text style={{ flex: 1, fontSize: 6.5, color: COLORS.DARK_GRAY, maxLines: 1 }}>{l}</Text>
+                                        </View>
+                                    ))}
+                                </View>
+                            ) : null}
+                        </View>
+
+                        {/* RIGHT: Notes */}
+                        <View style={{ width: SUM_COL_WIDTHS }}>
+                            {notes ? (
+                                <View style={{ marginTop: 0 }}>
+                                    <Text style={[styles.infoHeader, { fontSize: 8, marginBottom: 2 }]}>NOTES:</Text>
+                                    <Text style={{ fontSize: 7.5, color: COLORS.DARK_GRAY, lineHeight: 1.2 }}>{notes}</Text>
+                                </View>
+                            ) : null}
+                        </View>
                     </View>
 
                     <Footer
@@ -965,29 +1025,36 @@ export const InvoicePDF = ({ invoice, proofs = [] }: { invoice: Invoice; proofs?
                 </Page>
 
                 {/* Proof Pages */}
-                {proofs && proofs.length > 0 && proofs.map((proof, idx) => (
-                    <Page key={`proof-${idx}`} size="A4" style={styles.page}>
-                        <Header title={`PAYMENT PROOF ${idx + 1}`} />
+                {proofs && proofs.length > 0 && proofs.map((proof, idx) => {
+                    // Protected proof files are resolved to data/blob URLs by
+                    // the caller before PDF rendering. Never request an
+                    // anonymous upload URL from inside react-pdf.
+                    const imageSrc = proof;
 
-                        <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', marginTop: 40, marginBottom: 20 }}>
-                            <Image
-                                src={`${window.location.origin}/uploads/proofs/${proof}`}
-                                style={{
-                                    width: '90%',
-                                    height: '80%',
-                                    objectFit: 'contain'
-                                }}
+                    return (
+                        <Page key={`proof-${idx}`} size="A4" style={styles.page}>
+                            <Header title={`PAYMENT PROOF ${idx + 1}`} />
+
+                            <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', marginTop: mm(10), marginBottom: mm(10) }}>
+                                <Image
+                                    src={imageSrc}
+                                    style={{
+                                        width: '85%',
+                                        height: '75%',
+                                        objectFit: 'contain'
+                                    }}
+                                />
+                            </View>
+
+                            <Footer
+                                address={footerAddress}
+                                email={footerEmail}
+                                ig={footerIG}
+                                phone={footerPhone}
                             />
-                        </View>
-
-                        <Footer
-                            address={footerAddress}
-                            email={footerEmail}
-                            ig={footerIG}
-                            phone={footerPhone}
-                        />
-                    </Page>
-                ))}
+                        </Page>
+                    );
+                })}
             </Document>
         );
     } catch (e) {

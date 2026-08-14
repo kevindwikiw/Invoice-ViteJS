@@ -1,4 +1,5 @@
-import React, { createContext, useContext, useState, useCallback } from 'react';
+/* eslint-disable react-refresh/only-export-components -- provider and hook are intentionally colocated. */
+import React, { createContext, useContext, useState, useCallback, useEffect, useRef } from 'react';
 import { X, CheckCircle, AlertCircle, Info } from 'lucide-react';
 import { clsx } from 'clsx';
 
@@ -27,19 +28,35 @@ export const useToast = () => {
 
 export const ToastProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
     const [toasts, setToasts] = useState<Toast[]>([]);
-
-    const addToast = useCallback((message: string, type: ToastType = 'info') => {
-        const id = Math.random().toString(36).substr(2, 9);
-        setToasts((prev) => [...prev, { id, message, type }]);
-
-        // Auto remove after 3 seconds
-        setTimeout(() => {
-            removeToast(id);
-        }, 3000);
-    }, []);
+    const timersRef = useRef(new Map<string, number>());
 
     const removeToast = useCallback((id: string) => {
+        const timer = timersRef.current.get(id);
+        if (timer !== undefined) {
+            window.clearTimeout(timer);
+            timersRef.current.delete(id);
+        }
         setToasts((prev) => prev.filter((toast) => toast.id !== id));
+    }, []);
+
+    const addToast = useCallback((message: string, type: ToastType = 'info') => {
+        const id = typeof crypto.randomUUID === 'function'
+            ? crypto.randomUUID()
+            : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+        setToasts((prev) => [...prev, { id, message, type }]);
+
+        const timer = window.setTimeout(() => {
+            removeToast(id);
+        }, 3000);
+        timersRef.current.set(id, timer);
+    }, [removeToast]);
+
+    useEffect(() => {
+        const timers = timersRef.current;
+        return () => {
+            timers.forEach((timer) => window.clearTimeout(timer));
+            timers.clear();
+        };
     }, []);
 
     return (

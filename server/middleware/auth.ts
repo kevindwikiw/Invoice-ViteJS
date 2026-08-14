@@ -9,14 +9,24 @@ interface JWTPayload {
     exp: number;
 }
 
-export const authMiddleware = async (c: Context, next: Next) => {
+type AuthEnv = {
+    Variables: {
+        user: JWTPayload;
+    };
+};
+
+export const authMiddleware = async (c: Context<AuthEnv>, next: Next) => {
     const authHeader = c.req.header("Authorization");
 
     if (!authHeader || !authHeader.startsWith("Bearer ")) {
         return c.json({ error: "No token provided" }, 401);
     }
 
-    const token = authHeader.split(" ")[1];
+    const token = authHeader.slice("Bearer ".length).trim();
+
+    if (!token) {
+        return c.json({ error: "No token provided" }, 401);
+    }
 
     try {
         const secret = process.env.JWT_SECRET || "fallback-secret-key";
@@ -48,8 +58,8 @@ export const authMiddleware = async (c: Context, next: Next) => {
 
 // Role-based middleware factory
 export const requireRole = (...roles: string[]) => {
-    return async (c: Context, next: Next) => {
-        const user = c.get("user") as JWTPayload | undefined;
+    return async (c: Context<AuthEnv>, next: Next) => {
+        const user = c.get("user");
 
         if (!user) {
             return c.json({ error: "Not authenticated" }, 401);

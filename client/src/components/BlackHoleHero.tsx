@@ -1,9 +1,11 @@
-import { useEffect, useRef } from "react"
+import { memo, useEffect, useRef } from "react"
 import clsx from "clsx"
 
 type BlackHoleHeroProps = {
     className?: string
+    contentClassName?: string
     parallax?: number
+    style?: React.CSSProperties
 }
 
 function generateStars(count: number) {
@@ -21,8 +23,9 @@ function generateStars(count: number) {
 }
 
 const STARS = generateStars(80)
+const PARTICLE_IDS = Array.from({ length: 12 }, (_, index) => index + 1)
 
-export default function BlackHoleHero({ className, parallax = 0.6 }: BlackHoleHeroProps) {
+function BlackHoleHero({ className, contentClassName, parallax = 0.6, style }: BlackHoleHeroProps) {
     const wrapRef = useRef<HTMLDivElement>(null)
     const contentRef = useRef<HTMLDivElement>(null)
 
@@ -30,30 +33,119 @@ export default function BlackHoleHero({ className, parallax = 0.6 }: BlackHoleHe
         const el = wrapRef.current
         const content = contentRef.current
         if (!el || !content) return
+        const contentElement: HTMLDivElement = content
+
+        const finePointer = window.matchMedia('(pointer: fine)')
+        if (!finePointer.matches) return
 
         let raf = 0, mx = 0, my = 0, tx = 0, ty = 0
+        let isActive = false
+        let bounds = el.getBoundingClientRect()
 
-        const onMove = (e: PointerEvent) => {
-            const r = el.getBoundingClientRect()
-            mx = ((e.clientX - r.left) / r.width - 0.5) * 2
-            my = ((e.clientY - r.top) / r.height - 0.5) * 2
+        const startLoop = () => {
+            if (!isActive) {
+                isActive = true
+                raf = requestAnimationFrame(loop)
+            }
         }
 
-        const loop = () => {
+        const updateBounds = () => {
+            bounds = el.getBoundingClientRect()
+        }
+
+        const onMove = (e: PointerEvent) => {
+            mx = ((e.clientX - bounds.left) / bounds.width - 0.5) * 2
+            my = ((e.clientY - bounds.top) / bounds.height - 0.5) * 2
+            startLoop()
+        }
+
+        const onLeave = () => {
+            mx = 0; my = 0
+            startLoop()
+        }
+
+        function loop() {
             tx += (mx - tx) * 0.05
             ty += (my - ty) * 0.05
-            const s = 15 * parallax
-            content.style.transform = `translate(${tx * s}px, ${ty * s * 0.5}px) rotateZ(${tx * 3}deg) rotateX(${ty * -2}deg)`
+
+            const settled = Math.abs(mx - tx) < 0.001 && Math.abs(my - ty) < 0.001
+            if (settled) {
+                tx = mx
+                ty = my
+            }
+
+            if (tx === 0 && ty === 0) {
+                contentElement.style.transform = "none"
+            } else {
+                const s = 15 * parallax
+                contentElement.style.transform = `translate3d(${tx * s}px, ${ty * s * 0.5}px, 0) rotateZ(${tx * 3}deg) rotateX(${ty * -2}deg)`
+            }
+
+            if (settled) {
+                isActive = false
+                raf = 0
+                return
+            }
+
             raf = requestAnimationFrame(loop)
         }
 
+        const onVisibilityChange = () => {
+            if (!document.hidden) return
+            cancelAnimationFrame(raf)
+            raf = 0
+            isActive = false
+            mx = 0
+            my = 0
+            tx = 0
+            ty = 0
+            contentElement.style.transform = "none"
+        }
+
+        const resizeObserver = new ResizeObserver(updateBounds)
+        resizeObserver.observe(el)
+        el.addEventListener("pointerenter", updateBounds, { passive: true })
         el.addEventListener("pointermove", onMove, { passive: true })
-        raf = requestAnimationFrame(loop)
-        return () => { el.removeEventListener("pointermove", onMove); cancelAnimationFrame(raf) }
+        el.addEventListener("pointerleave", onLeave, { passive: true })
+        document.addEventListener("visibilitychange", onVisibilityChange)
+
+        return () => {
+            resizeObserver.disconnect()
+            el.removeEventListener("pointerenter", updateBounds)
+            el.removeEventListener("pointermove", onMove)
+            el.removeEventListener("pointerleave", onLeave)
+            document.removeEventListener("visibilitychange", onVisibilityChange)
+            cancelAnimationFrame(raf)
+        }
     }, [parallax])
 
+    useEffect(() => {
+        const el = wrapRef.current
+        if (!el) return
+
+        let isVisible = true
+
+        const syncPlayback = () => {
+            el.classList.toggle("blackhole-paused", document.hidden || !isVisible)
+        }
+
+        const observer = new IntersectionObserver(([entry]) => {
+            isVisible = entry.isIntersecting
+            syncPlayback()
+        }, { rootMargin: "80px" })
+
+        observer.observe(el)
+        document.addEventListener("visibilitychange", syncPlayback)
+        syncPlayback()
+
+        return () => {
+            observer.disconnect()
+            document.removeEventListener("visibilitychange", syncPlayback)
+        }
+    }, [])
+
     return (
-        <div ref={wrapRef} className={clsx("blackhole-space", className)}>
+        <div ref={wrapRef} className={clsx("blackhole-space", className)} style={style}>
             <div className="stars-container">
                 {STARS.map((star, i) => (
                     <div key={i} className="star" style={{
@@ -64,7 +156,7 @@ export default function BlackHoleHero({ className, parallax = 0.6 }: BlackHoleHe
                 ))}
             </div>
 
-            <div ref={contentRef} className="blackhole-content">
+            <div ref={contentRef} className={clsx("blackhole-content", contentClassName)}>
                 <div className="gargantua">
                     <div className="orbit-lines">
                         <div className="orbit orbit-1" />
@@ -77,23 +169,59 @@ export default function BlackHoleHero({ className, parallax = 0.6 }: BlackHoleHe
                     <div className="accretion-disk" />
                     <div className="top-photon-ring" />
                     <div className="particles">
-                        {[...Array(12)].map((_, i) => <div key={i} className={`particle particle-${i + 1}`} />)}
+                        {PARTICLE_IDS.map(id => <div key={id} className={`particle particle-${id}`} />)}
                     </div>
                 </div>
             </div>
 
+
             <style>{`
                 .blackhole-space {
+                    --white: #fffff2;
+                    --yellow: #fffcb7;
+                    --yellow-rgb: 255, 252, 183;
+                    --white-bright: #fff;
+                    --yellow-bright: #ffffdc;
+                    --black: #000;
+                    --star-color: #fff;
                     position: relative; width: 100%; height: 100%;
                     background: radial-gradient(ellipse at 50% 50%, #0a0606 0%, #030408 50%, #000 100%);
                     overflow: hidden; perspective: 1000px;
+                    transition: background 0.5s ease;
+                    contain: layout paint style;
+                    isolation: isolate;
                 }
+                .blackhole-space.blackhole-paused,
+                .blackhole-space.blackhole-paused * {
+                    animation-play-state: paused !important;
+                }
+                .blackhole-interaction-shell:focus-within .blackhole-space .orbit,
+                .blackhole-interaction-shell:focus-within .blackhole-space .bot-photon-ring,
+                .blackhole-interaction-shell:focus-within .blackhole-space,
+                .blackhole-interaction-shell:focus-within .blackhole-space * {
+                    animation-play-state: paused !important;
+                }
+
+                /* ---- LIGHT MODE OVERRIDES ---- */
+                .light .blackhole-space {
+                    --white: #010101;
+                    --yellow: #070707;
+                    --yellow-rgb: 7, 7, 7;
+                    --white-bright: #010101;
+                    --yellow-bright: #080808;
+                    --black: #fff;
+                    --star-color: #000;
+                    background: var(--bg-deep);
+                }
+                /* ---- END LIGHT MODE OVERRIDES ---- */
+
                 .stars-container { position: absolute; inset: 0; pointer-events: none; }
                 .star {
-                    position: absolute; background: #fff; border-radius: 50%;
+                    position: absolute; background: var(--star-color); border-radius: 50%;
                     animation: twinkle 3s ease-in-out infinite;
                 }
                 @keyframes twinkle {
+
                     0%, 100% { opacity: 0.3; transform: scale(1); }
                     50% { opacity: 1; transform: scale(1.2); }
                 }
@@ -101,16 +229,15 @@ export default function BlackHoleHero({ className, parallax = 0.6 }: BlackHoleHe
                     position: absolute; inset: 0; display: flex;
                     justify-content: center; align-items: center;
                     transition: transform 0.1s ease-out;
+                    will-change: transform;
                 }
 
                 /* RESPONSIVE GARGANTUA */
                 .gargantua {
-                    --white: #fff; --yellow: #f1edb6; --black: #000;
                     /* Mobile-first: smaller on phones */
                     width: 70vmin; height: 50vmin;
                     display: flex; justify-content: center; align-items: center;
                     position: relative; transform: rotate(-5deg) scale(0.7);
-                    filter: sepia(0.4) saturate(1.2);
                     animation: float 8s ease-in-out infinite;
                 }
                 
@@ -140,7 +267,7 @@ export default function BlackHoleHero({ className, parallax = 0.6 }: BlackHoleHe
                 .orbit-lines { position: absolute; width: 100%; height: 100%; animation: spin 60s linear infinite; }
                 @keyframes spin { from { transform: rotateZ(0deg); } to { transform: rotateZ(360deg); } }
                 .orbit {
-                    position: absolute; border: 1px solid rgba(241,237,182,0.15);
+                    position: absolute; border: 1px solid rgba(var(--yellow-rgb), 0.15);
                     border-radius: 50%; left: 50%; top: 50%; transform: translate(-50%,-50%);
                 }
                 .orbit-1 { width: 55vmin; height: 8vmin; animation: pulse 4s ease-in-out infinite; }
@@ -154,8 +281,8 @@ export default function BlackHoleHero({ className, parallax = 0.6 }: BlackHoleHe
                 }
                 
                 @keyframes pulse {
-                    0%, 100% { opacity: 0.1; border-color: rgba(241,237,182,0.1); }
-                    50% { opacity: 0.3; border-color: rgba(241,237,182,0.3); }
+                    0%, 100% { opacity: 0.1; border-color: rgba(var(--yellow-rgb), 0.1); }
+                    50% { opacity: 0.3; border-color: rgba(var(--yellow-rgb), 0.3); }
                 }
 
                 /* Photon rings - responsive */
@@ -186,7 +313,7 @@ export default function BlackHoleHero({ className, parallax = 0.6 }: BlackHoleHe
                 .image-disk {
                     width: 17vmin; height: 17vmin; border-radius: 100%; top: 15.5vmin;
                     border: 1.5vmin solid var(--white);
-                    box-shadow: 0 0 12px 2px var(--yellow), 0 0 4px 1.5px var(--yellow) inset, 0 0 20px 8px rgba(241,237,182,0.3);
+                    box-shadow: 0 0 12px 2px var(--yellow), 0 0 4px 1.5px var(--yellow) inset, 0 0 20px 8px rgba(var(--yellow-rgb), 0.3);
                     animation: glow 4s ease-in-out infinite;
                 }
                 
@@ -194,13 +321,13 @@ export default function BlackHoleHero({ className, parallax = 0.6 }: BlackHoleHe
                     .image-disk {
                         width: 22vmin; height: 22vmin; top: 19vmin;
                         border-width: 2vmin;
-                        box-shadow: 0 0 15px 3px var(--yellow), 0 0 5px 2px var(--yellow) inset, 0 0 30px 10px rgba(241,237,182,0.3);
+                        box-shadow: 0 0 15px 3px var(--yellow), 0 0 5px 2px var(--yellow) inset, 0 0 30px 10px rgba(var(--yellow-rgb), 0.3);
                     }
                 }
                 
                 @keyframes glow {
-                    0%, 100% { box-shadow: 0 0 15px 3px var(--yellow), 0 0 5px 2px var(--yellow) inset, 0 0 30px 10px rgba(241,237,182,0.3); }
-                    50% { box-shadow: 0 0 25px 8px var(--yellow), 0 0 10px 4px var(--yellow) inset, 0 0 50px 20px rgba(241,237,182,0.5); }
+                    0%, 100% { box-shadow: 0 0 15px 3px var(--yellow), 0 0 5px 2px var(--yellow) inset, 0 0 30px 10px rgba(var(--yellow-rgb), 0.3); }
+                    50% { box-shadow: 0 0 25px 8px var(--yellow), 0 0 10px 4px var(--yellow) inset, 0 0 50px 20px rgba(var(--yellow-rgb), 0.5); }
                 }
                 
                 .image-disk:before, .image-disk:after {
@@ -208,7 +335,7 @@ export default function BlackHoleHero({ className, parallax = 0.6 }: BlackHoleHe
                     left: -4vmin; top: 3vmin;
                     width: 2.8vmin; height: 3.5vmin;
                     border-radius: 0 0 28px 8px; transform: rotate(23deg);
-                    box-shadow: 12px 1.5px 0 0.5px white;
+                    box-shadow: 12px 1.5px 0 0.5px var(--white);
                 }
                 .image-disk:after { left: 15.5vmin; transform: rotateY(180deg) rotateZ(23deg); }
                 
@@ -217,7 +344,7 @@ export default function BlackHoleHero({ className, parallax = 0.6 }: BlackHoleHe
                         left: -5.365vmin; top: 3.85vmin;
                         width: 3.5vmin; height: 4.5vmin;
                         border-radius: 0 0 34px 10px;
-                        box-shadow: 16px 2px 0 1px white;
+                        box-shadow: 16px 2px 0 1px var(--white);
                     }
                     .image-disk:after { left: 19.885vmin; }
                 }
@@ -317,8 +444,8 @@ export default function BlackHoleHero({ className, parallax = 0.6 }: BlackHoleHe
                 }
                 
                 @keyframes accretion {
-                    0%, 100% { box-shadow: 0 0 3px 0 var(--white), 0 0 15px 3px var(--yellow), 0 15px 10px 10px var(--black); filter: brightness(1); }
-                    50% { box-shadow: 0 0 8px 2px var(--white), 0 0 25px 8px var(--yellow), 0 15px 10px 10px var(--black); filter: brightness(1.2); }
+                    0%, 100% { box-shadow: 0 0 3px 0 var(--white), 0 0 15px 3px var(--yellow), 0 15px 10px 10px var(--black); }
+                    50% { box-shadow: 0 0 8px 2px var(--white-bright), 0 0 25px 8px var(--yellow-bright), 0 15px 10px 10px var(--black); }
                 }
 
                 /* Top photon ring - responsive */
@@ -340,7 +467,7 @@ export default function BlackHoleHero({ className, parallax = 0.6 }: BlackHoleHe
                 
                 .top-photon-ring:before {
                     content: ""; width: 14vmin; height: 2.5vmin;
-                    background: black; left: -0.4vmin; border-radius: 100%;
+                    background: var(--black); left: -0.4vmin; border-radius: 100%;
                     bottom: -6vmin; box-shadow: 0 0 1px 1px var(--black);
                     position: relative; display: block;
                 }
@@ -384,12 +511,14 @@ export default function BlackHoleHero({ className, parallax = 0.6 }: BlackHoleHe
                 }
                 
                 @keyframes pFloat {
-                    0%, 100% { transform: translate(0,0) scale(1); opacity: 0.5; }
-                    25% { transform: translate(20px,-30px) scale(1.5); opacity: 1; }
-                    50% { transform: translate(-10px,-50px) scale(0.8); opacity: 0.7; }
-                    75% { transform: translate(-30px,-20px) scale(1.2); opacity: 0.9; }
+                    0%, 100% { transform: translate3d(0,0,0) scale(1); opacity: 0.5; }
+                    25% { transform: translate3d(20px,-30px,0) scale(1.5); opacity: 1; }
+                    50% { transform: translate3d(-10px,-50px,0) scale(0.8); opacity: 0.7; }
+                    75% { transform: translate3d(-30px,-20px,0) scale(1.2); opacity: 0.9; }
                 }
             `}</style>
         </div>
     )
 }
+
+export default memo(BlackHoleHero)
