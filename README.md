@@ -13,15 +13,14 @@ Copy-Item server/.env.example server/.env
 Run the API and frontend in separate terminals:
 
 ```powershell
-# terminal 1
-cd server
+# Install both workspaces from the repository root
 bun install
-bun run index.ts
+
+# terminal 1
+bun run dev:server
 
 # terminal 2
-cd client
-bun install
-bun run dev
+bun run dev:client
 ```
 
 Open `http://localhost:5174`.
@@ -102,9 +101,8 @@ routes; the Postgres schema is the checked-in one-time migration above.
 ## Production frontend
 
 ```powershell
-cd client
 bun run build
-bun run preview
+bun --cwd client preview
 ```
 
 Deploy `client/dist` to a static host with SPA fallback to `index.html`. The host
@@ -114,7 +112,6 @@ origin. Uploaded proofs are private and must remain behind that API proxy.
 ## Checks
 
 ```powershell
-cd client
 bun run typecheck
 bun run lint
 ```
