@@ -80,8 +80,9 @@ export const ProofsSidebar = React.memo(({
                 return { isPreview: true };
             }
 
-            const res = await fetchWithAuth(`/invoices/${invoice?.id || invoiceId}/proofs/${filename}`, {
-                method: 'DELETE'
+            const res = await fetchWithAuth(`/invoices/${invoice?.id || invoiceId}/proofs`, {
+                method: 'DELETE',
+                body: JSON.stringify({ proof: filename })
             });
             if (!res.ok) throw new Error('Failed to delete proof');
             return { isPreview: false };

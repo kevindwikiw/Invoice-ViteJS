@@ -1,7 +1,6 @@
 import { Hono } from "hono";
 import { cors } from "hono/cors";
-import { mkdir } from "node:fs/promises";
-import { basename, join, resolve } from "node:path";
+import { join, resolve } from "node:path";
 import authRoutes from "./routes/auth";
 import usersRoutes from "./routes/users";
 import packagesRoutes from "./routes/packages";
@@ -26,9 +25,6 @@ type AppEnv = {
         user: AuthUser;
     };
 };
-
-const PROOF_DIR = process.env.UPLOAD_DIR || "uploads/proofs";
-await mkdir(PROOF_DIR, { recursive: true });
 
 if (!process.env.JWT_SECRET || process.env.JWT_SECRET.length < 32) {
     console.error("FATAL: JWT_SECRET must be set and at least 32 characters long!");
@@ -101,22 +97,6 @@ app.use("/*", cors({
 
 app.get("/api/health", (c) => c.json({ ok: true, service: "invoice-api" }));
 app.get("/healthz", (c) => c.json({ ok: true }));
-
-// Proof files contain private payment evidence. They must never be served as
-// anonymous static assets; the client fetches them with its bearer token.
-app.use("/uploads/proofs/:filename", authMiddleware);
-
-app.get("/uploads/proofs/:filename", async (c) => {
-    const filename = c.req.param("filename");
-    if (filename !== basename(filename)) return c.text("Invalid filename", 400);
-
-    const file = Bun.file(join(PROOF_DIR, filename));
-    if (!(await file.exists())) return c.text("File not found", 404);
-
-    return c.body(file.stream(), 200, {
-        "Content-Type": file.type || "application/octet-stream",
-    });
-});
 
 app.post("/api/auth/login", loginRateLimiter);
 app.use("/api/auth/me", authMiddleware);

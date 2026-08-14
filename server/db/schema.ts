@@ -18,7 +18,7 @@ export const invoices = sqliteTable("invoices", {
     totalAmount: real("total_amount"),
     invoiceData: text("invoice_data"), // Stores JSON string of full payload
     pdfBlob: blob("pdf_blob", { mode: "buffer" }),
-    paymentProofs: text("payment_proofs"), // JSON array of filenames
+    paymentProofs: text("payment_proofs"), // JSON array of base64 data URLs
     isArchived: integer("is_archived").default(0),
     createdAt: text("created_at").default(sql`CURRENT_TIMESTAMP`),
 });

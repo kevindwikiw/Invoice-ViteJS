@@ -82,9 +82,10 @@ SQLite remains available for local development when no Postgres URL is set.
 `scripts/init-db.ts` is intentionally SQLite-only and refuses to run in
 Postgres mode, so production cannot silently create a second database.
 
-Proof files currently use the local `UPLOAD_DIR` adapter. Keep the Fly volume
-until proof storage is moved to a private Supabase Storage bucket; the database
-cutover itself does not migrate existing SQLite rows or files automatically.
+Payment proofs are stored as base64 data URLs in the Supabase
+`invoices.payment_proofs` column, matching the original Python adapter. No Fly
+volume is required. Uploads are limited to 5 MB per file; keep an eye on
+database size if many large proofs are retained.
 
 ### Database modes
 
@@ -106,8 +107,8 @@ bun --cwd client preview
 ```
 
 Deploy `client/dist` to a static host with SPA fallback to `index.html`. The host
-must reverse proxy `/api` and `/uploads` to the Hono server on the same public
-origin. Uploaded proofs are private and must remain behind that API proxy.
+must reverse proxy `/api` to the Hono server on the same public origin. Proof
+data is returned only from authenticated invoice API responses.
 
 ## Checks
 

@@ -24,10 +24,8 @@ COPY --from=build /app/client/dist ./client/dist
 
 ENV NODE_ENV=production
 ENV PORT=3000
-ENV UPLOAD_DIR=/data/uploads/proofs
 ENV STATIC_DIR=/app/client/dist
 
-RUN mkdir -p /data/uploads/proofs
 WORKDIR /app/server
 EXPOSE 3000
 CMD ["bun", "index.ts"]

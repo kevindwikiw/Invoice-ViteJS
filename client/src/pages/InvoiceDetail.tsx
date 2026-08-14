@@ -10,21 +10,6 @@ import { useToast } from '../context/ToastContext'
 import { useState, useMemo, useEffect } from 'react'
 import clsx from 'clsx'
 
-/**
- * Converts a Data URL (Base64) to a Blob object.
- */
-const dataURLtoBlob = (dataUrl: string): Blob => {
-    const arr = dataUrl.split(',');
-    const mime = arr[0].match(/:(.*?);/)?.[1];
-    const bstr = atob(arr[1]);
-    let n = bstr.length;
-    const u8arr = new Uint8Array(n);
-    while (n--) {
-        u8arr[n] = bstr.charCodeAt(n);
-    }
-    return new Blob([u8arr], { type: mime });
-};
-
 export const InvoiceDetail = () => {
     const { invoiceId } = useParams({ strict: false }) as { invoiceId: string }
     const navigate = useNavigate()
@@ -129,28 +114,6 @@ export const InvoiceDetail = () => {
         onSuccess: async (savedInvoice) => {
             const isEdit = previewInvoice?.isEdit;
             const newInvoiceId = String(savedInvoice.id);
-
-            // === Handle any Base64 proofs that need uploading ===
-            if (proofs.length > 0) {
-                const base64Proofs = proofs.filter(p => p.startsWith('data:'));
-                if (base64Proofs.length > 0) {
-                    addToast(`Uploading ${base64Proofs.length} new proof(s)...`, 'info');
-                    for (const b64 of base64Proofs) {
-                        try {
-                            const blob = dataURLtoBlob(b64);
-                            const formData = new FormData();
-                            formData.append('file', blob, `proof-${Date.now()}.png`);
-
-                            await fetchWithAuth(`/invoices/${newInvoiceId}/proofs`, {
-                                method: 'POST',
-                                body: formData
-                            });
-                        } catch (err) {
-                            console.error('Failed to upload proof from preview:', err);
-                        }
-                    }
-                }
-            }
 
             sessionStorage.removeItem('invoice_preview')
             sessionStorage.removeItem('invoice_preview_restore')

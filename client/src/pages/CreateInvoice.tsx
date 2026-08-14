@@ -647,7 +647,10 @@ export default function CreateInvoice() {
     const handleRemoveExistingProof = async (filename: string) => {
         if (isEditMode) {
             try {
-                const res = await fetchWithAuth(`/invoices/${editId}/proofs/${filename}`, { method: 'DELETE' });
+                const res = await fetchWithAuth(`/invoices/${editId}/proofs`, {
+                    method: 'DELETE',
+                    body: JSON.stringify({ proof: filename })
+                });
                 if (res.ok) {
                     setExistingProofUrls(prev => prev.filter(p => p !== filename));
                     addToast('Proof removed', 'success');

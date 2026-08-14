@@ -1,11 +1,10 @@
 import { Hono } from "hono";
-import { unlink } from "node:fs/promises";
-import { join } from "node:path";
+import { Buffer } from "node:buffer";
 import { all, insertReturningId, one, run } from "../db/runtime";
 import { hasFeaturePermission } from "../permissions";
 
 const invoicesRouter = new Hono();
-const PROOF_DIR = process.env.UPLOAD_DIR || "uploads/proofs";
+const MAX_PROOF_BYTES = 5 * 1024 * 1024;
 
 type AuthUser = { sub: number; email: string; name: string; role: string };
 type InvoiceActivityInput = {
@@ -31,6 +30,50 @@ async function logInvoiceActivity(input: InvoiceActivityInput) {
 }
 
 function invoicePermission(c: any) { return c.get("user") as AuthUser | undefined; }
+
+function parseProofs(value: unknown): string[] {
+    if (Array.isArray(value)) return value.filter((proof): proof is string => typeof proof === "string" && proof.length > 0);
+    if (typeof value !== "string" || !value) return [];
+    try {
+        const parsed = JSON.parse(value);
+        return Array.isArray(parsed) ? parsed.filter((proof): proof is string => typeof proof === "string" && proof.length > 0) : [];
+    } catch {
+        return [];
+    }
+}
+
+function legacyProofs(invoiceData: unknown): string[] {
+    if (typeof invoiceData !== "string" || !invoiceData) return [];
+    try {
+        const data = JSON.parse(invoiceData) as { meta?: { payment_proof?: unknown; paymentProof?: unknown } };
+        const value = data.meta?.payment_proof ?? data.meta?.paymentProof;
+        if (!Array.isArray(value)) return [];
+        return value.flatMap((proof) => {
+            if (typeof proof === "string") return proof;
+            if (!proof || typeof proof !== "object") return [];
+            const candidate = (proof as Record<string, unknown>).dataUrl
+                ?? (proof as Record<string, unknown>).data_url
+                ?? (proof as Record<string, unknown>).base64
+                ?? (proof as Record<string, unknown>).b64;
+            return typeof candidate === "string" && candidate.length > 0 ? [candidate] : [];
+        });
+    } catch {
+        return [];
+    }
+}
+
+function exposeProofs<T extends { paymentProofs?: unknown; invoiceData?: unknown }>(invoice: T): T {
+    const direct = parseProofs(invoice.paymentProofs);
+    const proofs = direct.length ? direct : legacyProofs(invoice.invoiceData);
+    return { ...invoice, paymentProofs: JSON.stringify(proofs) };
+}
+
+function proofDataUrl(file: File): Promise<string> {
+    return file.arrayBuffer().then((bytes) => {
+        const mimeType = file.type || "application/octet-stream";
+        return `data:${mimeType};base64,${Buffer.from(bytes).toString("base64")}`;
+    });
+}
 
 invoicesRouter.get("/activity", async (c) => {
     const user = invoicePermission(c);
@@ -106,7 +149,7 @@ invoicesRouter.get("/", async (c) => {
         const rows = search
             ? await all(`SELECT id, invoice_no as "invoiceNo", client_name as "clientName", date, total_amount as "totalAmount", invoice_data as "invoiceData", payment_proofs as "paymentProofs", is_archived as "isArchived", created_at as "createdAt" FROM invoices WHERE invoice_no LIKE ? OR client_name LIKE ? ORDER BY id DESC LIMIT ?`, [`%${search}%`, `%${search}%`, safeLimit])
             : await all(`SELECT id, invoice_no as "invoiceNo", client_name as "clientName", date, total_amount as "totalAmount", invoice_data as "invoiceData", payment_proofs as "paymentProofs", is_archived as "isArchived", created_at as "createdAt" FROM invoices ORDER BY id DESC LIMIT ?`, [safeLimit]);
-        return c.json(rows);
+        return c.json(rows.map((row) => exposeProofs(row as { paymentProofs?: unknown; invoiceData?: unknown })));
     } catch (e) { return c.json({ error: String(e) }, 500); }
 });
 
@@ -115,7 +158,7 @@ invoicesRouter.get("/:id", async (c) => {
     if (!user || !await hasFeaturePermission(user, "view_billing_history")) return c.json({ error: "Permission denied" }, 403);
     try {
         const invoice = await one(`SELECT id, invoice_no as "invoiceNo", client_name as "clientName", date, total_amount as "totalAmount", invoice_data as "invoiceData", payment_proofs as "paymentProofs", is_archived as "isArchived", created_at as "createdAt" FROM invoices WHERE id = ?`, [Number(c.req.param("id"))]);
-        return invoice ? c.json(invoice) : c.json({ error: "Not found" }, 404);
+        return invoice ? c.json(exposeProofs(invoice as { paymentProofs?: unknown; invoiceData?: unknown })) : c.json({ error: "Not found" }, 404);
     } catch (e) { return c.json({ error: String(e) }, 500); }
 });
 
@@ -141,8 +184,6 @@ invoicesRouter.post("/batch-delete", async (c) => {
         const normalized = ids.map((v: unknown) => Number(v)).filter((v: number) => Number.isInteger(v));
         if (!normalized.length) return c.json({ error: "No valid IDs provided" }, 400);
         const placeholders = normalized.map(() => "?").join(",");
-        const targets = await all<{ id: number; paymentProofs: string | null }>(`SELECT id, payment_proofs as "paymentProofs" FROM invoices WHERE id IN (${placeholders})`, normalized);
-        for (const inv of targets) await removeProofFiles(inv.paymentProofs);
         const result = await run(`DELETE FROM invoices WHERE id IN (${placeholders})`, normalized);
         for (const id of normalized) await logInvoiceActivity({ invoiceId: id, action: "BATCH_DELETED", actor: user, details: `Invoice batch-deleted (${normalized.length} total)`, ipAddress: getClientIp(c) });
         const remaining = await one<{ cnt: number }>("SELECT COUNT(*) as cnt FROM invoices");
@@ -151,23 +192,12 @@ invoicesRouter.post("/batch-delete", async (c) => {
     } catch (e) { return c.json({ error: String(e) }, 500); }
 });
 
-async function removeProofFiles(raw: string | null | undefined) {
-    if (!raw) return;
-    try {
-        const files = JSON.parse(raw);
-        if (Array.isArray(files)) for (const fileName of files) {
-            try { await unlink(join(PROOF_DIR, fileName)); } catch { /* ignore missing */ }
-        }
-    } catch { /* ignore malformed JSON */ }
-}
-
 invoicesRouter.delete("/:id", async (c) => {
     const user = invoicePermission(c);
     if (!user || (user.role !== "admin" && user.role !== "superadmin")) return c.json({ error: "Permission denied" }, 403);
     try {
         const id = Number(c.req.param("id"));
-        const inv = await one<{ invoiceNo: string | null; paymentProofs: string | null }>("SELECT invoice_no as \"invoiceNo\", payment_proofs as \"paymentProofs\" FROM invoices WHERE id = ?", [id]);
-        await removeProofFiles(inv?.paymentProofs);
+        const inv = await one<{ invoiceNo: string | null }>("SELECT invoice_no as \"invoiceNo\" FROM invoices WHERE id = ?", [id]);
         await run("DELETE FROM invoices WHERE id = ?", [id]);
         await logInvoiceActivity({ invoiceId: id, action: "DELETED", actor: user, details: `Invoice ${inv?.invoiceNo || id} deleted`, ipAddress: getClientIp(c) });
         const remaining = await one<{ cnt: number }>("SELECT COUNT(*) as cnt FROM invoices");
@@ -188,7 +218,12 @@ invoicesRouter.put("/:id", async (c) => {
         const id = Number(c.req.param("id"));
         if (!Number.isInteger(id)) return c.json({ error: "Invalid ID" }, 400);
         const body = await c.req.json();
-        await run("UPDATE invoices SET invoice_no = ?, client_name = ?, date = ?, total_amount = ?, invoice_data = ? WHERE id = ?", [body.invoiceNo, body.clientName, body.weddingDate || new Date().toISOString().split("T")[0], body.totalAmount, buildInvoiceData(body), id]);
+        const values = [body.invoiceNo, body.clientName, body.weddingDate || new Date().toISOString().split("T")[0], body.totalAmount, buildInvoiceData(body)];
+        if (body.payment_proofs === undefined) {
+            await run("UPDATE invoices SET invoice_no = ?, client_name = ?, date = ?, total_amount = ?, invoice_data = ? WHERE id = ?", [...values, id]);
+        } else {
+            await run("UPDATE invoices SET invoice_no = ?, client_name = ?, date = ?, total_amount = ?, invoice_data = ?, payment_proofs = ? WHERE id = ?", [...values, JSON.stringify(parseProofs(body.payment_proofs)), id]);
+        }
         await logInvoiceActivity({ invoiceId: id, action: "UPDATED", actor: user, details: `Updated invoice total: ${body.totalAmount}`, ipAddress: getClientIp(c) });
         return c.json({ id, invoiceNo: body.invoiceNo, clientName: body.clientName, totalAmount: body.totalAmount, status: "updated" });
     } catch (e) { return c.json({ error: String(e) }, 500); }
@@ -206,7 +241,7 @@ invoicesRouter.post("/", async (c) => {
             if (!invoiceNo) invoiceNo = `${seq.prefix}${String(next).padStart(seq.padding, "0")}_${String(body.clientName || "").replace(/\s+/g, "_")}`;
             await run("UPDATE sequences SET last_value = ? WHERE name = 'invoice'", [next]);
         } else if (!invoiceNo) return c.json({ error: "Invoice sequence configuration missing" }, 500);
-        const id = await insertReturningId(`INSERT INTO invoices (invoice_no, client_name, date, total_amount, invoice_data) VALUES (?, ?, ?, ?, ?)`, [invoiceNo, body.clientName, body.weddingDate || new Date().toISOString().split("T")[0], body.totalAmount, buildInvoiceData(body)]);
+        const id = await insertReturningId(`INSERT INTO invoices (invoice_no, client_name, date, total_amount, invoice_data, payment_proofs) VALUES (?, ?, ?, ?, ?, ?)`, [invoiceNo, body.clientName, body.weddingDate || new Date().toISOString().split("T")[0], body.totalAmount, buildInvoiceData(body), JSON.stringify(parseProofs(body.payment_proofs))]);
         await logInvoiceActivity({ invoiceId: id, action: "CREATED", actor: user, details: `Created invoice ${invoiceNo} for ${body.clientName}`, ipAddress: getClientIp(c) });
         return c.json({ id, invoiceNo, clientName: body.clientName, totalAmount: body.totalAmount, status: "created" });
     } catch (e) { console.error("Error creating invoice:", e); return c.json({ error: String(e) }, 500); }
@@ -222,25 +257,37 @@ invoicesRouter.post("/:id/proofs", async (c) => {
         let files = body.file;
         if (!files) return c.json({ error: "No files uploaded" }, 400);
         if (!Array.isArray(files)) files = [files];
-        const validFiles = (files as File[]).filter((file) => file instanceof File && file.size > 0);
+        const validFiles = (files as File[]).filter((file) => file instanceof File && file.size > 0 && file.size <= MAX_PROOF_BYTES);
         if (!validFiles.length) return c.json({ error: "No valid files uploaded" }, 400);
-        const names: string[] = [];
-        for (const file of validFiles) {
-            const fileName = `${Date.now()}_${Math.random().toString(36).substring(7)}_${file.name.replace(/\s+/g, "_")}`;
-            await Bun.write(join(PROOF_DIR, fileName), file);
-            names.push(fileName);
-        }
         const inv = await one<{ paymentProofs: string | null }>("SELECT payment_proofs as \"paymentProofs\" FROM invoices WHERE id = ?", [id]);
         if (!inv) return c.json({ error: "Invoice not found" }, 404);
-        let current: string[] = [];
-        try { current = inv.paymentProofs ? JSON.parse(inv.paymentProofs) : []; } catch { /* ignore */ }
-        const proofs = [...current, ...names];
+        const current = parseProofs(inv.paymentProofs);
+        const proofs = [...current, ...await Promise.all(validFiles.map(proofDataUrl))];
         await run("UPDATE invoices SET payment_proofs = ? WHERE id = ?", [JSON.stringify(proofs), id]);
-        await logInvoiceActivity({ invoiceId: id, action: "PROOF_UPLOADED", actor: user, details: `Uploaded ${names.length} proof file(s)`, ipAddress: getClientIp(c) });
+        await logInvoiceActivity({ invoiceId: id, action: "PROOF_UPLOADED", actor: user, details: `Uploaded ${validFiles.length} proof file(s) to database`, ipAddress: getClientIp(c) });
         return c.json({ status: "success", proofs });
     } catch (e) { return c.json({ error: String(e) }, 500); }
 });
 
+invoicesRouter.delete("/:id/proofs", async (c) => {
+    const user = invoicePermission(c);
+    if (!user || (user.role !== "admin" && user.role !== "superadmin")) return c.json({ error: "Permission denied" }, 403);
+    try {
+        const id = Number(c.req.param("id"));
+        const body = await c.req.json().catch(() => ({}));
+        const filename = typeof body.proof === "string" ? body.proof : "";
+        if (!filename) return c.json({ error: "Proof is required" }, 400);
+        const inv = await one<{ paymentProofs: string | null }>("SELECT payment_proofs as \"paymentProofs\" FROM invoices WHERE id = ?", [id]);
+        if (!inv) return c.json({ error: "Invoice not found" }, 404);
+        const current = parseProofs(inv.paymentProofs);
+        const proofs = current.filter((proof) => proof !== filename);
+        await run("UPDATE invoices SET payment_proofs = ? WHERE id = ?", [JSON.stringify(proofs), id]);
+        await logInvoiceActivity({ invoiceId: id, action: "PROOF_DELETED", actor: user, details: "Deleted proof from database", ipAddress: getClientIp(c) });
+        return c.json({ status: "success", proofs });
+    } catch (e) { return c.json({ error: String(e) }, 500); }
+});
+
+// Kept for clients from older builds that sent the proof in the URL.
 invoicesRouter.delete("/:id/proofs/:filename", async (c) => {
     const user = invoicePermission(c);
     if (!user || (user.role !== "admin" && user.role !== "superadmin")) return c.json({ error: "Permission denied" }, 403);
@@ -249,12 +296,9 @@ invoicesRouter.delete("/:id/proofs/:filename", async (c) => {
         const filename = c.req.param("filename");
         const inv = await one<{ paymentProofs: string | null }>("SELECT payment_proofs as \"paymentProofs\" FROM invoices WHERE id = ?", [id]);
         if (!inv) return c.json({ error: "Invoice not found" }, 404);
-        let current: string[] = [];
-        try { current = inv.paymentProofs ? JSON.parse(inv.paymentProofs) : []; } catch { /* ignore */ }
-        const proofs = current.filter((proof) => proof !== filename);
+        const proofs = parseProofs(inv.paymentProofs).filter((proof) => proof !== filename);
         await run("UPDATE invoices SET payment_proofs = ? WHERE id = ?", [JSON.stringify(proofs), id]);
-        try { await unlink(join(PROOF_DIR, filename)); } catch { /* ignore */ }
-        await logInvoiceActivity({ invoiceId: id, action: "PROOF_DELETED", actor: user, details: `Deleted proof file ${filename}`, ipAddress: getClientIp(c) });
+        await logInvoiceActivity({ invoiceId: id, action: "PROOF_DELETED", actor: user, details: "Deleted proof from database", ipAddress: getClientIp(c) });
         return c.json({ status: "success", proofs });
     } catch (e) { return c.json({ error: String(e) }, 500); }
 });
