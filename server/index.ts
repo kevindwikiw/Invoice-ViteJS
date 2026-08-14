@@ -178,6 +178,7 @@ console.log(`Server running on port ${port}`);
 console.log(`CORS allowed origins: ${allowedOrigins.join(", ")}`);
 
 export default {
+    hostname: "0.0.0.0",
     port,
     fetch: app.fetch,
 };
