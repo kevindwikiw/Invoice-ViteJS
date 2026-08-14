@@ -26,9 +26,9 @@ bun run dev
 
 Open `http://localhost:5174`.
 
-For a fresh database, set the three `SEED_*_PASSWORD` values in `server/.env`
-before running the database initializer. Credentials are intentionally not stored
-in source code or documentation.
+For a fresh local database, set the three `SEED_*_PASSWORD` values in
+`server/.env` before running `bun run scripts/init-db.ts` from `server/`.
+Credentials are intentionally not stored in source code or documentation.
 
 ## Fly.io deployment
 
@@ -42,15 +42,11 @@ unique Fly app name, then run:
 ```powershell
 fly auth login
 fly apps create invoice-web-v2
-fly volumes create invoice_data --region sin --size 1
 fly secrets set `
   JWT_SECRET="<at-least-32-random-characters>" `
-  SEED_SUPERADMIN_PASSWORD="<strong-password>" `
-  SEED_ADMIN_PASSWORD="<strong-password>" `
-  SEED_EMPLOYEE_PASSWORD="<strong-password>"
+  DATABASE_DRIVER="postgres" `
+  SUPABASE_DB_URL="<supabase-session-pooler-connection-string>"
 fly deploy
-# Run once after the first deploy on an empty volume
-fly ssh console -C "bun run scripts/init-db.ts"
 ```
 
 For batch secret setup, copy `fly.secrets.env.example` to the ignored
@@ -62,18 +58,46 @@ Get-Content fly.secrets.env | fly secrets import -a invoice-web-v2
 
 The file is ignored by Git and must never be committed.
 
-The volume is required because the current Hono server still uses Bun's
-SQLite driver for its runtime database and stores private proof files on disk.
-Those paths are mounted under `/data` and are not committed to Git.
+The production database is the existing Supabase Postgres project. The API
+does not create or alter Postgres tables at startup. Before setting
+`DATABASE_DRIVER=postgres`, open the Supabase SQL editor and run
+[`server/db/migrations/001_initial_schema.sql`](/server/db/migrations/001_initial_schema.sql)
+once. Then seed the initial accounts from a machine with the same Postgres
+connection string:
 
-### Supabase status
+```powershell
+cd server
+$env:DATABASE_DRIVER = "postgres"
+$env:SUPABASE_DB_URL = "<supabase-session-pooler-connection-string>"
+$env:SEED_SUPERADMIN_PASSWORD = "<strong-password>"
+$env:SEED_ADMIN_PASSWORD = "<strong-password>"
+$env:SEED_EMPLOYEE_PASSWORD = "<strong-password>"
+bun run scripts/seed-users.ts
+```
 
-The old Streamlit deployment can use Supabase, but this React + Hono server is
-currently SQLite-backed (`bun:sqlite`). Setting a Supabase URL alone would not
-switch the application database. A real Supabase deployment requires a schema
-and route migration from SQLite to Postgres; do that before removing the Fly
-volume. Do not paste the Supabase database password into source or commit it;
-set it with `fly secrets set` after the Postgres adapter is migrated.
+The connection string is a database credential, not the Supabase publishable
+or secret API key. Keep it in Fly secrets. Supabase's session pooler is the
+recommended connection for a long-running Fly machine.
+
+SQLite remains available for local development when no Postgres URL is set.
+`scripts/init-db.ts` is intentionally SQLite-only and refuses to run in
+Postgres mode, so production cannot silently create a second database.
+
+Proof files currently use the local `UPLOAD_DIR` adapter. Keep the Fly volume
+until proof storage is moved to a private Supabase Storage bucket; the database
+cutover itself does not migrate existing SQLite rows or files automatically.
+
+### Database modes
+
+The Hono API selects its database at startup:
+
+- `DATABASE_DRIVER=postgres` (or a `DATABASE_URL`/`SUPABASE_DB_URL`) uses the
+  existing Supabase Postgres database.
+- Without a Postgres URL it uses Bun SQLite, which is useful only for local
+  development and tests.
+
+This is an adapter switch, not a second schema. Both modes expose the same API
+routes; the Postgres schema is the checked-in one-time migration above.
 
 ## Production frontend
 

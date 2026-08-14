@@ -12,6 +12,9 @@ primary_region = 'sin'
 [env]
   NODE_ENV = "production"
   PORT = "3000"
+  # Production must use the existing Supabase database. The app fails fast if
+  # SUPABASE_DB_URL/DATABASE_URL is missing instead of silently creating SQLite.
+  DATABASE_DRIVER = "postgres"
   SQLITE_PATH = "/data/sqlite.db"
   UPLOAD_DIR = "/data/uploads/proofs"
   STATIC_DIR = "/app/client/dist"

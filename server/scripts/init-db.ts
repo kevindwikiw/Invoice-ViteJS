@@ -1,5 +1,11 @@
 import { Database } from "bun:sqlite";
 
+if (process.env.DATABASE_DRIVER === "postgres" || process.env.DATABASE_URL || process.env.SUPABASE_DB_URL) {
+  throw new Error(
+    "scripts/init-db.ts is SQLite-only. For Supabase, run server/db/migrations/001_initial_schema.sql once in the Supabase SQL editor, then run scripts/seed-users.ts."
+  );
+}
+
 // Ensure db directory exists
 import { mkdir } from "node:fs/promises";
 await mkdir("db", { recursive: true });

@@ -12,6 +12,7 @@
   "dependencies": {
     "drizzle-kit": "^0.31.8",
     "drizzle-orm": "^0.45.1",
-    "hono": "^4.11.7"
+    "hono": "^4.11.7",
+    "postgres": "^3.4.9"
   }
 }

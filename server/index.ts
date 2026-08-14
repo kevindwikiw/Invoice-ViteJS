@@ -1,6 +1,5 @@
 import { Hono } from "hono";
 import { cors } from "hono/cors";
-import { Database } from "bun:sqlite";
 import { mkdir } from "node:fs/promises";
 import { basename, join, resolve } from "node:path";
 import authRoutes from "./routes/auth";
@@ -13,6 +12,7 @@ import sequencesRoutes from "./routes/sequences";
 import { authMiddleware } from "./middleware/auth";
 import { loginRateLimiter } from "./middleware/rate-limit";
 import { ensureUserPermissionsTable } from "./permissions";
+import { databaseDriver, sqlite } from "./db/runtime";
 
 type AuthUser = {
     sub: number;
@@ -36,9 +36,7 @@ if (!process.env.JWT_SECRET || process.env.JWT_SECRET.length < 32) {
     process.exit(1);
 }
 
-const SQLITE_PATH = process.env.SQLITE_PATH || "db/sqlite.db";
-const sqlite = new Database(SQLITE_PATH);
-
+if (databaseDriver === "sqlite" && sqlite) {
 try {
     // A brand-new Fly volume has no tables yet. The full schema is created by
     // scripts/init-db.ts; only run additive migrations when the base table
@@ -79,6 +77,9 @@ try {
 } catch (error) {
     console.error("Database initialization failed:", error);
     process.exit(1);
+}
+} else {
+    console.log("Postgres mode enabled; expecting the Supabase migration to be applied.");
 }
 
 const app = new Hono<AppEnv>();

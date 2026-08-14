@@ -1,4 +1,5 @@
-import { Database } from "bun:sqlite";
+import type { Database } from "bun:sqlite";
+import { all } from "./db/runtime";
 
 export const FEATURE_PERMISSION_KEYS = [
     "view_market_insights",
@@ -40,16 +41,22 @@ export function getRoleDefaultPermissions(role: string): FeaturePermissionKey[] 
     return ROLE_DEFAULT_PERMISSIONS[normalized] || ROLE_DEFAULT_PERMISSIONS.employee;
 }
 
-export function getPermissionOverrides(sqlite: Database, userId: number): Partial<Record<FeaturePermissionKey, PermissionEffect>> {
-    const rows = sqlite.prepare(`
+export async function getPermissionOverrides(userId: number, sqliteDb?: Database): Promise<Partial<Record<FeaturePermissionKey, PermissionEffect>>> {
+    const rows: Array<{ permissionKey?: string; permissionkey?: string; effect: PermissionEffect }> = sqliteDb
+        ? sqliteDb.prepare(`
         SELECT permission_key as permissionKey, effect
         FROM user_permissions
         WHERE user_id = ?
-    `).all(userId) as Array<{ permissionKey: string; effect: PermissionEffect }>;
+    `).all(userId) as Array<{ permissionKey: string; effect: PermissionEffect }>
+        : await all<{ permissionkey?: string; permissionKey?: string; effect: PermissionEffect }>(`
+        SELECT permission_key as "permissionKey", effect
+        FROM user_permissions
+        WHERE user_id = ?
+    `, [userId]);
 
     const overrides: Partial<Record<FeaturePermissionKey, PermissionEffect>> = {};
     for (const row of rows) {
-        const key = row.permissionKey as FeaturePermissionKey;
+        const key = (row.permissionKey || row.permissionkey) as FeaturePermissionKey;
         if (FEATURE_PERMISSION_KEYS.includes(key)) {
             overrides[key] = row.effect;
         }
@@ -78,7 +85,7 @@ export function getEffectivePermissions(
     }, {} as Record<FeaturePermissionKey, boolean>);
 }
 
-export function hasFeaturePermission(sqlite: Database, user: { sub: number; role: string }, key: FeaturePermissionKey): boolean {
-    const overrides = getPermissionOverrides(sqlite, user.sub);
+export async function hasFeaturePermission(user: { sub: number; role: string }, key: FeaturePermissionKey, sqliteDb?: Database): Promise<boolean> {
+    const overrides = await getPermissionOverrides(user.sub, sqliteDb);
     return evaluatePermission(user.role, overrides, key);
 }

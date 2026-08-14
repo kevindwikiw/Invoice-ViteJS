@@ -1,44 +1,37 @@
 import { Hono } from "hono";
-import { Database } from "bun:sqlite";
-import { drizzle } from "drizzle-orm/bun-sqlite";
-import { packages } from "../db/schema";
-import { eq } from "drizzle-orm";
+import { all, insertReturningId, run } from "../db/runtime";
 
 const packagesRouter = new Hono();
-const sqlite = new Database(process.env.SQLITE_PATH || "db/sqlite.db");
-const db = drizzle(sqlite);
 
 packagesRouter.get("/", async (c) => {
     try {
-        const all = c.req.query("all");
-        if (all === "true") {
-            const result = await db.select().from(packages);
-            return c.json(result);
-        } else {
-            const result = await db.select().from(packages).where(eq(packages.isActive, 1));
-            return c.json(result);
-        }
+        const where = c.req.query("all") === "true" ? "" : " WHERE is_active = 1";
+        const result = await all(`
+            SELECT id, name, price, category, description, is_active as "isActive"
+            FROM packages${where}
+            ORDER BY id DESC
+        `);
+        return c.json(result);
     } catch (e) {
         return c.json({ error: String(e) }, 500);
     }
 });
 
-packagesRouter.post("/", async (c) => {
-    const user = c.get("user" as any) as { role: string } | undefined;
-    if (!user || (user.role !== "admin" && user.role !== "superadmin")) {
-        return c.json({ error: "Permission denied" }, 403);
-    }
+function canManagePackages(c: any): boolean {
+    const user = c.get("user") as { role: string } | undefined;
+    return Boolean(user && (user.role === "admin" || user.role === "superadmin"));
+}
 
+packagesRouter.post("/", async (c) => {
+    if (!canManagePackages(c)) return c.json({ error: "Permission denied" }, 403);
     try {
         const body = await c.req.json();
         const { name, price, category, description } = body;
-
-        const result = sqlite.prepare(`
+        const id = await insertReturningId(`
             INSERT INTO packages (name, price, category, description, is_active)
             VALUES (?, ?, ?, ?, 1)
-        `).run(name, price, category || 'Utama', description || '');
-
-        return c.json({ id: Number(result.lastInsertRowid), status: "created" });
+        `, [name, price, category || "Utama", description || ""]);
+        return c.json({ id, status: "created" });
     } catch (e) {
         console.error("Error creating package:", e);
         return c.json({ error: String(e) }, 500);
@@ -46,20 +39,14 @@ packagesRouter.post("/", async (c) => {
 });
 
 packagesRouter.put("/:id", async (c) => {
-    const user = c.get("user" as any) as { role: string } | undefined;
-    if (!user || (user.role !== "admin" && user.role !== "superadmin")) {
-        return c.json({ error: "Permission denied" }, 403);
-    }
-
+    if (!canManagePackages(c)) return c.json({ error: "Permission denied" }, 403);
     try {
-        const id = c.req.param("id");
         const body = await c.req.json();
         const { name, price, category, description } = body;
-
-        sqlite.prepare(`
-            UPDATE packages SET name = ?, price = ?, category = ?, description = ? WHERE id = ?
-        `).run(name, price, category, description, Number(id));
-
+        await run(
+            "UPDATE packages SET name = ?, price = ?, category = ?, description = ? WHERE id = ?",
+            [name, price, category, description, Number(c.req.param("id"))]
+        );
         return c.json({ status: "updated" });
     } catch (e) {
         console.error("Error updating package:", e);
@@ -68,18 +55,11 @@ packagesRouter.put("/:id", async (c) => {
 });
 
 packagesRouter.patch("/:id/status", async (c) => {
-    const user = c.get("user" as any) as { role: string } | undefined;
-    if (!user || (user.role !== "admin" && user.role !== "superadmin")) {
-        return c.json({ error: "Permission denied" }, 403);
-    }
-
+    if (!canManagePackages(c)) return c.json({ error: "Permission denied" }, 403);
     try {
-        const id = c.req.param("id");
         const body = await c.req.json();
         const isActive = body.isActive ? 1 : 0;
-
-        sqlite.prepare(`UPDATE packages SET is_active = ? WHERE id = ?`).run(isActive, Number(id));
-
+        await run("UPDATE packages SET is_active = ? WHERE id = ?", [isActive, Number(c.req.param("id"))]);
         return c.json({ status: isActive ? "activated" : "archived" });
     } catch (e) {
         console.error("Error toggling package status:", e);
@@ -88,14 +68,9 @@ packagesRouter.patch("/:id/status", async (c) => {
 });
 
 packagesRouter.delete("/:id", async (c) => {
-    const user = c.get("user" as any) as { role: string } | undefined;
-    if (!user || (user.role !== "admin" && user.role !== "superadmin")) {
-        return c.json({ error: "Permission denied" }, 403);
-    }
-
+    if (!canManagePackages(c)) return c.json({ error: "Permission denied" }, 403);
     try {
-        const id = c.req.param("id");
-        sqlite.prepare(`DELETE FROM packages WHERE id = ?`).run(Number(id));
+        await run("DELETE FROM packages WHERE id = ?", [Number(c.req.param("id"))]);
         return c.json({ status: "deleted" });
     } catch (e) {
         console.error("Error deleting package:", e);
