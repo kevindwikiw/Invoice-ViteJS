@@ -1,5 +1,10 @@
+# fly.toml app configuration file generated for invoice-web-v2 on 2026-08-14T10:51:11Z
+#
+# See https://fly.io/docs/reference/configuration/ for information about how to use this file.
+#
+
 app = "invoice-web-v2"
-primary_region = "sin"
+primary_region = 'sin'
 
 [build]
   dockerfile = "Dockerfile"
@@ -16,10 +21,11 @@ primary_region = "sin"
 [http_service]
   internal_port = 3000
   force_https = true
-  auto_stop_machines = "stop"
+  auto_stop_machines = 'stop'
   auto_start_machines = true
   min_machines_running = 0
-  processes = ["app"]
+  processes = ['app']
+  checks = [{ grace_period = '10s', interval = '15s', method = 'GET', path = '/healthz', timeout = '5s' }]
 
   [[http_service.checks]]
     interval = "15s"
@@ -32,3 +38,9 @@ primary_region = "sin"
   source = "invoice_data"
   destination = "/data"
   initial_size = "1gb"
+
+[[vm]]
+  cpu_kind = 'shared'
+  cpus = 1
+  memory = '1gb'
+  memory_mb = 1024
