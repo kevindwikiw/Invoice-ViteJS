@@ -1,31 +1,38 @@
-# Invoice Web V2 - Fly.io production configuration.
+# fly.toml app configuration file generated for invoice-web-v2 on 2026-08-14T16:06:54Z
+#
+# See https://fly.io/docs/reference/configuration/ for information about how to use this file.
+#
 
-app = "invoice-web-v2"
-primary_region = "sin"
+app = 'invoice-web-v2'
+primary_region = 'sin'
 
 [build]
-  dockerfile = "Dockerfile"
+  dockerfile = 'Dockerfile'
 
 [env]
-  NODE_ENV = "production"
-  PORT = "3000"
-  # Production must use the existing Supabase database. The app fails fast if
-  # SUPABASE_DB_URL/DATABASE_URL is missing instead of silently creating SQLite.
-  DATABASE_DRIVER = "postgres"
-  STATIC_DIR = "/app/client/dist"
-  # Set this to the final public Fly hostname after `fly apps create`.
-  ALLOWED_ORIGINS = "https://invoice-web-v2.fly.dev"
+  ALLOWED_ORIGINS = 'https://invoice-web-v2.fly.dev'
+  DATABASE_DRIVER = 'postgres'
+  NODE_ENV = 'production'
+  PORT = '3000'
+  STATIC_DIR = '/app/client/dist'
 
 [http_service]
   internal_port = 3000
   force_https = true
-  auto_stop_machines = "stop"
+  auto_stop_machines = 'stop'
   auto_start_machines = true
   min_machines_running = 0
-  processes = ["app"]
-  checks = [{ interval = "15s", timeout = "5s", grace_period = "10s", method = "GET", path = "/healthz" }]
+  processes = ['app']
+
+  [[http_service.checks]]
+    interval = '15s'
+    timeout = '5s'
+    grace_period = '10s'
+    method = 'GET'
+    path = '/healthz'
 
 [[vm]]
-  cpu_kind = "shared"
+  memory = '1gb'
+  cpu_kind = 'shared'
   cpus = 1
-  memory = "1gb"
+  memory_mb = 1024
