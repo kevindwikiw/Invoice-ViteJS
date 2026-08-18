@@ -14,6 +14,15 @@ import {
 } from '../constants/uiContract';
 import { FORM_LABEL_CLASS, PANEL_CARD_CLASS } from '../constants/invoice';
 
+const UNSPECIFIED_VENUES = new Set([
+    '',
+    '-',
+    'unknown',
+    'unknown venue',
+    'unspecified venue',
+    'no venue specified',
+]);
+
 // Types matches backend response
 export type Booking = {
     id: number;
@@ -545,9 +554,12 @@ export default function Analytics() {
             }))
             .sort((a, b) => b.count - a.count);
 
-        const topVenue = allVenueBreakdown[0]
-            ? [allVenueBreakdown[0].name, allVenueBreakdown[0].count] as [string, number]
-            : ['-', 0] as [string, number];
+        const leadingSpecifiedVenue = allVenueBreakdown.find(
+            (venue) => !UNSPECIFIED_VENUES.has(venue.name.trim().toLocaleLowerCase('id-ID')),
+        );
+        const topVenue = leadingSpecifiedVenue
+            ? [leadingSpecifiedVenue.name, leadingSpecifiedVenue.count] as [string, number]
+            : ['No venue recorded', 0] as [string, number];
 
         const yearItems = data.items.filter(i => i.year === selectedYear);
         const packageCounts: Record<string, number> = {};

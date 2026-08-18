@@ -54,11 +54,11 @@ function PackageOption({ pkg, checked, onToggle }: PackageOptionProps) {
                 />
 
                 <div className="min-w-0 flex-1">
-                    <div className="flex items-start justify-between gap-3">
-                        <h3 className="min-w-0 font-display text-base font-medium leading-snug text-[var(--text-primary)]">
+                    <div className="grid grid-cols-[minmax(0,1fr)_7.25rem] items-start gap-x-4">
+                        <h3 className="min-w-0 break-words font-display text-[15px] font-medium normal-case leading-[1.35] tracking-[-0.01em] text-[var(--text-primary)] [overflow-wrap:anywhere]">
                             {packageDisplayName(pkg.name)}
                         </h3>
-                        <span className="shrink-0 text-sm font-semibold tabular-nums text-[var(--accent)]">
+                        <span className="w-[7.25rem] whitespace-nowrap text-right text-sm font-semibold tabular-nums text-[var(--accent)]">
                             Rp {pkg.price.toLocaleString('id-ID')}
                         </span>
                     </div>
@@ -407,7 +407,7 @@ export function PackageCatalogModal({
                             ) : visibleCategories.map((category) => {
                                 const items = packagesByCategory.get(category) || [];
                                 return (
-                                    <section key={category} className="flex h-full w-[320px] shrink-0 snap-start flex-col border-r border-[var(--border)] bg-[var(--bg-card)]/35 last:border-r-0">
+                                    <section key={category} className="flex h-full w-[360px] shrink-0 snap-start flex-col border-r border-[var(--border)] bg-[var(--bg-card)]/35 last:border-r-0">
                                         <div className="shrink-0 border-b border-[var(--border)] bg-[var(--bg-card)] px-4 py-3">
                                             <div className="flex items-center justify-between gap-3">
                                                 <span className={clsx('inline-flex border px-2 py-1 text-[9px] font-bold uppercase tracking-[0.14em]', packageCategoryTone(category))}>

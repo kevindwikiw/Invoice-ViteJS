@@ -1,6 +1,11 @@
 import { Hono } from "hono";
 import { all, run } from "../db/runtime";
 import { hasFeaturePermission } from "../permissions";
+import {
+    extractEventDate,
+    extractVenue,
+    parseInvoicePayload,
+} from "../lib/analytics-normalization";
 
 const analyticsRouter = new Hono();
 
@@ -37,23 +42,20 @@ analyticsRouter.get("/", async (c) => {
 
         for (const inv of rawInvoices) {
             try {
-                let data: any = {};
-                try { data = inv.invoiceData ? JSON.parse(inv.invoiceData) : {}; } catch { /* ignore */ }
-                const dateStr = inv.date || data.weddingDate || data.date;
-                if (!dateStr) { stats.skipped_rows++; continue; }
-                const d = new Date(dateStr);
-                if (Number.isNaN(d.getTime())) { stats.skipped_rows++; continue; }
-                const amount = inv.totalAmount || data.totalAmount || 0;
+                const data = parseInvoicePayload(inv.invoiceData);
+                const d = extractEventDate(data, inv.date);
+                if (!d) { stats.skipped_rows++; continue; }
+                const amount = Number(inv.totalAmount ?? data.totalAmount ?? 0);
                 bookings.push({
                     id: inv.id,
-                    amount: amount < 0 ? 0 : amount,
-                    venue: data.venue || "Unknown",
-                    client_name: inv.clientName || data.clientName || "Unknown",
+                    amount: Number.isFinite(amount) && amount > 0 ? amount : 0,
+                    venue: extractVenue(data),
+                    client_name: inv.clientName || String(data.clientName || "Unknown"),
                     date_obj: d.toISOString(),
-                    year: d.getFullYear(),
-                    month: d.getMonth() + 1,
-                    day: d.getDate(),
-                    month_name: d.toLocaleString("default", { month: "long" }),
+                    year: d.getUTCFullYear(),
+                    month: d.getUTCMonth() + 1,
+                    day: d.getUTCDate(),
+                    month_name: d.toLocaleString("en", { month: "long", timeZone: "UTC" }),
                     date_str: d.toISOString().split("T")[0],
                 });
                 if (Array.isArray(data.items)) {
@@ -62,7 +64,7 @@ analyticsRouter.get("/", async (c) => {
                             let qty = Number(item.Qty || item.qty || item.quantity || 1);
                             if (Number.isNaN(qty) || qty < 0) qty = 1;
                             const rawName = item.desc || item.Description || item.description || item.packageName || item.name || item.title || item.details || "Custom Package";
-                            allItems.push({ name: String(rawName).trim(), qty, year: d.getFullYear(), month: d.getMonth() + 1 });
+                            allItems.push({ name: String(rawName).trim(), qty, year: d.getUTCFullYear(), month: d.getUTCMonth() + 1 });
                         } catch { stats.items_skipped++; }
                     }
                 }
