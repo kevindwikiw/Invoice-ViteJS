@@ -4,7 +4,12 @@ import postgres, { type Sql } from "postgres";
 export type DatabaseDriver = "sqlite" | "postgres";
 
 const configuredDriver = process.env.DATABASE_DRIVER?.toLowerCase();
-const postgresUrl = process.env.DATABASE_URL || process.env.SUPABASE_DB_URL;
+const postgresEnvSource = process.env.SUPABASE_DB_URL
+    ? "SUPABASE_DB_URL"
+    : process.env.DATABASE_URL
+        ? "DATABASE_URL"
+        : null;
+const postgresUrl = process.env.SUPABASE_DB_URL || process.env.DATABASE_URL;
 export const databaseDriver: DatabaseDriver = configuredDriver === "postgres"
     ? "postgres"
     : configuredDriver === "sqlite"
@@ -15,6 +20,17 @@ export const databaseDriver: DatabaseDriver = configuredDriver === "postgres"
 
 if (databaseDriver === "postgres" && !postgresUrl) {
     throw new Error("DATABASE_URL (or SUPABASE_DB_URL) is required when DATABASE_DRIVER=postgres");
+}
+
+if (databaseDriver === "postgres" && postgresUrl) {
+    try {
+        const parsedUrl = new URL(postgresUrl);
+        console.info(
+            `Using postgres database from ${postgresEnvSource}: ${parsedUrl.username}@${parsedUrl.hostname}:${parsedUrl.port || "5432"}`,
+        );
+    } catch {
+        console.info(`Using postgres database from ${postgresEnvSource}: unable to parse redacted database URL`);
+    }
 }
 
 export const sqlite = databaseDriver === "sqlite"
