@@ -6,7 +6,7 @@ import { fetchWithAuth, resolveProofDataUrls } from '../lib/api'
 import { useToast } from '../context/ToastContext'
 import {
     Search, FileClock, Eye, Pencil, Trash2, Loader2, Plus, Filter, MoreHorizontal, Archive, RotateCcw, Check,
-    ChevronLeft, ChevronRight, Download, X,
+    ChevronLeft, ChevronRight, Download, X, Paperclip,
 } from 'lucide-react'
 import clsx from 'clsx'
 import {
@@ -935,6 +935,7 @@ export default function InvoiceHistory() {
                                 const canArchive = status === 'LUNAS'
                                 const notesText = metadata.notes
                                 const notesExists = notesText.length > 0
+                                const proofCount = parsePaymentProofs(inv.paymentProofs ?? inv.payment_proofs).length
 
                                 return (
                                     <div
@@ -963,7 +964,7 @@ export default function InvoiceHistory() {
                                             <Link
                                                 to="/invoices/$invoiceId"
                                                 params={{ invoiceId: String(id) }}
-                                                className="font-semibold text-sm text-[var(--text-primary)] hover:text-[var(--accent)] transition-colors truncate uppercase font-sans tracking-tight"
+                                                className="block max-w-full truncate font-semibold text-sm text-[var(--text-primary)] hover:text-[var(--accent)] transition-colors uppercase font-sans tracking-tight"
                                                 style={{ fontFamily: 'var(--font-body)' }}
                                             >
                                                 {invoiceNo}
@@ -974,13 +975,23 @@ export default function InvoiceHistory() {
                                         </div>
 
                                         {/* Status */}
-                                        <div className="flex items-center justify-center">
+                                        <div className="flex items-center justify-center gap-1.5">
                                             <span className={clsx(
                                                 "inline-flex items-center px-1.5 py-0.5 rounded text-[8px] font-bold uppercase tracking-wider border shrink-0 whitespace-nowrap",
                                                 sc.bg, sc.text, sc.border
                                             )} style={{ fontFamily: 'var(--font-body)' }}>
                                                 {sc.label}
                                             </span>
+                                            {proofCount > 0 && (
+                                                <span
+                                                    className="inline-flex h-5 shrink-0 items-center gap-0.5 rounded border border-[var(--accent)]/25 bg-[var(--accent)]/5 px-1.5 text-[8px] font-semibold tabular-nums text-[var(--accent)]"
+                                                    title={`${proofCount} payment proof${proofCount === 1 ? '' : 's'} attached`}
+                                                    aria-label={`${proofCount} payment proof${proofCount === 1 ? '' : 's'} attached`}
+                                                >
+                                                    <Paperclip size={10} strokeWidth={2} />
+                                                    {proofCount}
+                                                </span>
+                                            )}
                                         </div>
 
                                         {/* Venue */}

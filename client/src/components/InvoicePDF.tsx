@@ -578,6 +578,21 @@ const styles = StyleSheet.create({
     },
     footerIcon: { width: mm(2.2), height: mm(2.2), marginRight: mm(0.8), objectFit: "contain" },
     footerText: { fontSize: 6, lineHeight: 1, color: COLORS.WHITE },
+
+    proofContent: {
+        position: "absolute",
+        top: TOP_BAR_H + RIBBON_H + mm(4),
+        bottom: FOOTER_H + mm(4),
+        left: MARGIN,
+        right: MARGIN,
+        alignItems: "center",
+        justifyContent: "center",
+    },
+    proofImage: {
+        width: "100%",
+        height: "100%",
+        objectFit: "contain",
+    },
 });
 
 // ======================
@@ -1032,18 +1047,11 @@ export const InvoicePDF = ({ invoice, proofs = [] }: { invoice: Invoice; proofs?
                     const imageSrc = proof;
 
                     return (
-                        <Page key={`proof-${idx}`} size="A4" style={styles.page}>
+                        <Page key={`proof-${idx}`} size="A4" style={styles.page} wrap={false}>
                             <Header title={`PAYMENT PROOF ${idx + 1}`} />
 
-                            <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', marginTop: mm(10), marginBottom: mm(10) }}>
-                                <Image
-                                    src={imageSrc}
-                                    style={{
-                                        width: '85%',
-                                        height: '75%',
-                                        objectFit: 'contain'
-                                    }}
-                                />
+                            <View style={styles.proofContent}>
+                                <Image src={imageSrc} style={styles.proofImage} />
                             </View>
 
                             <Footer
