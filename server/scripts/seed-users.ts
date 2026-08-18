@@ -12,8 +12,8 @@ const seedUsers = [
 
 for (const seed of seedUsers) {
   const password = process.env[seed.key];
-  if (!password || password.length < 12) {
-    throw new Error(`${seed.key} must be set and at least 12 characters long.`);
+  if (!password || password.length < 8) {
+    throw new Error(`${seed.key} must be set and at least 8 characters long.`);
   }
 
   const existing = await one<{ id: number }>("SELECT id FROM users WHERE email = ?", [seed.email]);

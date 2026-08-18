@@ -209,7 +209,7 @@ users.put("/:id/password", async (c) => {
     if (actor.role === "admin" && target.role === "superadmin") return c.json({ error: "Permission denied. Admin cannot reset superadmin password." }, 403);
     try {
         const { password } = await c.req.json().catch(() => ({}));
-        if (!password || typeof password !== "string" || password.length < 6) return c.json({ error: "Password must be at least 6 characters" }, 400);
+        if (!password || typeof password !== "string" || password.length < 8) return c.json({ error: "Password must be at least 8 characters" }, 400);
         const passwordHash = await Bun.password.hash(password, { algorithm: "bcrypt", cost: 10 });
         await run("UPDATE users SET password_hash = ? WHERE id = ?", [passwordHash, id]);
         await logUserActivity({ action: "USER_PASSWORD_RESET", targetUserId: id, targetUserName: target.name, targetUserEmail: target.email, actor, details: `Password reset by ${actor.name || actor.role}` });

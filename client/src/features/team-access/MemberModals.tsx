@@ -55,8 +55,8 @@ export function AddMemberModal({
             setValidationError('Name, email, and password are required.');
             return;
         }
-        if (form.password.length < 6) {
-            setValidationError('Password must be at least 6 characters.');
+        if (form.password.length < 8) {
+            setValidationError('Password must be at least 8 characters.');
             return;
         }
         setValidationError('');
@@ -153,8 +153,8 @@ export function ResetPasswordModal({
     const [validationError, setValidationError] = useState('');
 
     const submit = () => {
-        if (password.length < 6) {
-            setValidationError('Password must be at least 6 characters.');
+        if (password.length < 8) {
+            setValidationError('Password must be at least 8 characters.');
             return;
         }
         setValidationError('');

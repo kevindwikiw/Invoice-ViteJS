@@ -124,10 +124,10 @@ if (existingUsers.count === 0) {
       employee: process.env.SEED_EMPLOYEE_PASSWORD,
     };
     const missing = Object.entries(seedPasswords)
-      .filter(([, password]) => !password || password.length < 12)
+      .filter(([, password]) => !password || password.length < 8)
       .map(([role]) => role);
     if (missing.length > 0) {
-      throw new Error(`Missing strong seed password(s): ${missing.join(", ")}. Set them in server/.env before initializing the database.`);
+      throw new Error(`Missing seed password(s) (minimum 8 characters): ${missing.join(", ")}. Set them in server/.env before initializing the database.`);
     }
 
     const devHash = await hashPassword(seedPasswords.superadmin!);
