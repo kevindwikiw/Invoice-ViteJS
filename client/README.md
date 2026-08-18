@@ -78,3 +78,12 @@ $env:E2E_EMAIL = 'admin@example.com'
 $env:E2E_PASSWORD = 'your-password'
 bun run test:smoke
 ```
+
+The public feedback page and its rate limit are covered without writing rows.
+To additionally submit one feedback response and verify the administrator inbox,
+explicitly enable the persistent write flow:
+
+```powershell
+$env:E2E_FEEDBACK_WRITE = '1'
+bun run test:smoke
+```

@@ -4,12 +4,12 @@ import postgres, { type Sql } from "postgres";
 export type DatabaseDriver = "sqlite" | "postgres";
 
 const configuredDriver = process.env.DATABASE_DRIVER?.toLowerCase();
-const postgresEnvSource = process.env.SUPABASE_DB_URL
-    ? "SUPABASE_DB_URL"
-    : process.env.DATABASE_URL
-        ? "DATABASE_URL"
+const postgresEnvSource = process.env.DATABASE_URL
+    ? "DATABASE_URL"
+    : process.env.SUPABASE_DB_URL
+        ? "SUPABASE_DB_URL"
         : null;
-const postgresUrl = process.env.SUPABASE_DB_URL || process.env.DATABASE_URL;
+const postgresUrl = process.env.DATABASE_URL || process.env.SUPABASE_DB_URL;
 export const databaseDriver: DatabaseDriver = configuredDriver === "postgres"
     ? "postgres"
     : configuredDriver === "sqlite"

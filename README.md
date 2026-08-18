@@ -119,3 +119,14 @@ bun run lint
 
 Smoke tests require temporary test credentials supplied through `E2E_EMAIL` and
 `E2E_PASSWORD`; never commit those values.
+
+The anonymous public feedback form is available at `/feedback`. Names, rating,
+up to three review tags, an optional note, and an optional client-compressed photo
+are stored in a dedicated Turso database when `TURSO_DATABASE_URL` and
+`TURSO_AUTH_TOKEN` are configured; the table and columns are created idempotently
+on first use. Photos are only served through the authenticated admin API and never
+receive a public URL. Public submission and inbox review use Turso directly without
+reading the primary invoice database. The protected
+`/feedback-inbox` route is limited to admin and superadmin accounts. Set
+`E2E_FEEDBACK_WRITE=1` only when the smoke suite is allowed to leave one reviewed
+feedback row in the target database.

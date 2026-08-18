@@ -11,6 +11,7 @@ import {
 } from '../constants/invoice';
 
 import { PackageSidebar } from '../components/PackageSidebar';
+import { PackageCatalogModal } from '../components/PackageCatalogModal';
 import { SequenceModal } from '../components/SequenceModal';
 import { MergeModal } from '../components/MergeModal';
 import { SaveConfirmModal } from '../components/SaveConfirmModal';
@@ -19,12 +20,10 @@ import { PaymentDetails } from '../components/PaymentDetails';
 import { DatePicker } from '../components/DatePicker';
 import { TimeRangePicker } from '../components/TimeRangePicker';
 import { compressImage } from '../utils/image';
+import { invoiceItemFromPackage, packageRowId } from '../lib/packageCatalog';
 
 // Utility
 const rupiah = (n: number) => `Rp ${n.toLocaleString('id-ID')} `;
-const toTitleCase = (text: string) =>
-    text.replace(/\b([a-z])/gi, (match) => match.toUpperCase());
-
 import { fetchWithAuth } from '../lib/api';
 import { useToast } from '../context/ToastContext';
 import { useCreateInvoiceState } from '../hooks/useCreateInvoiceState';
@@ -113,6 +112,7 @@ export default function CreateInvoice() {
     const isEditMode = !!editId;
     const editInvoiceKey = editId == null ? '' : String(editId);
     const [previewDraft] = useState<PreviewDraft | null>(restorePreviewDraft);
+    const [showPackageCatalog, setShowPackageCatalog] = useState(false);
 
     const {
         invoiceNo, setInvoiceNo, seqPrefix, setSeqPrefix, seqNext, setSeqNext, seqPadding, setSeqPadding,
@@ -261,7 +261,10 @@ export default function CreateInvoice() {
         gcTime: 30 * 60 * 1000,
         refetchOnWindowFocus: false
     });
-    const packages = Array.isArray(packagesData) ? packagesData : [];
+    const packages = useMemo(
+        () => Array.isArray(packagesData) ? packagesData : [],
+        [packagesData],
+    );
 
     // Fetch Sequence
     const seqQuery = useQuery<SequenceResponse | null>({
@@ -338,26 +341,75 @@ export default function CreateInvoice() {
     const canAddPaymentTerm = paymentTerms.length < 6 && scheduledPaymentTotal < grandTotal;
 
     // CART ACTIONS
-    const cartRowIds = useMemo(() => new Set(cartItems.map(i => i._rowId).filter((id): id is string => id !== undefined)), [cartItems]);
-    const selectedItems = useMemo(() => cartItems.filter(item => selectedRowIds.has(item.id)), [cartItems, selectedRowIds]);
+    const availablePackageIds = useMemo(() => new Set(packages.map(packageRowId)), [packages]);
+    const selectedPackageItems = useMemo(
+        () => cartItems.filter((item) => item._rowId && !item.isBundle),
+        [cartItems],
+    );
+    const selectedAvailableCatalogItems = useMemo(
+        () => selectedPackageItems.filter((item) => item._rowId && availablePackageIds.has(item._rowId)),
+        [availablePackageIds, selectedPackageItems],
+    );
+    const selectedCatalogIds = useMemo(
+        () => new Set(selectedAvailableCatalogItems.map((item) => item._rowId as string)),
+        [selectedAvailableCatalogItems],
+    );
+    const selectedItems = useMemo(
+        () => cartItems.filter((item) => selectedRowIds.has(item.id)),
+        [cartItems, selectedRowIds],
+    );
 
-    const addToCart = (pkg: PackageData) => {
-        const rowId = String(pkg.id);
-        if (cartRowIds.has(rowId)) return;
-
-        setCartItems(prev => [...prev, {
-            id: `item_${Date.now()}`,
-            name: pkg.name,
-            desc: pkg.name,
-            details: pkg.description,
-            price: pkg.price,
-            qty: 1,
-            _rowId: rowId
-        }]);
+    const addPackageToCart = (pkg: PackageData) => {
+        const rowId = packageRowId(pkg);
+        if (selectedCatalogIds.has(rowId)) return;
+        setCartItems((previous) => [...previous, invoiceItemFromPackage(pkg)]);
     };
 
     const removeFromCart = (rowId: string) => {
-        setCartItems(prev => prev.filter(item => item._rowId !== rowId));
+        const removedItemIds = new Set(
+            cartItems.filter((item) => item._rowId === rowId).map((item) => item.id),
+        );
+        setCartItems((previous) => previous.filter((item) => item._rowId !== rowId));
+        if (removedItemIds.size > 0) {
+            setSelectedRowIds((previous) => {
+                const next = new Set(previous);
+                removedItemIds.forEach((itemId) => next.delete(itemId));
+                return next;
+            });
+        }
+    };
+
+    const applyPackageCatalogSelection = (selectedIds: Set<string>) => {
+        const previousIds = selectedCatalogIds;
+        const removedItemIds = new Set(
+            cartItems
+                .filter((item) => item._rowId && availablePackageIds.has(item._rowId) && !selectedIds.has(item._rowId))
+                .map((item) => item.id),
+        );
+        const additions = packages
+            .filter((pkg) => selectedIds.has(packageRowId(pkg)) && !previousIds.has(packageRowId(pkg)))
+            .map(invoiceItemFromPackage);
+
+        setCartItems((previous) => [
+            ...previous.filter((item) => (
+                !item._rowId
+                || !availablePackageIds.has(item._rowId)
+                || selectedIds.has(item._rowId)
+            )),
+            ...additions,
+        ]);
+        if (removedItemIds.size > 0) {
+            setSelectedRowIds((previous) => {
+                const next = new Set(previous);
+                removedItemIds.forEach((itemId) => next.delete(itemId));
+                return next;
+            });
+        }
+        setShowPackageCatalog(false);
+
+        const addedCount = [...selectedIds].filter((id) => !previousIds.has(id)).length;
+        const removedCount = [...previousIds].filter((id) => !selectedIds.has(id)).length;
+        addToast(`Package catalog updated: ${addedCount} added, ${removedCount} removed`, 'success');
     };
 
     const updateCartItem = <Key extends keyof InvoiceItem>(id: string, field: Key, value: InvoiceItem[Key]) => {
@@ -674,11 +726,20 @@ export default function CreateInvoice() {
         <div className="flex flex-col md:flex-row-reverse md:gap-0 h-screen overflow-hidden bg-[var(--bg-deep)] text-[var(--text-primary)]">
             <PackageSidebar 
                 packages={packages}
-                cartRowIds={cartRowIds}
-                addToCart={addToCart}
-                removeFromCart={removeFromCart}
-                toTitleCase={toTitleCase}
+                selectedPackageIds={selectedCatalogIds}
+                onAdd={addPackageToCart}
+                onRemove={removeFromCart}
+                onOpenCatalog={() => setShowPackageCatalog(true)}
             />
+
+            {showPackageCatalog && (
+                <PackageCatalogModal
+                    packages={packages}
+                    initialSelectedIds={selectedCatalogIds}
+                    onApply={applyPackageCatalogSelection}
+                    onClose={() => setShowPackageCatalog(false)}
+                />
+            )}
 
             <main className="flex-1 overflow-y-auto bg-[var(--bg-deep)] p-4 sm:p-6 md:p-10">
                 <div className="mx-auto max-w-7xl space-y-6">

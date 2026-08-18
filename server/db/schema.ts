@@ -58,3 +58,20 @@ export const userPermissions = sqliteTable("user_permissions", {
     createdAt: text("created_at").default(sql`CURRENT_TIMESTAMP`),
 });
 
+export const feedback = sqliteTable("feedback", {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    invoiceId: integer("invoice_id").references(() => invoices.id, { onDelete: "set null" }),
+    invoiceNo: text("invoice_no").notNull(),
+    clientName: text("client_name"),
+    rating: integer("rating").notNull(),
+    tags: text("tags").notNull().default("[]"),
+    message: text("message").notNull(),
+    photoData: blob("photo_data", { mode: "buffer" }),
+    photoMime: text("photo_mime"),
+    photoSize: integer("photo_size"),
+    status: text("status").notNull().default("new"),
+    reviewedBy: integer("reviewed_by").references(() => users.id, { onDelete: "set null" }),
+    reviewedAt: text("reviewed_at"),
+    createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+});
+

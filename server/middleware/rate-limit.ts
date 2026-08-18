@@ -7,15 +7,27 @@ interface RateLimitEntry {
 
 // In-memory store (for single instance, use Redis for multi-instance)
 const loginAttempts = new Map<string, RateLimitEntry>();
+const feedbackSubmissions = new Map<string, RateLimitEntry>();
+
+function clientIp(c: Context): string {
+    return c.req.header("fly-client-ip")
+        || c.req.header("cf-connecting-ip")
+        || c.req.header("x-forwarded-for")?.split(",")[0]?.trim()
+        || c.req.header("x-real-ip")
+        || "unknown";
+}
+
+function clearExpiredEntries(store: Map<string, RateLimitEntry>, now: number): void {
+    for (const [ip, entry] of store.entries()) {
+        if (entry.resetAt < now) store.delete(ip);
+    }
+}
 
 // Clean up expired entries every 5 minutes
 setInterval(() => {
     const now = Date.now();
-    for (const [ip, entry] of loginAttempts.entries()) {
-        if (entry.resetAt < now) {
-            loginAttempts.delete(ip);
-        }
-    }
+    clearExpiredEntries(loginAttempts, now);
+    clearExpiredEntries(feedbackSubmissions, now);
 }, 5 * 60 * 1000);
 
 export const loginRateLimiter = async (c: Context, next: Next) => {
@@ -23,9 +35,7 @@ export const loginRateLimiter = async (c: Context, next: Next) => {
     const maxAttempts = parseInt(process.env.RATE_LIMIT_MAX_ATTEMPTS || "5");
 
     // Get client IP
-    const ip = c.req.header("x-forwarded-for")?.split(",")[0]?.trim()
-        || c.req.header("x-real-ip")
-        || "unknown";
+    const ip = clientIp(c);
 
     const now = Date.now();
     const entry = loginAttempts.get(ip);
@@ -52,6 +62,32 @@ export const loginRateLimiter = async (c: Context, next: Next) => {
         loginAttempts.set(ip, { count: 1, resetAt: now + windowMs });
     }
 
+    await next();
+};
+
+export const feedbackRateLimiter = async (c: Context, next: Next) => {
+    const windowMs = Number.parseInt(process.env.FEEDBACK_RATE_LIMIT_WINDOW_MS || "3600000", 10);
+    const maxSubmissions = Number.parseInt(process.env.FEEDBACK_RATE_LIMIT_MAX || "5", 10);
+    const ip = clientIp(c);
+    const now = Date.now();
+    const current = feedbackSubmissions.get(ip);
+
+    if (!current || current.resetAt <= now) {
+        feedbackSubmissions.set(ip, { count: 1, resetAt: now + windowMs });
+        await next();
+        return;
+    }
+
+    if (current.count >= maxSubmissions) {
+        const retryAfter = Math.ceil((current.resetAt - now) / 1000);
+        c.header("Retry-After", String(retryAfter));
+        return c.json({
+            error: "Too many feedback submissions. Please try again later.",
+            retryAfter,
+        }, 429);
+    }
+
+    current.count += 1;
     await next();
 };
 

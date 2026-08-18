@@ -12,6 +12,11 @@ type SequenceState = {
     last_value: number;
 };
 
+type CatalogPackage = {
+    id: number;
+    name: string;
+};
+
 async function authenticatedRequest<T>(
     page: Page,
     path: string,
@@ -68,6 +73,27 @@ test('critical invoice workflow', async ({ page }) => {
     });
 
     try {
+        await test.step('open and apply full package catalog', async () => {
+            const packages = await authenticatedRequest<CatalogPackage[]>(page, '/packages');
+            await page.goto('/create');
+            await page.getByRole('button', { name: 'Open Full Catalog' }).click();
+            const dialog = page.getByRole('dialog', { name: 'Package Catalog' });
+            await expect(dialog).toBeVisible();
+
+            const firstPackage = packages[0];
+            if (!firstPackage) {
+                await dialog.getByRole('button', { name: 'Cancel' }).click();
+                await expect(dialog).not.toBeVisible();
+                return;
+            }
+
+            await dialog.getByPlaceholder('Search package name or details...').fill(firstPackage.name);
+            await dialog.getByLabel(`Add ${firstPackage.name}`).first().check();
+            await dialog.getByRole('button', { name: 'Apply 1 Change' }).click();
+            await expect(dialog).not.toBeVisible();
+            await expect(page.getByText(firstPackage.name, { exact: true }).first()).toBeVisible();
+        });
+
         await test.step('create invoice', async () => {
             cleanup.sequence = await authenticatedRequest<SequenceState>(page, '/sequences/invoice');
             cleanup.invoice = await authenticatedRequest<CreatedInvoice>(page, '/invoices', {

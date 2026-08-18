@@ -17,7 +17,7 @@ export default defineConfig({
     },
     webServer: manageWebServers ? [
         {
-            command: 'bun --cwd ../server run index.ts',
+            command: 'bun run --cwd ../server start',
             url: 'http://127.0.0.1:3000',
             reuseExistingServer: true,
             timeout: 30_000,

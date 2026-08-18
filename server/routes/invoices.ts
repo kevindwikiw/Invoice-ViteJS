@@ -42,6 +42,36 @@ function parseProofs(value: unknown): string[] {
     }
 }
 
+type PaymentTerm = { id?: unknown; label?: unknown; amount?: unknown };
+
+function asRecord(value: unknown): Record<string, unknown> {
+    return typeof value === "object" && value !== null ? value as Record<string, unknown> : {};
+}
+
+function invoicePaymentTerms(invoiceData: unknown): PaymentTerm[] {
+    if (typeof invoiceData !== "string" || !invoiceData) return [];
+
+    try {
+        const data = asRecord(JSON.parse(invoiceData));
+        const meta = asRecord(data.meta);
+        const terms = data.paymentTerms ?? data.payment_terms ?? meta.paymentTerms ?? meta.payment_terms;
+        if (Array.isArray(terms)) return terms.map((term) => asRecord(term));
+
+        const legacy = Object.keys(meta).length ? meta : data;
+        if (![legacy.pay_dp1, legacy.pay_term2, legacy.pay_term3, legacy.pay_full].some((amount) => Number(amount || 0) > 0)) {
+            return [];
+        }
+        return [
+            { id: "dp", label: "Down Payment", amount: legacy.pay_dp1 },
+            { id: "t2", label: "Payment 2", amount: legacy.pay_term2 },
+            { id: "t3", label: "Payment 3", amount: legacy.pay_term3 },
+            { id: "full", label: "Pelunasan", amount: legacy.pay_full },
+        ];
+    } catch {
+        return [];
+    }
+}
+
 function legacyProofs(invoiceData: unknown): string[] {
     if (typeof invoiceData !== "string" || !invoiceData) return [];
     try {
@@ -128,12 +158,11 @@ invoicesRouter.get("/stats", async (c) => {
         let totalRevenue = 0, cntLunas = 0, cntDp = 0, cntUnpaid = 0;
         for (const inv of allInvoices) {
             totalRevenue += inv.totalAmount || 0;
-            let paymentTerms: any[] = [];
-            try { paymentTerms = inv.invoiceData ? JSON.parse(inv.invoiceData).paymentTerms || [] : []; } catch { /* ignore */ }
+            const paymentTerms = invoicePaymentTerms(inv.invoiceData);
             if (paymentTerms.length) {
-                const pelunasan = paymentTerms.find((t: any) => t.id === "full" || (t.label && t.label.toLowerCase().includes("pelunasan")));
+                const pelunasan = paymentTerms.find((term) => term.id === "full" || String(term.label || "").toLowerCase().includes("pelunasan"));
                 if (pelunasan && Number(pelunasan.amount || 0) > 0) cntLunas++;
-                else if (paymentTerms.some((t: any) => t.id !== "full" && Number(t.amount || 0) > 0)) cntDp++;
+                else if (paymentTerms.some((term) => term.id !== "full" && Number(term.amount || 0) > 0)) cntDp++;
                 else cntUnpaid++;
             } else cntUnpaid++;
         }
@@ -145,12 +174,26 @@ invoicesRouter.get("/", async (c) => {
     const user = invoicePermission(c);
     if (!user || !await hasFeaturePermission(user, "view_billing_history")) return c.json({ error: "Permission denied" }, 403);
     try {
-        const search = c.req.query("search") || "";
+        const search = (c.req.query("search") || "").trim().toLowerCase();
         const safeLimit = Math.min(Math.max(parseInt(c.req.query("limit") || "50"), 1), 200);
-        const rows = search
-            ? await all(`SELECT id, invoice_no as "invoiceNo", client_name as "clientName", date, total_amount as "totalAmount", invoice_data as "invoiceData", payment_proofs as "paymentProofs", is_archived as "isArchived", created_at as "createdAt" FROM invoices WHERE invoice_no LIKE ? OR client_name LIKE ? ORDER BY id DESC LIMIT ?`, [`%${search}%`, `%${search}%`, safeLimit])
-            : await all(`SELECT id, invoice_no as "invoiceNo", client_name as "clientName", date, total_amount as "totalAmount", invoice_data as "invoiceData", payment_proofs as "paymentProofs", is_archived as "isArchived", created_at as "createdAt" FROM invoices ORDER BY id DESC LIMIT ?`, [safeLimit]);
-        return c.json(rows.map((row) => exposeProofs(row as { paymentProofs?: unknown; invoiceData?: unknown })));
+        const requestedPage = Math.max(parseInt(c.req.query("page") || "1"), 1);
+        const pattern = `%${search}%`;
+        const where = search
+            ? "WHERE LOWER(COALESCE(invoice_no, '')) LIKE ? OR LOWER(COALESCE(client_name, '')) LIKE ? OR LOWER(COALESCE(invoice_data, '')) LIKE ?"
+            : "";
+        const params = search ? [pattern, pattern, pattern] : [];
+        const summary = await one<{ total: number }>(`SELECT COUNT(*) as total FROM invoices ${where}`, params);
+        const total = Number(summary?.total || 0);
+        const totalPages = Math.max(1, Math.ceil(total / safeLimit));
+        const page = Math.min(requestedPage, totalPages);
+        const rows = await all(`SELECT id, invoice_no as "invoiceNo", client_name as "clientName", date, total_amount as "totalAmount", invoice_data as "invoiceData", payment_proofs as "paymentProofs", is_archived as "isArchived", created_at as "createdAt" FROM invoices ${where} ORDER BY id DESC LIMIT ? OFFSET ?`, [...params, safeLimit, (page - 1) * safeLimit]);
+        return c.json({
+            items: rows.map((row) => exposeProofs(row as { paymentProofs?: unknown; invoiceData?: unknown })),
+            page,
+            limit: safeLimit,
+            total,
+            totalPages,
+        });
     } catch (e) { return c.json({ error: String(e) }, 500); }
 });
 

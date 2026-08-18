@@ -176,6 +176,19 @@ function BlackHoleHero({ className, contentClassName, parallax = 0.6, style }: B
 
 
             <style>{`
+                .blackhole-interaction-shell {
+                    background: radial-gradient(ellipse at 30% 50%, #0a0606 0%, #030408 48%, #000 100%);
+                    transition: background-color 0.3s ease;
+                }
+                .light .blackhole-interaction-shell {
+                    background: var(--bg-deep);
+                }
+                @media (max-width: 1023px) {
+                    .blackhole-interaction-shell {
+                        background: radial-gradient(ellipse at 50% 18%, #0a0606 0%, #030408 40%, #000 78%);
+                    }
+                }
+
                 .blackhole-space {
                     --white: #fffff2;
                     --yellow: #fffcb7;
@@ -185,7 +198,7 @@ function BlackHoleHero({ className, contentClassName, parallax = 0.6, style }: B
                     --black: #000;
                     --star-color: #fff;
                     position: relative; width: 100%; height: 100%;
-                    background: radial-gradient(ellipse at 50% 50%, #0a0606 0%, #030408 50%, #000 100%);
+                    background: transparent;
                     overflow: hidden; perspective: 1000px;
                     transition: background 0.5s ease;
                     contain: layout paint style;
@@ -211,7 +224,7 @@ function BlackHoleHero({ className, contentClassName, parallax = 0.6, style }: B
                     --yellow-bright: #080808;
                     --black: #fff;
                     --star-color: #000;
-                    background: var(--bg-deep);
+                    background: transparent;
                 }
                 /* ---- END LIGHT MODE OVERRIDES ---- */
 

@@ -1,11 +1,11 @@
-import { useState, useEffect, useMemo, useRef } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { keepPreviousData, useQuery, useQueryClient, useMutation } from '@tanstack/react-query'
 import { useNavigate, Link } from '@tanstack/react-router'
 import { useAuth } from '../context/auth'
 import { fetchWithAuth, resolveProofDataUrls } from '../lib/api'
 import { useToast } from '../context/ToastContext'
 import {
-    Search, FileClock, Eye, Pencil, Trash2, Loader2, Plus, Filter, Paperclip, MoreHorizontal, Archive, RotateCcw, Check,
+    Search, FileClock, Eye, Pencil, Trash2, Loader2, Plus, Filter, MoreHorizontal, Archive, RotateCcw, Check,
     ChevronLeft, ChevronRight, Download, X,
 } from 'lucide-react'
 import clsx from 'clsx'
@@ -22,7 +22,7 @@ import { PANEL_CARD_CLASS } from '../constants/invoice'
 import { useDebouncedValue } from '../hooks/useDebouncedValue'
 import { SectionHeading } from '../components/SectionHeading'
 
-const INVOICE_GRID_CLASS = 'md:min-w-[1100px] md:grid-cols-[40px_minmax(220px,2fr)_110px_120px_120px_minmax(160px,1.6fr)_140px_160px] md:gap-4';
+const INVOICE_GRID_TRACKS_CLASS = 'md:min-w-[1040px] md:grid-cols-[40px_minmax(210px,1.7fr)_max-content_minmax(150px,1.2fr)_minmax(150px,1.3fr)_max-content_max-content_144px] md:gap-x-4';
 
 // ─── Helpers ─────────────────────────────────────────────────
 
@@ -36,7 +36,14 @@ const RUPIAH_FORMATTER = new Intl.NumberFormat('id-ID', {
 const rupiah = (val: number) => RUPIAH_FORMATTER.format(val)
 const errorMessage = (error: unknown, fallback: string) => error instanceof Error ? error.message : fallback
 
-type PaymentTerm = { id?: string; label?: string; amount?: number }
+type PaymentTerm = { id?: string; label?: string; amount: number }
+
+type InvoiceMetadata = {
+    venue: string
+    eventDate: string
+    notes: string
+    paymentTerms: PaymentTerm[]
+}
 
 type InvoiceListItem = {
     id: number
@@ -65,27 +72,20 @@ type InvoiceListResponse = {
 
 type InvoiceListApiResponse = InvoiceListResponse | InvoiceListItem[]
 
+type InvoiceStats = {
+    total: number
+    totalRevenue: number
+    lunas: number
+    dp: number
+    unpaid: number
+}
+
 type InvoiceDetailData = InvoiceListItem & {
     paymentProofs?: string | string[] | null
     payment_proofs?: string | string[] | null
 }
 
 const EMPTY_INVOICES: InvoiceListItem[] = []
-
-function getPaymentProofCount(paymentProofs: unknown): number {
-    if (Array.isArray(paymentProofs)) return paymentProofs.length
-    if (typeof paymentProofs === 'string') {
-        const trimmed = paymentProofs.trim()
-        if (!trimmed) return 0
-        try {
-            const parsed = JSON.parse(trimmed)
-            return Array.isArray(parsed) ? parsed.length : 0
-        } catch {
-            return trimmed !== '[]' ? 1 : 0
-        }
-    }
-    return 0
-}
 
 function parsePaymentProofs(paymentProofs: unknown): string[] {
     if (Array.isArray(paymentProofs)) return paymentProofs.filter((proof): proof is string => typeof proof === 'string')
@@ -98,36 +98,63 @@ function parsePaymentProofs(paymentProofs: unknown): string[] {
     }
 }
 
-function extractNotes(invoiceData: unknown): string {
-    if (!invoiceData) return ''
+function asRecord(value: unknown): Record<string, unknown> {
+    return typeof value === 'object' && value !== null ? value as Record<string, unknown> : {}
+}
+
+function extractInvoiceMetadata(invoiceData: unknown, fallbackDate = ''): InvoiceMetadata {
+    if (!invoiceData) return { venue: '', eventDate: fallbackDate, notes: '', paymentTerms: [] }
     try {
         const data = typeof invoiceData === 'string' ? JSON.parse(invoiceData) : invoiceData
-        const notes = (data as { notes?: unknown })?.notes
-        if (typeof notes === 'string') return notes.trim()
-        if (notes == null) return ''
-        return String(notes).trim()
+        const root = asRecord(data)
+        const meta = asRecord(root.meta)
+        const value = (camel: string, snake: string) => root[camel] ?? root[snake] ?? meta[camel] ?? meta[snake]
+        const rawTerms = value('paymentTerms', 'payment_terms')
+        let paymentTerms: PaymentTerm[] = Array.isArray(rawTerms)
+            ? rawTerms.map((term) => {
+                const item = asRecord(term)
+                return {
+                    id: typeof item.id === 'string' ? item.id : undefined,
+                    label: typeof item.label === 'string' ? item.label : undefined,
+                    amount: Number(item.amount || 0),
+                }
+            })
+            : []
+
+        if (!paymentTerms.length) {
+            const legacy = Object.keys(meta).length ? meta : root
+            const legacyAmounts = [legacy.pay_dp1, legacy.pay_term2, legacy.pay_term3, legacy.pay_full]
+            if (legacyAmounts.some((amount) => Number(amount || 0) > 0)) {
+                paymentTerms = [
+                    { id: 'dp', label: 'Down Payment', amount: Number(legacy.pay_dp1 || 0) },
+                    { id: 't2', label: 'Payment 2', amount: Number(legacy.pay_term2 || 0) },
+                    { id: 't3', label: 'Payment 3', amount: Number(legacy.pay_term3 || 0) },
+                    { id: 'full', label: 'Pelunasan', amount: Number(legacy.pay_full || 0) },
+                ]
+            }
+        }
+
+        const text = (raw: unknown) => raw == null ? '' : String(raw).trim()
+        return {
+            venue: text(value('venue', 'venue')),
+            eventDate: text(value('weddingDate', 'wedding_date')) || fallbackDate,
+            notes: text(value('notes', 'notes')),
+            paymentTerms,
+        }
     } catch {
-        return ''
+        return { venue: '', eventDate: fallbackDate, notes: '', paymentTerms: [] }
     }
 }
 
-function deriveStatus(invoiceData: string | null | undefined): 'LUNAS' | 'DP' | 'DP+TERMIN' | 'UNPAID' {
-    if (!invoiceData) return 'UNPAID'
-    try {
-        const data = JSON.parse(invoiceData)
-        const terms: PaymentTerm[] = data.paymentTerms || []
-        if (!terms.length) return 'UNPAID'
+function deriveStatus(invoiceData: unknown): 'LUNAS' | 'DP' | 'DP+TERMIN' | 'UNPAID' {
+    const terms = extractInvoiceMetadata(invoiceData).paymentTerms
+    const pelunasan = terms.find(term => term.id === 'full' || term.label?.toLowerCase().includes('pelunasan'))
+    if (pelunasan && pelunasan.amount > 0) return 'LUNAS'
 
-        const pelunasan = terms.find(t => t.id === 'full' || (t.label && t.label.toLowerCase().includes('pelunasan')))
-        if (pelunasan && Number(pelunasan.amount || 0) > 0) return 'LUNAS'
-
-        const paidOthers = terms.filter(t => t.id !== 'full' && Number(t.amount || 0) > 0)
-        if (paidOthers.length > 1) return 'DP+TERMIN'
-        if (paidOthers.length === 1) return 'DP'
-        return 'UNPAID'
-    } catch {
-        return 'UNPAID'
-    }
+    const paidOthers = terms.filter(term => term.id !== 'full' && term.amount > 0)
+    if (paidOthers.length > 1) return 'DP+TERMIN'
+    if (paidOthers.length === 1) return 'DP'
+    return 'UNPAID'
 }
 
 const statusConfig = {
@@ -142,7 +169,7 @@ const statusConfig = {
 export default function InvoiceHistory() {
     const [search, setSearch] = useState('')
     const debouncedSearch = useDebouncedValue(search)
-    const [limit, setLimit] = useState(25)
+    const [limit, setLimit] = useState(10)
     const [page, setPage] = useState(1)
     const [selected, setSelected] = useState<Set<number>>(new Set())
     const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
@@ -157,11 +184,10 @@ export default function InvoiceHistory() {
     const [refineAmountMode, setRefineAmountMode] = useState<'all' | 'gt' | 'lt'>('all')
     const [refineAmountValue, setRefineAmountValue] = useState('')
     const [headerStatusFilters, setHeaderStatusFilters] = useState<Array<'lunas' | 'dp' | 'dp+termin' | 'unpaid'>>([])
-    const [headerProofFilters, setHeaderProofFilters] = useState<Array<'with' | 'without'>>([])
     const [headerNotesFilters, setHeaderNotesFilters] = useState<Array<'with' | 'without'>>([])
     const [headerDateSort, setHeaderDateSort] = useState<'none' | 'desc' | 'asc'>('none')
     const [headerAmountSort, setHeaderAmountSort] = useState<'none' | 'desc' | 'asc'>('none')
-    const [openHeaderMenu, setOpenHeaderMenu] = useState<null | 'date' | 'status' | 'proof' | 'notes' | 'amount'>(null)
+    const [openHeaderMenu, setOpenHeaderMenu] = useState<null | 'date' | 'status' | 'notes' | 'amount'>(null)
     const refineRef = useRef<HTMLDivElement>(null)
     const queryClient = useQueryClient()
     const navigate = useNavigate()
@@ -183,7 +209,7 @@ export default function InvoiceHistory() {
         return () => document.removeEventListener('mousedown', handleClickOutside)
     }, [])
 
-    const { data: stats, isLoading: statsLoading } = useQuery({
+    const { data: stats, isLoading: statsLoading } = useQuery<InvoiceStats>({
         queryKey: ['invoices', 'stats'],
         queryFn: async () => {
             const res = await fetchWithAuth('/invoices/stats')
@@ -356,15 +382,15 @@ export default function InvoiceHistory() {
 
     const parsedRefineAmount = Number(refineAmountValue.replace(/\D/g, ''))
 
-    const visibleInvoices = useMemo(() => {
+    const visibleInvoices = (() => {
         let rows = invoices.filter(inv => {
             const rawInvoiceData = inv.invoiceData || inv.invoice_data
             const isArchived = Boolean(inv.isArchived ?? inv.is_archived)
             const totalAmount = Number(inv.totalAmount ?? inv.total_amount ?? 0)
             const status = deriveStatus(rawInvoiceData).toLowerCase() as 'lunas' | 'dp' | 'dp+termin' | 'unpaid'
-            const notesText = extractNotes(rawInvoiceData)
+            const metadata = extractInvoiceMetadata(rawInvoiceData, inv.date ?? '')
+            const notesText = metadata.notes
             const hasNotes = notesText.length > 0
-            const proofCount = getPaymentProofCount(inv.paymentProofs ?? inv.payment_proofs)
 
             if (activeView === 'active' && isArchived) return false
             if (activeView === 'archived' && !isArchived) return false
@@ -374,13 +400,6 @@ export default function InvoiceHistory() {
             if (refineNotes === 'without' && hasNotes) return false
 
             if (headerStatusFilters.length > 0 && !headerStatusFilters.includes(status)) return false
-
-            const wantWithProof = headerProofFilters.includes('with')
-            const wantWithoutProof = headerProofFilters.includes('without')
-            if (wantWithProof !== wantWithoutProof) {
-                if (wantWithProof && proofCount === 0) return false
-                if (wantWithoutProof && proofCount > 0) return false
-            }
 
             const wantWithNotes = headerNotesFilters.includes('with')
             const wantWithoutNotes = headerNotesFilters.includes('without')
@@ -399,8 +418,8 @@ export default function InvoiceHistory() {
 
         if (headerDateSort !== 'none') {
             rows = [...rows].sort((a, b) => {
-                const aDate = new Date(a.date ?? 0).getTime()
-                const bDate = new Date(b.date ?? 0).getTime()
+                const aDate = new Date(extractInvoiceMetadata(a.invoiceData ?? a.invoice_data, a.date ?? '').eventDate || 0).getTime()
+                const bDate = new Date(extractInvoiceMetadata(b.invoiceData ?? b.invoice_data, b.date ?? '').eventDate || 0).getTime()
                 return headerDateSort === 'desc' ? bDate - aDate : aDate - bDate
             })
         } else if (headerAmountSort !== 'none') {
@@ -412,14 +431,13 @@ export default function InvoiceHistory() {
         }
 
         return rows
-    }, [invoices, activeView, refineStatus, refineNotes, refineAmountMode, parsedRefineAmount, headerStatusFilters, headerProofFilters, headerNotesFilters, headerDateSort, headerAmountSort])
+    })()
 
     const hasRefineFilters =
         refineStatus !== 'all' ||
         refineNotes !== 'all' ||
         (refineAmountMode !== 'all' && parsedRefineAmount > 0) ||
         headerStatusFilters.length > 0 ||
-        headerProofFilters.length > 0 ||
         headerNotesFilters.length > 0 ||
         headerDateSort !== 'none' ||
         headerAmountSort !== 'none'
@@ -430,7 +448,6 @@ export default function InvoiceHistory() {
         setRefineAmountMode('all')
         setRefineAmountValue('')
         setHeaderStatusFilters([])
-        setHeaderProofFilters([])
         setHeaderNotesFilters([])
         setHeaderDateSort('none')
         setHeaderAmountSort('none')
@@ -491,6 +508,33 @@ export default function InvoiceHistory() {
                                 <Plus size={16} />
                                 Create Invoice
                             </button>
+                        </div>
+                    </div>
+                </div>
+
+                {/* Billing Summary */}
+                <div className="grid grid-cols-2 gap-y-5 rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)]/30 px-5 py-5 sm:grid-cols-3 xl:grid-cols-[130px_130px_130px_150px_minmax(230px,1fr)]">
+                    {[
+                        { label: 'Total', value: stats?.total ?? 0, valueClass: 'text-[var(--text-primary)]' },
+                        { label: 'Lunas', value: stats?.lunas ?? 0, valueClass: 'text-emerald-500' },
+                        { label: 'DP', value: stats?.dp ?? 0, valueClass: 'text-sky-500' },
+                        { label: 'Unpaid', value: stats?.unpaid ?? 0, valueClass: 'text-rose-500' },
+                    ].map((item, index) => (
+                        <div key={item.label} className={clsx('min-w-0 px-4', index > 0 && 'border-l border-[var(--border)]')}>
+                            <div className="label-xs text-[var(--text-muted)]">
+                                {item.label}
+                            </div>
+                            <div className={clsx('mt-1 font-display text-2xl font-medium tracking-tight tabular-nums', item.valueClass)}>
+                                {statsLoading ? '—' : item.value.toLocaleString('id-ID')}
+                            </div>
+                        </div>
+                    ))}
+                    <div className="col-span-2 min-w-0 border-l border-[var(--border)] px-5 sm:col-span-2 xl:col-span-1">
+                        <div className="label-xs text-[var(--text-muted)]">
+                            Est. Revenue
+                        </div>
+                        <div className="mt-1 truncate font-display text-2xl font-medium tracking-tight tabular-nums text-[var(--accent)]">
+                            {statsLoading ? '—' : rupiah(stats?.totalRevenue ?? 0)}
                         </div>
                     </div>
                 </div>
@@ -709,11 +753,6 @@ export default function InvoiceHistory() {
                                         Status (Multi): {headerStatusFilters.join(', ')}
                                     </span>
                                 )}
-                                {headerProofFilters.length > 0 && (
-                                    <span className="inline-flex items-center px-2.5 py-1 rounded-lg text-[10px] font-bold uppercase tracking-[0.14em] border border-[var(--border)] text-[var(--text-secondary)] bg-[var(--bg-elevated)]">
-                                        Proof (Multi): {headerProofFilters.join(', ')}
-                                    </span>
-                                )}
                                 {headerNotesFilters.length > 0 && (
                                     <span className="inline-flex items-center px-2.5 py-1 rounded-lg text-[10px] font-bold uppercase tracking-[0.14em] border border-[var(--border)] text-[var(--text-secondary)] bg-[var(--bg-elevated)]">
                                         Notes (Multi): {headerNotesFilters.join(', ')}
@@ -744,8 +783,9 @@ export default function InvoiceHistory() {
                     />
 
                     <div className="overflow-x-auto rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)]/10">
+                    <div className={clsx('grid grid-cols-1', INVOICE_GRID_TRACKS_CLASS)}>
                     {/* Table Header */}
-                    <div className={clsx('hidden md:grid px-6 py-3.5 border-b border-[var(--border)] bg-[var(--bg-elevated)]/30', INVOICE_GRID_CLASS)}>
+                    <div className="hidden px-6 py-3.5 border-b border-[var(--border)] bg-[var(--bg-elevated)]/30 md:col-span-full md:grid md:grid-cols-subgrid">
                         {canDelete ? (
                             <div className="flex items-center">
                                 <input
@@ -760,25 +800,7 @@ export default function InvoiceHistory() {
                             </div>
                         ) : <div />}
 
-                        <div className={clsx(TABLE_HEAD_TEXT_CLASS, 'text-left')} style={{ fontFamily: 'var(--font-body)' }}>Invoice</div>
-
-                        <div className="relative" onClick={(e) => e.stopPropagation()}>
-                            <button
-                                onClick={() => setOpenHeaderMenu((prev) => (prev === 'date' ? null : 'date'))}
-                                className={clsx(TABLE_HEAD_TEXT_CLASS, 'w-full justify-center flex items-center gap-1.5 hover:text-[var(--text-primary)]')}
-                                style={{ fontFamily: 'var(--font-body)' }}
-                            >
-                                Date
-                                <span className="text-[9px]">{headerDateSort === 'desc' ? 'Newest' : headerDateSort === 'asc' ? 'Oldest' : 'Any'}</span>
-                            </button>
-                            {openHeaderMenu === 'date' && (
-                                <div className="absolute left-0 top-full mt-1 z-[80] min-w-[140px] rounded-lg border border-[var(--border)] bg-[var(--bg-card)] p-1.5">
-                                    <button onClick={() => { setHeaderDateSort('none'); setOpenHeaderMenu(null) }} className={clsx("w-full text-left px-2.5 py-2 text-xs rounded hover:bg-[var(--bg-elevated)] flex items-center justify-between", headerDateSort === 'none' && "text-[var(--text-primary)]")}>Any Date {headerDateSort === 'none' && <Check size={12} className="text-[var(--accent)]" />}</button>
-                                    <button onClick={() => { setHeaderDateSort('desc'); setOpenHeaderMenu(null) }} className={clsx("w-full text-left px-2.5 py-2 text-xs rounded hover:bg-[var(--bg-elevated)] flex items-center justify-between", headerDateSort === 'desc' && "text-[var(--text-primary)]")}>Newest {headerDateSort === 'desc' && <Check size={12} className="text-[var(--accent)]" />}</button>
-                                    <button onClick={() => { setHeaderDateSort('asc'); setOpenHeaderMenu(null) }} className={clsx("w-full text-left px-2.5 py-2 text-xs rounded hover:bg-[var(--bg-elevated)] flex items-center justify-between", headerDateSort === 'asc' && "text-[var(--text-primary)]")}>Oldest {headerDateSort === 'asc' && <Check size={12} className="text-[var(--accent)]" />}</button>
-                                </div>
-                            )}
-                        </div>
+                        <div className={clsx(TABLE_HEAD_TEXT_CLASS, 'text-left')} style={{ fontFamily: 'var(--font-body)' }}>Invoice No</div>
 
                         <div className="relative" onClick={(e) => e.stopPropagation()}>
                             <button
@@ -787,7 +809,7 @@ export default function InvoiceHistory() {
                                 style={{ fontFamily: 'var(--font-body)' }}
                             >
                                 Status
-                                <span className="text-[9px]">{headerStatusFilters.length === 0 ? 'Any' : `${headerStatusFilters.length} selected`}</span>
+                                {headerStatusFilters.length > 0 && <span className="text-[9px]">{headerStatusFilters.length} selected</span>}
                             </button>
                             {openHeaderMenu === 'status' && (
                                 <div className="absolute left-0 top-full mt-1 z-[80] min-w-[170px] rounded-lg border border-[var(--border)] bg-[var(--bg-card)] p-1.5">
@@ -809,34 +831,7 @@ export default function InvoiceHistory() {
                             )}
                         </div>
 
-                        <div className="relative" onClick={(e) => e.stopPropagation()}>
-                            <button
-                                onClick={() => setOpenHeaderMenu((prev) => (prev === 'proof' ? null : 'proof'))}
-                                className={clsx(TABLE_HEAD_TEXT_CLASS, 'w-full justify-center flex items-center gap-1.5 hover:text-[var(--text-primary)]')}
-                                style={{ fontFamily: 'var(--font-body)' }}
-                            >
-                                Proof
-                                <span className="text-[9px]">{headerProofFilters.length === 0 ? 'Any' : `${headerProofFilters.length} selected`}</span>
-                            </button>
-                            {openHeaderMenu === 'proof' && (
-                                <div className="absolute left-0 top-full mt-1 z-[80] min-w-[140px] rounded-lg border border-[var(--border)] bg-[var(--bg-card)] p-1.5">
-                                    <button onClick={() => { setHeaderProofFilters([]); setOpenHeaderMenu(null) }} className="w-full text-left px-2.5 py-2 text-xs rounded hover:bg-[var(--bg-elevated)]">Clear Multi</button>
-                                    {(['with', 'without'] as const).map((proofKey) => {
-                                        const active = headerProofFilters.includes(proofKey)
-                                        return (
-                                            <button
-                                                key={proofKey}
-                                                onClick={() => setHeaderProofFilters((prev) => prev.includes(proofKey) ? prev.filter((s) => s !== proofKey) : [...prev, proofKey])}
-                                                className={clsx("w-full text-left px-2.5 py-2 text-xs rounded hover:bg-[var(--bg-elevated)] flex items-center justify-between", active && "text-[var(--text-primary)]")}
-                                            >
-                                                <span>{proofKey === 'with' ? 'With Proof' : 'Without Proof'}</span>
-                                                {active && <Check size={12} className="text-[var(--accent)]" />}
-                                            </button>
-                                        )
-                                    })}
-                                </div>
-                            )}
-                        </div>
+                        <div className={clsx(TABLE_HEAD_TEXT_CLASS, 'text-center')} style={{ fontFamily: 'var(--font-body)' }}>Venue</div>
 
                         <div className="relative" onClick={(e) => e.stopPropagation()}>
                             <button
@@ -845,7 +840,7 @@ export default function InvoiceHistory() {
                                 style={{ fontFamily: 'var(--font-body)' }}
                             >
                                 Notes
-                                <span className="text-[9px]">{headerNotesFilters.length === 0 ? 'Any' : `${headerNotesFilters.length} selected`}</span>
+                                {headerNotesFilters.length > 0 && <span className="text-[9px]">{headerNotesFilters.length} selected</span>}
                             </button>
                             {openHeaderMenu === 'notes' && (
                                 <div className="absolute left-0 top-full mt-1 z-[80] min-w-[140px] rounded-lg border border-[var(--border)] bg-[var(--bg-card)] p-1.5">
@@ -869,12 +864,30 @@ export default function InvoiceHistory() {
 
                         <div className="relative" onClick={(e) => e.stopPropagation()}>
                             <button
+                                onClick={() => setOpenHeaderMenu((prev) => (prev === 'date' ? null : 'date'))}
+                                className={clsx(TABLE_HEAD_TEXT_CLASS, 'w-full justify-center flex items-center gap-1.5 hover:text-[var(--text-primary)]')}
+                                style={{ fontFamily: 'var(--font-body)' }}
+                            >
+                                Event Date
+                                {headerDateSort !== 'none' && <span className="text-[9px]">{headerDateSort === 'desc' ? 'Newest' : 'Oldest'}</span>}
+                            </button>
+                            {openHeaderMenu === 'date' && (
+                                <div className="absolute right-0 top-full mt-1 z-[80] min-w-[140px] rounded-lg border border-[var(--border)] bg-[var(--bg-card)] p-1.5">
+                                    <button onClick={() => { setHeaderDateSort('none'); setOpenHeaderMenu(null) }} className={clsx("w-full text-left px-2.5 py-2 text-xs rounded hover:bg-[var(--bg-elevated)] flex items-center justify-between", headerDateSort === 'none' && "text-[var(--text-primary)]")}>Any Date {headerDateSort === 'none' && <Check size={12} className="text-[var(--accent)]" />}</button>
+                                    <button onClick={() => { setHeaderDateSort('desc'); setOpenHeaderMenu(null) }} className={clsx("w-full text-left px-2.5 py-2 text-xs rounded hover:bg-[var(--bg-elevated)] flex items-center justify-between", headerDateSort === 'desc' && "text-[var(--text-primary)]")}>Newest {headerDateSort === 'desc' && <Check size={12} className="text-[var(--accent)]" />}</button>
+                                    <button onClick={() => { setHeaderDateSort('asc'); setOpenHeaderMenu(null) }} className={clsx("w-full text-left px-2.5 py-2 text-xs rounded hover:bg-[var(--bg-elevated)] flex items-center justify-between", headerDateSort === 'asc' && "text-[var(--text-primary)]")}>Oldest {headerDateSort === 'asc' && <Check size={12} className="text-[var(--accent)]" />}</button>
+                                </div>
+                            )}
+                        </div>
+
+                        <div className="relative" onClick={(e) => e.stopPropagation()}>
+                            <button
                                 onClick={() => setOpenHeaderMenu((prev) => (prev === 'amount' ? null : 'amount'))}
                                 className={clsx(TABLE_HEAD_TEXT_CLASS, 'text-right flex items-center justify-end gap-1.5 hover:text-[var(--text-primary)]')}
                                 style={{ fontFamily: 'var(--font-body)' }}
                             >
                                 Amount
-                                <span className="text-[9px]">{headerAmountSort === 'desc' ? 'Highest' : headerAmountSort === 'asc' ? 'Lowest' : 'Any'}</span>
+                                {headerAmountSort !== 'none' && <span className="text-[9px]">{headerAmountSort === 'desc' ? 'Highest' : 'Lowest'}</span>}
                             </button>
                             {openHeaderMenu === 'amount' && (
                                 <div className="absolute right-0 top-full mt-1 z-[80] min-w-[150px] rounded-lg border border-[var(--border)] bg-[var(--bg-card)] p-1.5">
@@ -889,12 +902,12 @@ export default function InvoiceHistory() {
                     </div>
                     {/* Rows */}
                     {listLoading ? (
-                        <div className="flex items-center justify-center py-24 gap-3">
+                        <div className="flex items-center justify-center py-24 gap-3 md:col-span-full">
                             <Loader2 size={24} className="animate-spin text-[var(--accent)]" />
                             <span className="text-xs uppercase tracking-[0.2em] font-medium text-[var(--text-muted)] font-sans" style={{ fontFamily: 'var(--font-body)' }}>Loading Invoices...</span>
                         </div>
                     ) : visibleInvoices.length === 0 ? (
-                        <div className="text-center py-24 text-[var(--text-muted)]">
+                        <div className="text-center py-24 text-[var(--text-muted)] md:col-span-full">
                             <div className="w-12 h-12 bg-[var(--bg-elevated)] rounded-full flex items-center justify-center mx-auto mb-4 border border-[var(--border)]">
                                 <FileClock className="opacity-40" size={24} />
                             </div>
@@ -902,7 +915,7 @@ export default function InvoiceHistory() {
                             <p className="text-[10px] mt-1 opacity-60 uppercase tracking-widest font-sans" style={{ fontFamily: 'var(--font-body)' }}>Create your first invoice to get started!</p>
                         </div>
                     ) : (
-                        <div className="divide-y divide-[var(--border)]/60">
+                        <div className="divide-y divide-[var(--border)]/60 md:col-span-full md:grid md:grid-cols-subgrid">
                             {visibleInvoices.map((inv, idx) => {
                                 const rawInvoiceData = inv.invoiceData || inv.invoice_data
                                 const status = deriveStatus(rawInvoiceData)
@@ -913,21 +926,21 @@ export default function InvoiceHistory() {
                                     .split(' ')
                                     .map((w: string) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
                                     .join(' ')
-                                const date = inv.date ?? '-'
+                                const metadata = extractInvoiceMetadata(rawInvoiceData, inv.date ?? '')
+                                const venue = metadata.venue || '-'
+                                const eventDate = metadata.eventDate || '-'
                                 const id = inv.id
                                 const isChecked = selected.has(id)
                                 const isArchived = Boolean(inv.isArchived ?? inv.is_archived)
                                 const canArchive = status === 'LUNAS'
-                                const proofCount = getPaymentProofCount(inv.paymentProofs ?? inv.payment_proofs)
-                                const notesText = extractNotes(rawInvoiceData)
+                                const notesText = metadata.notes
                                 const notesExists = notesText.length > 0
 
                                 return (
                                     <div
                                         key={id}
                                         className={clsx(
-                                            "group relative grid min-w-0 grid-cols-1 gap-3 px-6 py-4 md:py-5 transition-colors",
-                                            INVOICE_GRID_CLASS,
+                                            "group relative grid min-w-0 grid-cols-1 gap-y-3 px-6 py-4 transition-colors md:col-span-full md:grid-cols-subgrid md:py-5",
                                             idx % 2 === 0 ? "bg-transparent" : "bg-[var(--bg-elevated)]/15",
                                             isChecked ? "bg-rose-500/5" : "hover:bg-[var(--bg-elevated)]/35"
                                         )}
@@ -960,13 +973,6 @@ export default function InvoiceHistory() {
                                             </span>
                                         </div>
 
-                                        {/* Date */}
-                                        <div className="flex items-center justify-center">
-                                            <span className="text-[11px] tabular-nums text-[var(--text-muted)] font-sans opacity-90" style={{ fontFamily: 'var(--font-body)' }}>
-                                                {date}
-                                            </span>
-                                        </div>
-
                                         {/* Status */}
                                         <div className="flex items-center justify-center">
                                             <span className={clsx(
@@ -977,11 +983,10 @@ export default function InvoiceHistory() {
                                             </span>
                                         </div>
 
-                                        {/* Proof */}
-                                        <div className="flex items-center justify-center">
-                                            <span className="inline-flex items-center gap-1 text-[10px] font-medium uppercase tracking-[0.12em] text-[var(--text-secondary)] whitespace-nowrap">
-                                                <Paperclip size={12} className="text-[var(--text-muted)]" />
-                                                {`${proofCount} LEMBAR`}
+                                        {/* Venue */}
+                                        <div className="flex min-w-0 items-center justify-center">
+                                            <span className="block w-full truncate text-center text-xs text-[var(--text-secondary)]" title={venue}>
+                                                {venue}
                                             </span>
                                         </div>
 
@@ -998,6 +1003,13 @@ export default function InvoiceHistory() {
                                                 title={notesExists ? notesText : undefined}
                                             >
                                                 {notesExists ? notesText : '-'}
+                                            </span>
+                                        </div>
+
+                                        {/* Event Date */}
+                                        <div className="flex items-center justify-center">
+                                            <span className="text-[11px] tabular-nums text-[var(--text-muted)] font-sans opacity-90" style={{ fontFamily: 'var(--font-body)' }}>
+                                                {eventDate}
                                             </span>
                                         </div>
 
@@ -1106,6 +1118,7 @@ export default function InvoiceHistory() {
                             })}
                         </div>
                     )}
+                    </div>
                     </div>
 
                 {/* Pagination */}

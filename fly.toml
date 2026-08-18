@@ -13,6 +13,8 @@ primary_region = "sin"
   # SUPABASE_DB_URL/DATABASE_URL is missing instead of silently creating SQLite.
   DATABASE_DRIVER = "postgres"
   STATIC_DIR = "/app/client/dist"
+  FEEDBACK_RATE_LIMIT_WINDOW_MS = "3600000"
+  FEEDBACK_RATE_LIMIT_MAX = "5"
   # Set this to the final public Fly hostname after `fly apps create`.
   ALLOWED_ORIGINS = "https://invoice-web-v2.fly.dev"
 

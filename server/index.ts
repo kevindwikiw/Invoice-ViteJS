@@ -8,10 +8,12 @@ import invoicesRoutes from "./routes/invoices";
 import configRoutes from "./routes/config";
 import analyticsRoutes from "./routes/analytics";
 import sequencesRoutes from "./routes/sequences";
-import { authMiddleware } from "./middleware/auth";
+import { feedbackAdminRoutes, publicFeedbackRoutes } from "./routes/feedback";
+import { authMiddleware, requireRole } from "./middleware/auth";
 import { loginRateLimiter } from "./middleware/rate-limit";
 import { ensureUserPermissionsTable } from "./permissions";
 import { databaseDriver, sqlite } from "./db/runtime";
+import { feedbackStorageDriver } from "./db/feedback";
 
 type AuthUser = {
     sub: number;
@@ -69,6 +71,26 @@ try {
         ON invoice_activity_logs(invoice_id, created_at DESC)
     `);
     sqlite.run("CREATE TABLE IF NOT EXISTS app_config (key TEXT PRIMARY KEY, value TEXT)");
+    sqlite.run(`
+        CREATE TABLE IF NOT EXISTS feedback (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            invoice_id INTEGER REFERENCES invoices(id) ON DELETE SET NULL,
+            invoice_no TEXT NOT NULL,
+            client_name TEXT,
+            rating INTEGER NOT NULL CHECK(rating BETWEEN 1 AND 5),
+            tags TEXT NOT NULL DEFAULT '[]',
+            message TEXT NOT NULL,
+            photo_data BLOB,
+            photo_mime TEXT,
+            photo_size INTEGER,
+            status TEXT NOT NULL DEFAULT 'new' CHECK(status IN ('new', 'reviewed')),
+            reviewed_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+            reviewed_at TIMESTAMP,
+            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+    `);
+    sqlite.run("CREATE INDEX IF NOT EXISTS idx_feedback_status_created_at ON feedback(status, created_at DESC)");
+    sqlite.run("CREATE INDEX IF NOT EXISTS idx_feedback_invoice_no ON feedback(invoice_no)");
     ensureUserPermissionsTable(sqlite);
 } catch (error) {
     console.error("Database initialization failed:", error);
@@ -77,6 +99,7 @@ try {
 } else {
     console.log("Postgres mode enabled; expecting the Supabase migration to be applied.");
 }
+console.log(`Feedback storage mode: ${feedbackStorageDriver}`);
 
 const app = new Hono<AppEnv>();
 const allowedOrigins = (
@@ -101,6 +124,7 @@ app.get("/healthz", (c) => c.json({ ok: true }));
 app.post("/api/auth/login", loginRateLimiter);
 app.use("/api/auth/me", authMiddleware);
 app.route("/api/auth", authRoutes);
+app.route("/api/public/feedback", publicFeedbackRoutes);
 
 for (const path of [
     "/api/packages",
@@ -109,6 +133,7 @@ for (const path of [
     "/api/config",
     "/api/analytics",
     "/api/sequences",
+    "/api/feedback",
 ]) {
     app.use(path, authMiddleware);
     app.use(`${path}/*`, authMiddleware);
@@ -120,6 +145,9 @@ app.route("/api/users", usersRoutes);
 app.route("/api/config", configRoutes);
 app.route("/api/analytics", analyticsRoutes);
 app.route("/api/sequences", sequencesRoutes);
+app.use("/api/feedback", requireRole("admin", "superadmin"));
+app.use("/api/feedback/*", requireRole("admin", "superadmin"));
+app.route("/api/feedback", feedbackAdminRoutes);
 
 // In production the API and the Rsbuild output are served from one Fly app.
 // Keeping the SPA fallback here makes direct refreshes such as /history work

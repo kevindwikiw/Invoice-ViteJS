@@ -15,6 +15,7 @@ import {
     ClipboardList,
     ChevronLeft,
     ChevronRight,
+    MessageSquare,
     type LucideIcon,
 } from 'lucide-react';
 import clsx from 'clsx';
@@ -154,6 +155,7 @@ const SidebarNavigation = memo(function SidebarNavigation({
                                 <div className="mb-4 mt-10 px-5"><span className="text-[10px] font-black uppercase tracking-[0.2em] text-[var(--accent)] opacity-50">Administration</span></div>
                                 <SidebarItem to="/users" icon={Users} label="Team & Access" onClick={closeMobileSidebar} />
                                 <SidebarItem to="/activity" icon={ClipboardList} label="Audit Logs" onClick={closeMobileSidebar} />
+                                <SidebarItem to="/feedback-inbox" icon={MessageSquare} label="Feedback Inbox" onClick={closeMobileSidebar} />
                             </>
                         )}
                     </nav>

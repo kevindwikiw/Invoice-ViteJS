@@ -265,7 +265,7 @@ export default function InvoiceActivity() {
             <button
                 type="button"
                 onClick={() => setScope('invoice')}
-                className={clsx('whitespace-nowrap rounded-xl px-4 py-1.5 text-[10px] font-medium uppercase tracking-[0.2em] transition-all', scope === 'invoice' ? 'bg-[var(--bg-hover)] font-bold text-[var(--text-primary)] shadow-sm' : 'text-[var(--text-muted)] hover:text-[var(--text-secondary)]')}
+                className={clsx('whitespace-nowrap rounded-xl px-4 py-1.5 text-xs font-medium tracking-[0.08em] transition-colors', scope === 'invoice' ? 'bg-[var(--bg-hover)] font-semibold text-[var(--text-primary)] shadow-sm' : 'text-[var(--text-muted)] hover:text-[var(--text-secondary)]')}
             >
                 Invoice activity
             </button>
@@ -273,7 +273,7 @@ export default function InvoiceActivity() {
                 <button
                     type="button"
                     onClick={() => setScope('user')}
-                    className={clsx('whitespace-nowrap rounded-xl px-4 py-1.5 text-[10px] font-medium uppercase tracking-[0.2em] transition-all', scope === 'user' ? 'bg-[var(--bg-hover)] font-bold text-[var(--text-primary)] shadow-sm' : 'text-[var(--text-muted)] hover:text-[var(--text-secondary)]')}
+                    className={clsx('whitespace-nowrap rounded-xl px-4 py-1.5 text-xs font-medium tracking-[0.08em] transition-colors', scope === 'user' ? 'bg-[var(--bg-hover)] font-semibold text-[var(--text-primary)] shadow-sm' : 'text-[var(--text-muted)] hover:text-[var(--text-secondary)]')}
                 >
                     User activity
                 </button>

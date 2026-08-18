@@ -192,4 +192,26 @@ if (!seq) {
 }
 console.log("Table 'sequences' ready.");
 
+db.run(`
+  CREATE TABLE IF NOT EXISTS feedback (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    invoice_id INTEGER REFERENCES invoices(id) ON DELETE SET NULL,
+    invoice_no TEXT NOT NULL,
+    client_name TEXT,
+    rating INTEGER NOT NULL CHECK(rating BETWEEN 1 AND 5),
+    tags TEXT NOT NULL DEFAULT '[]',
+    message TEXT NOT NULL,
+    photo_data BLOB,
+    photo_mime TEXT,
+    photo_size INTEGER,
+    status TEXT NOT NULL DEFAULT 'new' CHECK(status IN ('new', 'reviewed')),
+    reviewed_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    reviewed_at TIMESTAMP,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+  )
+`);
+db.run("CREATE INDEX IF NOT EXISTS idx_feedback_status_created_at ON feedback(status, created_at DESC)");
+db.run("CREATE INDEX IF NOT EXISTS idx_feedback_invoice_no ON feedback(invoice_no)");
+console.log("Table 'feedback' ready.");
+
 console.log(`Database initialized successfully at ${dbPath}`);

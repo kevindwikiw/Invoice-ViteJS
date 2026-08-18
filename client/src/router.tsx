@@ -9,6 +9,8 @@ const InvoiceHistoryRoute = lazyRouteComponent(() => import('./pages/InvoiceHist
 const UserManagementRoute = lazyRouteComponent(() => import('./pages/UserManagement'))
 const AnalyticsRoute = lazyRouteComponent(() => import('./pages/Analytics'))
 const InvoiceActivityRoute = lazyRouteComponent(() => import('./pages/InvoiceActivity'))
+const FeedbackRoute = lazyRouteComponent(() => import('./pages/Feedback'))
+const FeedbackInboxRoute = lazyRouteComponent(() => import('./pages/FeedbackInbox'))
 
 // Root route - Just the shell
 const rootRoute = createRootRoute({
@@ -27,6 +29,12 @@ const loginRoute = createRoute({
     getParentRoute: () => rootRoute,
     path: '/login',
     component: LoginRoute,
+})
+
+const feedbackRoute = createRoute({
+    getParentRoute: () => rootRoute,
+    path: '/feedback',
+    component: FeedbackRoute,
 })
 
 // App Routes (Children of GlobalSidebar/Layout)
@@ -76,9 +84,16 @@ const auditLogsRoute = createRoute({
     component: InvoiceActivityRoute,
 })
 
+const feedbackInboxRoute = createRoute({
+    getParentRoute: () => layoutRoute,
+    path: '/feedback-inbox',
+    component: FeedbackInboxRoute,
+})
+
 // Build Tree
 const routeTree = rootRoute.addChildren([
     loginRoute,
+    feedbackRoute,
     layoutRoute.addChildren([
         indexRoute,
         createInvoiceRoute,
@@ -86,7 +101,8 @@ const routeTree = rootRoute.addChildren([
         historyRoute,
         analyticsRoute,
         auditLogsRoute,
-        userManagementRoute
+        userManagementRoute,
+        feedbackInboxRoute,
     ])
 ])
 

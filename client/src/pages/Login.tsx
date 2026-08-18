@@ -52,7 +52,7 @@ export default function Login() {
 
     return (
         <div
-            className="blackhole-interaction-shell min-h-screen w-full flex flex-col lg:flex-row bg-[var(--bg-deep)] text-[var(--text-primary)]"
+            className="blackhole-interaction-shell min-h-screen w-full flex flex-col lg:flex-row text-[var(--text-primary)]"
         >
 
             {/* Theme Toggle — top right corner */}
@@ -65,11 +65,11 @@ export default function Login() {
             </button>
 
             {/* Left Side: Lazy Loaded Black Hole Hero */}
-            <div className="relative flex h-[280px] sm:h-[320px] lg:h-auto lg:min-h-screen w-full flex-col lg:w-3/5 p-3 sm:p-4 lg:p-8 shrink-0 lg:shrink">
-                <Suspense fallback={<div className="h-full w-full flex-1 rounded-2xl lg:rounded-3xl bg-[var(--bg-elevated)]/30 border border-[var(--border)] animate-pulse" />}>
+            <div className="relative flex h-[280px] w-full shrink-0 flex-col sm:h-[320px] lg:h-auto lg:min-h-screen lg:w-3/5 lg:shrink">
+                <Suspense fallback={<div className="h-full w-full flex-1 bg-transparent" />}>
                     <BlackHoleHero
                         contentClassName="pt-14 sm:pt-16 lg:pt-0"
-                        className={`h-full w-full flex-1 overflow-hidden transition-[box-shadow,border-radius] duration-300 ${darkMode ? 'rounded-2xl lg:rounded-3xl shadow-2xl' : 'rounded-none'}`}
+                        className="h-full w-full flex-1 overflow-hidden"
                     />
                 </Suspense>
 
