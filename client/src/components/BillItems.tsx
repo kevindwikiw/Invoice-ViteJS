@@ -87,7 +87,7 @@ export function BillItems({
             ) : (
                 <>
                     {/* Table Header (Desktop) */}
-                    <div className="hidden md:grid grid-cols-[1fr_80px_180px_40px] gap-4 border-b border-[var(--border)] bg-[var(--bg-elevated)]/30 px-2 py-3 text-[10px] font-bold uppercase tracking-[0.2em] text-[var(--text-muted)]">
+                    <div className="hidden md:grid grid-cols-[minmax(0,1fr)_56px_160px_32px] gap-3 border-b border-[var(--border)] bg-[var(--bg-elevated)]/30 px-2 py-3 text-[10px] font-bold uppercase tracking-[0.2em] text-[var(--text-muted)]">
                         <div className="pl-7 text-left">Service / Item</div>
                         <div className="text-center">Qty</div>
                         <div className="text-center">Price</div>
@@ -112,7 +112,7 @@ export function BillItems({
                         {items.map(item => (
                             <div key={item.id}>
                                 {/* Desktop View */}
-                                <div className="grid grid-cols-[1fr_80px_180px_40px] gap-4 py-3 border-b border-[var(--border)]/60 items-center hover:bg-[var(--bg-elevated)]/35 px-2 transition-colors group relative hover:z-[50]">
+                                <div className="grid grid-cols-[minmax(0,1fr)_56px_160px_32px] gap-3 py-3 border-b border-[var(--border)]/60 items-center hover:bg-[var(--bg-elevated)]/35 px-2 transition-colors group relative hover:z-[50]">
                                     <div className="flex items-start gap-2">
                                         <div className="pt-1">
                                             {!item.isBundle ? (
@@ -139,7 +139,7 @@ export function BillItems({
                                                     value={item.desc}
                                                     onChange={(e) => updateItem(item.id, 'desc', e.target.value)}
                                                     className={clsx(
-                                                        "w-full bg-transparent border-none p-0 text-sm focus:ring-0 placeholder-[var(--text-muted)] leading-tight font-display",
+                                                        "w-full !h-auto !min-h-0 !border-0 !bg-transparent !p-0 !shadow-none !ring-0 focus:!ring-0 text-sm placeholder-[var(--text-muted)] leading-tight font-display",
                                                         item.isBundle ? "text-[var(--accent)] font-semibold" : "text-[var(--text-primary)] font-semibold"
                                                     )}
                                                 />
@@ -180,10 +180,10 @@ export function BillItems({
                                     <div className="text-center text-sm font-medium text-[var(--text-primary)]">
                                         {item.qty}
                                     </div>
-                                    <div className="flex h-8 items-center justify-end px-2">
+                                    <div className="flex h-8 items-center justify-end px-1">
                                         <div className="flex items-center gap-2">
                                             <span className="w-5 shrink-0 text-right text-[10px] font-bold text-[var(--accent)] opacity-60">Rp</span>
-                                            <span className="w-28 text-right text-sm font-medium tabular-nums text-[var(--text-primary)] font-display">
+                                            <span className="w-24 text-right text-sm font-medium tabular-nums text-[var(--text-primary)] font-display">
                                                 {item.price.toLocaleString('id-ID')}
                                             </span>
                                         </div>
@@ -234,7 +234,7 @@ export function BillItems({
                                                 value={item.desc}
                                                 onChange={(e) => updateItem(item.id, 'desc', e.target.value)}
                                                 className={clsx(
-                                                    "w-full bg-transparent border-none p-0 text-sm focus:ring-0 placeholder-[var(--text-muted)]",
+                                                    "w-full !h-auto !min-h-0 !border-0 !bg-transparent !p-0 !shadow-none !ring-0 focus:!ring-0 text-sm placeholder-[var(--text-muted)]",
                                                     item.isBundle ? "text-[var(--accent)] font-medium" : "text-[var(--text-primary)] font-medium"
                                                 )}
                                             />
@@ -279,14 +279,14 @@ export function BillItems({
                     {/* Totals Section */}
                     <div className="mt-8 pt-6 border-t border-[var(--border)]/70">
                         <div className="space-y-5">
-                            <div className="grid grid-cols-[1fr_80px_180px_40px] gap-4 px-2 items-center">
+                            <div className="grid grid-cols-[minmax(0,1fr)_56px_160px_32px] gap-3 px-2 items-center">
                                 <div className="col-span-2 text-right pr-6">
                                     <span className="text-[10px] font-bold uppercase tracking-[0.2em] text-[var(--text-muted)]">Subtotal</span>
                                 </div>
-                                <div className="flex h-8 w-[180px] items-center justify-end px-2">
+                                <div className="flex h-8 w-[160px] items-center justify-end px-2">
                                     <div className="flex items-center gap-2">
                                         <span className="w-5 shrink-0 text-right text-[10px] font-bold text-[var(--accent)] opacity-60">Rp</span>
-                                        <span className="w-28 text-right text-sm font-medium tabular-nums text-[var(--text-primary)] font-display">
+                                        <span className="w-24 text-right text-sm font-medium tabular-nums text-[var(--text-primary)] font-display">
                                             {subtotal.toLocaleString('id-ID')}
                                         </span>
                                     </div>
@@ -294,12 +294,12 @@ export function BillItems({
                                 <div></div>
                             </div>
 
-                            <div className="grid grid-cols-[1fr_80px_180px_40px] gap-4 px-2 items-center">
+                            <div className="grid grid-cols-[minmax(0,1fr)_56px_160px_32px] gap-3 px-2 items-center">
                                 <div className="col-span-2 text-right pr-6">
                                     <label htmlFor="cashback-amount" className="text-[10px] font-bold uppercase tracking-[0.2em] text-[var(--text-muted)]">Cashback</label>
                                 </div>
                                 <div className="text-left py-1">
-                                    <div className="flex items-center border border-[var(--border)] rounded-md px-2 py-1 bg-transparent gap-2 h-8 w-[180px] justify-between">
+                                    <div className="flex items-center border border-[var(--border)] rounded-md px-2 py-0 bg-transparent gap-1.5 h-9 w-[160px] justify-between">
                                         <button
                                             type="button"
                                             onClick={() => setCashback((prev) => cashbackStepDown(prev))}
@@ -317,7 +317,7 @@ export function BillItems({
                                                 type="text"
                                                 value={cashback.toLocaleString('id-ID')}
                                                 readOnly
-                                                className="w-28 bg-transparent border-none p-0 text-sm text-right text-[var(--text-primary)] font-bold outline-none tabular-nums font-display"
+                                                className="w-24 !h-auto !min-h-0 !border-0 !bg-transparent !p-0 !shadow-none !ring-0 text-sm text-right text-[var(--text-primary)] font-bold outline-none tabular-nums font-display"
                                             />
                                         </div>
                                         <button
@@ -334,7 +334,7 @@ export function BillItems({
                             </div>
 
                             <div className="pt-6 mt-2 space-y-3 border-t border-[var(--border)]/30">
-                                <div className="grid grid-cols-[1fr_80px_180px_40px] gap-4 px-2 items-center mb-1">
+                                <div className="grid grid-cols-[minmax(0,1fr)_56px_160px_32px] gap-3 px-2 items-center mb-1">
                                     <div className="col-span-2 text-right pr-6">
                                         <span className="text-[10px] font-bold uppercase tracking-[0.2em] text-[var(--accent)]">Jadwal Termin</span>
                                     </div>
@@ -353,7 +353,7 @@ export function BillItems({
                                 </div>
 
                                 {paymentTerms.map((term) => (
-                                    <div key={term.id} className="group relative grid grid-cols-[1fr_80px_180px_40px] gap-4 px-2 items-center py-0.5 transition-all hover:bg-[var(--bg-elevated)]/20 rounded-md">
+                                    <div key={term.id} className="group relative grid grid-cols-[minmax(0,1fr)_56px_160px_32px] gap-3 px-2 items-center py-0.5 transition-all hover:bg-[var(--bg-elevated)]/20 rounded-md">
                                         <div className="col-span-2 text-right pr-6">
                                             <input
                                                 id={`payment-term-label-${term.id}`}
@@ -363,11 +363,11 @@ export function BillItems({
                                                 value={term.label}
                                                 onChange={(e) => updatePaymentTerm(term.id, 'label', e.target.value)}
                                                 disabled={term.locked}
-                                                className="w-full bg-transparent border-none p-0 text-[10px] text-right text-[var(--text-secondary)] font-bold uppercase tracking-[0.2em] focus:ring-0 disabled:opacity-70 outline-none font-sans"
+                                                className="w-full !h-auto !min-h-0 !border-0 !bg-transparent !p-0 !shadow-none !ring-0 focus:!ring-0 text-[10px] text-right text-[var(--text-secondary)] font-bold uppercase tracking-[0.2em] disabled:opacity-70 outline-none font-sans"
                                             />
                                         </div>
                                         <div className="flex items-center">
-                                            <div className="flex items-center border border-[var(--border)] rounded-md px-2 py-1 bg-transparent gap-2 h-8 w-[180px] justify-between">
+                                            <div className="flex items-center border border-[var(--border)] rounded-md px-2 py-0 bg-transparent gap-1.5 h-9 w-[160px] justify-between">
                                                 <button
                                                     type="button"
                                                     onClick={() => stepPaymentTerm(term.id, 'down')}
@@ -379,7 +379,7 @@ export function BillItems({
                                                 <div className="flex-1 flex justify-end items-center gap-2">
                                                     <span className="text-[10px] font-bold text-[var(--accent)] opacity-60 w-5 text-right shrink-0">Rp</span>
                                                     {term.locked ? (
-                                                        <span className="text-[14px] font-bold text-[var(--text-primary)] w-28 text-right tabular-nums py-[2px] h-8 flex items-center justify-end leading-none font-display text-lg">
+                                                        <span className="w-24 h-8 flex items-center justify-end text-right text-sm font-bold text-[var(--text-primary)] tabular-nums leading-none font-display">
                                                             {term.amount.toLocaleString('id-ID')}
                                                         </span>
                                                     ) : (
@@ -393,7 +393,7 @@ export function BillItems({
                                                                 const val = e.target.value.replace(/\D/g, '');
                                                                 updatePaymentTerm(term.id, 'amount', Number(val));
                                                             }}
-                                                            className="w-28 bg-transparent border-none p-0 text-[14px] text-right text-[var(--text-primary)] font-bold focus:ring-0 outline-none tabular-nums h-8 leading-none font-display text-lg"
+                                                            className="w-24 h-8 !min-h-0 !border-0 !bg-transparent !p-0 !shadow-none !ring-0 focus:!ring-0 text-sm text-right text-[var(--text-primary)] font-bold outline-none tabular-nums leading-none font-display"
                                                         />
                                                     )}
                                                 </div>
@@ -418,9 +418,9 @@ export function BillItems({
                                 ))}
 
                                 {/* Bottom Controls: Right Aligned */}
-                                <div className="grid grid-cols-[1fr_80px_180px_40px] gap-4 px-2 pt-2 items-center">
+                                <div className="grid grid-cols-[minmax(0,1fr)_56px_160px_32px] gap-3 px-2 pt-2 items-center">
                                     <div className="col-span-2"></div>
-                                    <div className="flex gap-2 w-[180px]">
+                                    <div className="flex w-[160px]">
                                         <button type="button" onClick={addPaymentTerm} disabled={!canAddPaymentTerm} className="flex-1 rounded border border-dashed border-[var(--border)] py-1 text-[8px] font-bold uppercase tracking-widest text-[var(--text-muted)] transition-colors hover:text-[var(--accent)] disabled:cursor-not-allowed disabled:opacity-35">+ Termin</button>
                                     </div>
                                     <div></div>
@@ -444,4 +444,3 @@ export function BillItems({
         </>
     );
 }
-
