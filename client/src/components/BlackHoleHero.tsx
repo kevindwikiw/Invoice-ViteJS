@@ -247,34 +247,56 @@ function BlackHoleHero({ className, contentClassName, parallax = 0.6, style }: B
 
                 /* RESPONSIVE GARGANTUA */
                 .gargantua {
-                    /* Mobile-first: smaller on phones */
-                    width: 70vmin; height: 50vmin;
-                    display: flex; justify-content: center; align-items: center;
-                    position: relative; transform: rotate(-5deg) scale(0.7);
+                    --gargantua-scale: 0.7;
+
+                    width: 70vmin;
+                    height: 50vmin;
+
+                    display: flex;
+                    justify-content: center;
+                    align-items: center;
+
+                    position: relative;
+
                     animation: float 8s ease-in-out infinite;
                 }
-                
+
                 /* Tablet */
                 @media (min-width: 640px) {
                     .gargantua {
-                        width: 80vmin; height: 55vmin;
-                        transform: rotate(-5deg) scale(0.85);
+                        --gargantua-scale: 0.85;
+                        width: 80vmin;
+                        height: 55vmin;
                     }
                 }
-                
+
                 /* Desktop */
                 @media (min-width: 1024px) {
                     .gargantua {
-                        width: 90vmin; height: 60vmin;
-                        transform: rotate(-5deg) scale(1);
+                        --gargantua-scale: 1;
+                        width: 90vmin;
+                        height: 60vmin;
                     }
                 }
-                
+
                 @keyframes float {
-                    0%, 100% { transform: rotate(-5deg) translateY(0); }
-                    50% { transform: rotate(-5deg) translateY(-10px); }
+                    0%,
+                    100% {
+                        transform: rotate(-5deg)
+                            translateY(0)
+                            scale(var(--gargantua-scale));
+                    }
+
+                    50% {
+                        transform: rotate(-5deg)
+                            translateY(-10px)
+                            scale(var(--gargantua-scale));
+                    }
                 }
-                .gargantua > div { position: absolute; }
+
+                .gargantua > div {
+                    position: absolute;
+                }
 
                 /* Orbits - responsive */
                 .orbit-lines { position: absolute; width: 100%; height: 100%; animation: spin 60s linear infinite; }
