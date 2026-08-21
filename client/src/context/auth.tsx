@@ -91,6 +91,8 @@ const ROLE_PERMISSIONS: Record<UserRole, Permission[]> = {
 };
 
 const FEATURE_PERMISSIONS: FeaturePermission[] = ['view_market_insights', 'view_billing_history', 'edit_billing_history', 'view_audit_logs'];
+const IDLE_TIMEOUT_MS = 30 * 60 * 1000;
+const LAST_ACTIVITY_KEY = 'orbit_last_activity';
 
 // ============ CONTEXT ============
 const AuthContext = createContext<AuthContextType | null>(null);
@@ -230,6 +232,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
         setUser(null);
         clearAuthTokens();
+        localStorage.removeItem(LAST_ACTIVITY_KEY);
 
         // Notify other tabs immediately
         window.dispatchEvent(new Event('storage'));
@@ -247,6 +250,53 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             }
         }
     }, []);
+
+    useEffect(() => {
+        if (!user) return;
+
+        let timeoutId: number | undefined;
+        let lastRecordedAt = 0;
+
+        const getLastActivity = () => Number.parseInt(localStorage.getItem(LAST_ACTIVITY_KEY) || '0', 10);
+        const scheduleLogout = () => {
+            if (timeoutId) window.clearTimeout(timeoutId);
+            const lastActivity = getLastActivity();
+            const elapsed = Date.now() - lastActivity;
+
+            if (lastActivity && elapsed >= IDLE_TIMEOUT_MS) {
+                void logout();
+                return;
+            }
+
+            timeoutId = window.setTimeout(scheduleLogout, Math.max(0, IDLE_TIMEOUT_MS - Math.max(0, elapsed)));
+        };
+
+        const recordActivity = () => {
+            const now = Date.now();
+            // Throttle storage writes while still keeping the timeout accurate.
+            if (now - lastRecordedAt < 10_000) return;
+            lastRecordedAt = now;
+            localStorage.setItem(LAST_ACTIVITY_KEY, String(now));
+            scheduleLogout();
+        };
+
+        const handleStorage = (event: StorageEvent) => {
+            if (event.key === LAST_ACTIVITY_KEY) scheduleLogout();
+        };
+
+        if (!getLastActivity()) recordActivity();
+        scheduleLogout();
+
+        const activityEvents: Array<keyof WindowEventMap> = ['pointerdown', 'keydown', 'scroll', 'focus'];
+        activityEvents.forEach((eventName) => window.addEventListener(eventName, recordActivity, { passive: true }));
+        window.addEventListener('storage', handleStorage);
+
+        return () => {
+            if (timeoutId) window.clearTimeout(timeoutId);
+            activityEvents.forEach((eventName) => window.removeEventListener(eventName, recordActivity));
+            window.removeEventListener('storage', handleStorage);
+        };
+    }, [logout, user]);
 
     const hasPermission = useCallback((action: Permission): boolean => {
         if (!user) return false;

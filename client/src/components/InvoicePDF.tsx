@@ -705,6 +705,12 @@ export const InvoicePDF = ({ invoice, proofs = [] }: { invoice: Invoice; proofs?
         // ... (rest of data parsing) ...
         const items = normalizeItems(data);
         const paymentTerms = normalizePaymentTerms(data);
+        const displayPaymentTerms = paymentTerms.length
+            ? paymentTerms
+            : [
+                { label: "Down Payment", amount: 0 },
+                { label: "Pelunasan", amount: 0 },
+            ];
 
         const cashback = n(data.cashback, 0);
         const subtotal = items.reduce((acc, item) => acc + item.price * item.qty, 0);
@@ -975,29 +981,27 @@ export const InvoicePDF = ({ invoice, proofs = [] }: { invoice: Invoice; proofs?
                                 </Text>
                             </View>
 
-                            {paymentTerms.length ? (
-                                <View style={{ marginTop: mm(1) }}>
-                                    <View style={[styles.sumRow, { paddingVertical: 1 }]}>
-                                        <Text
-                                            style={[
-                                                styles.sumLabel,
-                                                { color: COLORS.DARK_GRAY, fontSize: 8, paddingTop: mm(1), fontFamily: "Helvetica-BoldOblique" },
-                                            ]}
-                                        >
-                                            PAYMENT HISTORY
+                            <View style={{ marginTop: mm(1) }}>
+                                <View style={[styles.sumRow, { paddingVertical: 1 }]}>
+                                    <Text
+                                        style={[
+                                            styles.sumLabel,
+                                            { color: COLORS.DARK_GRAY, fontSize: 8, paddingTop: mm(1), fontFamily: "Helvetica-BoldOblique" },
+                                        ]}
+                                    >
+                                        PAYMENT HISTORY
+                                    </Text>
+                                </View>
+
+                                {displayPaymentTerms.map((t, i) => (
+                                    <View key={`${t.label}-${i}`} style={[styles.sumRow, { paddingVertical: 1 }]}>
+                                        <Text style={[styles.sumLabel, { color: COLORS.DARK_GRAY, fontSize: 7.5 }]}>{t.label}:</Text>
+                                        <Text style={[styles.sumValue, { color: COLORS.DARK_GRAY, fontSize: 7.5 }]}>
+                                            {t.amount > 0 ? `- ${fmtPaymentRow(t.amount)}` : "-"}
                                         </Text>
                                     </View>
-
-                                    {paymentTerms.map((t, i) => (
-                                        <View key={`${t.label}-${i}`} style={[styles.sumRow, { paddingVertical: 1 }]}>
-                                            <Text style={[styles.sumLabel, { color: COLORS.DARK_GRAY, fontSize: 7.5 }]}>{t.label}:</Text>
-                                            <Text style={[styles.sumValue, { color: COLORS.DARK_GRAY, fontSize: 7.5 }]}>
-                                                {t.amount > 0 ? `- ${fmtPaymentRow(t.amount)}` : "-"}
-                                            </Text>
-                                        </View>
-                                    ))}
-                                </View>
-                            ) : null}
+                                ))}
+                            </View>
 
                             <View style={[styles.sumRow, { marginTop: 0, paddingTop: mm(1) }]}>
                                 <Text style={[styles.sumLabel, { color: COLORS.RED, fontFamily: "Helvetica-Bold" }]}>
