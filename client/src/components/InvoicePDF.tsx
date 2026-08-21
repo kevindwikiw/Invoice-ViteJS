@@ -83,6 +83,7 @@ type InvoiceData = {
     hours?: unknown; // New Field
 
     paymentTerms?: Array<{ label?: unknown; amount?: unknown }>;
+    payment_terms?: Array<{ label?: unknown; amount?: unknown }>;
 
     // Legacy
     pay_term1?: unknown;
@@ -294,8 +295,14 @@ const normalizeItems = (data: InvoiceData): InvoiceItem[] => {
 };
 
 const normalizePaymentTerms = (data: InvoiceData): PaymentTerm[] => {
-    const fromNew: PaymentTerm[] = Array.isArray(data.paymentTerms)
+    const rawPaymentTerms = Array.isArray(data.paymentTerms)
         ? data.paymentTerms
+        : Array.isArray(data.payment_terms)
+            ? data.payment_terms
+            : [];
+
+    const fromNew: PaymentTerm[] = rawPaymentTerms.length
+        ? rawPaymentTerms
             .map((t) => ({
                 label: s(t?.label, "Payment"),
                 amount: n(t?.amount, 0),
