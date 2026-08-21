@@ -146,11 +146,14 @@ function extractInvoiceMetadata(invoiceData: unknown, fallbackDate = ''): Invoic
     }
 }
 
-function deriveStatus(invoiceData: unknown): 'LUNAS' | 'DP' | 'DP+TERMIN' | 'UNPAID' {
-    // Payment terms describe the planned schedule, not amounts already received.
-    // The invoice model does not yet persist a verified payment ledger/status.
-    void invoiceData
-    return 'UNPAID'
+function deriveStatus(invoiceData: unknown, totalAmount: number): 'LUNAS' | 'DP' | 'DP+TERMIN' | 'UNPAID' {
+    const allocatedTerms = extractInvoiceMetadata(invoiceData).paymentTerms
+        .filter((term) => Number.isFinite(term.amount) && term.amount > 0);
+    const allocatedTotal = allocatedTerms.reduce((sum, term) => sum + term.amount, 0);
+
+    if (!allocatedTerms.length) return 'UNPAID';
+    if (totalAmount > 0 && allocatedTotal >= totalAmount) return 'LUNAS';
+    return allocatedTerms.length > 1 ? 'DP+TERMIN' : 'DP';
 }
 
 const statusConfig = {
@@ -383,7 +386,7 @@ export default function InvoiceHistory() {
             const rawInvoiceData = inv.invoiceData || inv.invoice_data
             const isArchived = Boolean(inv.isArchived ?? inv.is_archived)
             const totalAmount = Number(inv.totalAmount ?? inv.total_amount ?? 0)
-            const status = deriveStatus(rawInvoiceData).toLowerCase() as 'lunas' | 'dp' | 'dp+termin' | 'unpaid'
+            const status = deriveStatus(rawInvoiceData, totalAmount).toLowerCase() as 'lunas' | 'dp' | 'dp+termin' | 'unpaid'
             const metadata = extractInvoiceMetadata(rawInvoiceData, inv.date ?? '')
             const notesText = metadata.notes
             const hasNotes = notesText.length > 0
@@ -778,10 +781,10 @@ export default function InvoiceHistory() {
                         subtitle={`BILLING RECORDS & SETTLEMENT (${visibleInvoices.length} SHOWN / ${totalInvoices} TOTAL)`}
                     />
 
-                    <div className="overflow-x-auto rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)]/10">
+                    <div className="relative overflow-x-auto rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)]/10 md:max-h-[calc(100vh-15rem)] md:overflow-y-auto md:overscroll-contain">
                     <div className={clsx('grid grid-cols-1', INVOICE_GRID_TRACKS_CLASS)}>
                     {/* Table Header */}
-                    <div className="hidden px-6 py-3.5 border-b border-[var(--border)] bg-[var(--bg-elevated)]/30 md:col-span-full md:grid md:grid-cols-subgrid">
+                    <div className="hidden border-b border-[var(--border)] bg-[var(--bg-card)] px-6 py-3.5 md:sticky md:top-0 md:z-30 md:col-span-full md:grid md:grid-cols-subgrid">
                         {canDelete ? (
                             <div className="flex items-center">
                                 <input
@@ -914,9 +917,9 @@ export default function InvoiceHistory() {
                         <div className="divide-y divide-[var(--border)]/60 md:col-span-full md:grid md:grid-cols-subgrid">
                             {visibleInvoices.map((inv, idx) => {
                                 const rawInvoiceData = inv.invoiceData || inv.invoice_data
-                                const status = deriveStatus(rawInvoiceData)
-                                const sc = statusConfig[status]
                                 const totalAmount = inv.totalAmount ?? inv.total_amount ?? 0
+                                const status = deriveStatus(rawInvoiceData, Number(totalAmount))
+                                const sc = statusConfig[status]
                                 const invoiceNo = (inv.invoiceNo ?? inv.invoice_no ?? '-').toUpperCase()
                                 const clientName = (inv.clientName ?? inv.client_name ?? '-')
                                     .split(' ')
