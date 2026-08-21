@@ -82,18 +82,21 @@ export const ROLE_FEATURE_DEFAULTS: Record<UserRole, Record<FeaturePermission, b
         view_billing_history: true,
         edit_billing_history: true,
         view_audit_logs: true,
+        view_feedback_inbox: true,
     },
     admin: {
         view_market_insights: true,
         view_billing_history: true,
         edit_billing_history: true,
         view_audit_logs: true,
+        view_feedback_inbox: true,
     },
     employee: {
         view_market_insights: false,
         view_billing_history: true,
         edit_billing_history: false,
         view_audit_logs: false,
+        view_feedback_inbox: false,
     },
 };
 
@@ -121,6 +124,11 @@ export const PERMISSION_ROWS: Array<{
         key: 'view_audit_logs',
         label: 'Audit Logs',
         description: 'Review invoice and workspace activity.',
+    },
+    {
+        key: 'view_feedback_inbox',
+        label: 'Feedback Inbox',
+        description: 'Review client feedback submissions and private photos.',
     },
 ];
 
@@ -151,14 +159,21 @@ export function normalizePermissions(
     data: UserPermissionResponse,
     role: User['role'],
 ): UserPermissionResponse {
+    const normalizedPermissions = PERMISSION_ROWS.map(({ key }) => {
+        const permission = data.permissions.find((item) => item.key === key);
+        const defaultEffective = ROLE_FEATURE_DEFAULTS[role][key];
+        return {
+            key,
+            effective: permission?.effective ?? defaultEffective,
+            override: permission?.override === 'inherit'
+                ? defaultEffective ? 'grant' : 'deny'
+                : permission?.override ?? (defaultEffective ? 'grant' : 'deny'),
+        };
+    });
+
     return {
         ...data,
-        permissions: data.permissions.map((permission) => ({
-            ...permission,
-            override: permission.override === 'inherit'
-                ? ROLE_FEATURE_DEFAULTS[role][permission.key] ? 'grant' : 'deny'
-                : permission.override,
-        })),
+        permissions: normalizedPermissions,
     };
 }
 

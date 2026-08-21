@@ -330,7 +330,7 @@ export default function PackagesPage() {
                                 </button>
                                 <div
                                     className={clsx(
-                                        'absolute right-0 xl:left-0 top-full mt-2 z-[70] min-w-[260px] rounded-xl border border-[var(--border)] bg-[var(--bg-card)] p-3 origin-top-right xl:origin-top-left transition-all duration-150',
+                                        'absolute left-0 top-full mt-2 z-[999] w-[min(calc(100vw-3rem),17rem)] rounded-xl border border-[var(--border)] bg-[var(--bg-card)] p-3 origin-top-left transition-all duration-150',
                                         showRefine ? 'opacity-100 scale-100 pointer-events-auto' : 'opacity-0 scale-95 pointer-events-none'
                                     )}
                                 >

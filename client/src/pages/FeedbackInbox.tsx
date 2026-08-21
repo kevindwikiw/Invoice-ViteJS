@@ -172,9 +172,9 @@ function FeedbackDrawer({ item, pending, closeButtonRef, drawerRef, onClose, onT
 }
 
 export default function FeedbackInbox() {
-    const { user } = useAuth();
+    const { user, hasPermission } = useAuth();
     const { addToast } = useToast();
-    const canView = user?.role === 'admin' || user?.role === 'superadmin';
+    const canView = hasPermission('view_feedback_inbox');
     const [status, setStatus] = useState<'all' | FeedbackStatus>('new');
     const [search, setSearch] = useState('');
     const [page, setPage] = useState(1);
@@ -228,7 +228,7 @@ export default function FeedbackInbox() {
                 <div className="mx-auto max-w-7xl border border-[var(--border)] bg-[var(--bg-card)] px-6 py-20 text-center">
                     <AlertCircle size={32} className="mx-auto mb-4 text-rose-400" />
                     <h1 className="font-display text-xl font-semibold text-[var(--text-primary)]">Access denied</h1>
-                    <p className="mt-2 text-sm text-[var(--text-muted)]">Only administrators can review client feedback.</p>
+                    <p className="mt-2 text-sm text-[var(--text-muted)]">You don't have permission to review client feedback.</p>
                 </div>
             </div>
         );

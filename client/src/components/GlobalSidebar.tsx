@@ -59,6 +59,11 @@ const ANALYTICS_ITEMS: Array<{ to: string; icon: LucideIcon; label: string; perm
     { to: '/analytics', icon: TrendingUp, label: 'Market Insights', permission: 'view_market_insights' },
 ];
 
+const ADMINISTRATION_ITEMS: Array<{ to: string; icon: LucideIcon; label: string; permission: FeaturePermission }> = [
+    { to: '/activity', icon: ClipboardList, label: 'Audit Logs', permission: 'view_audit_logs' },
+    { to: '/feedback-inbox', icon: MessageSquare, label: 'Feedback Inbox', permission: 'view_feedback_inbox' },
+];
+
 type SidebarNavigationProps = {
     user: User;
     hasPermission: (action: FeaturePermission) => boolean;
@@ -91,7 +96,7 @@ const SidebarNavigation = memo(function SidebarNavigation({
         <>
             {sidebarOpen && (
                 <div
-                    className="fixed inset-0 z-40 md:hidden"
+                    className="fixed inset-0 z-[1000] md:hidden"
                     style={{ background: 'rgba(0,0,0,0.8)' }}
                     onClick={closeMobileSidebar}
                 />
@@ -111,7 +116,7 @@ const SidebarNavigation = memo(function SidebarNavigation({
 
             <aside
                 className={clsx(
-                    'fixed inset-y-0 left-0 z-50 flex flex-col transition-transform duration-200 ease-out md:transition-none group',
+                    'fixed inset-y-0 left-0 z-[1010] flex flex-col transition-transform duration-200 ease-out md:z-50 md:transition-none group',
                     isCollapsed ? 'w-16 md:w-16 md:translate-x-0' : 'w-60 md:translate-x-0',
                     sidebarOpen ? 'w-60 translate-x-0' : '-translate-x-full',
                 )}
@@ -154,8 +159,7 @@ const SidebarNavigation = memo(function SidebarNavigation({
                             <>
                                 <div className="mb-4 mt-10 px-5"><span className="text-[10px] font-black uppercase tracking-[0.2em] text-[var(--accent)] opacity-50">Administration</span></div>
                                 <SidebarItem to="/users" icon={Users} label="Team & Access" onClick={closeMobileSidebar} />
-                                <SidebarItem to="/activity" icon={ClipboardList} label="Audit Logs" onClick={closeMobileSidebar} />
-                                <SidebarItem to="/feedback-inbox" icon={MessageSquare} label="Feedback Inbox" onClick={closeMobileSidebar} />
+                                {ADMINISTRATION_ITEMS.filter((item) => hasPermission(item.permission)).map((item) => <SidebarItem key={item.to} to={item.to} icon={item.icon} label={item.label} onClick={closeMobileSidebar} />)}
                             </>
                         )}
                     </nav>

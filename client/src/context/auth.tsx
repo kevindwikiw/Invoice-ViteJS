@@ -12,7 +12,7 @@ import {
 
 // ============ TYPES ============
 export type UserRole = 'superadmin' | 'admin' | 'employee';
-export type FeaturePermission = 'view_market_insights' | 'view_billing_history' | 'edit_billing_history' | 'view_audit_logs';
+export type FeaturePermission = 'view_market_insights' | 'view_billing_history' | 'edit_billing_history' | 'view_audit_logs' | 'view_feedback_inbox';
 export type PermissionEffect = 'grant' | 'deny';
 export type PermissionOverrideMode = PermissionEffect | 'inherit';
 
@@ -68,6 +68,7 @@ const ROLE_PERMISSIONS: Record<UserRole, Permission[]> = {
         'view_billing_history',
         'edit_billing_history',
         'view_audit_logs',
+        'view_feedback_inbox',
     ],
     admin: [
         'manage_users',
@@ -81,6 +82,7 @@ const ROLE_PERMISSIONS: Record<UserRole, Permission[]> = {
         'view_billing_history',
         'edit_billing_history',
         'view_audit_logs',
+        'view_feedback_inbox',
     ],
     employee: [
         'create_invoices',
@@ -90,7 +92,7 @@ const ROLE_PERMISSIONS: Record<UserRole, Permission[]> = {
     ]
 };
 
-const FEATURE_PERMISSIONS: FeaturePermission[] = ['view_market_insights', 'view_billing_history', 'edit_billing_history', 'view_audit_logs'];
+const FEATURE_PERMISSIONS: FeaturePermission[] = ['view_market_insights', 'view_billing_history', 'edit_billing_history', 'view_audit_logs', 'view_feedback_inbox'];
 const IDLE_TIMEOUT_MS = 30 * 60 * 1000;
 const LAST_ACTIVITY_KEY = 'orbit_last_activity';
 

@@ -11,7 +11,7 @@ import sequencesRoutes from "./routes/sequences";
 import { feedbackAdminRoutes, publicFeedbackRoutes } from "./routes/feedback";
 import { authMiddleware, requireRole } from "./middleware/auth";
 import { loginRateLimiter } from "./middleware/rate-limit";
-import { ensureUserPermissionsTable } from "./permissions";
+import { ensureUserPermissionsTable, hasFeaturePermission } from "./permissions";
 import { databaseDriver, sqlite } from "./db/runtime";
 import { feedbackStorageDriver } from "./db/feedback";
 
@@ -147,6 +147,20 @@ app.route("/api/analytics", analyticsRoutes);
 app.route("/api/sequences", sequencesRoutes);
 app.use("/api/feedback", requireRole("admin", "superadmin"));
 app.use("/api/feedback/*", requireRole("admin", "superadmin"));
+app.use("/api/feedback", async (c, next) => {
+    const user = c.get("user");
+    if (!await hasFeaturePermission(user, "view_feedback_inbox")) {
+        return c.json({ error: "Permission denied" }, 403);
+    }
+    await next();
+});
+app.use("/api/feedback/*", async (c, next) => {
+    const user = c.get("user");
+    if (!await hasFeaturePermission(user, "view_feedback_inbox")) {
+        return c.json({ error: "Permission denied" }, 403);
+    }
+    await next();
+});
 app.route("/api/feedback", feedbackAdminRoutes);
 
 // In production the API and the Rsbuild output are served from one Fly app.

@@ -611,7 +611,7 @@ export default function InvoiceHistory() {
                                     </button>
                                     <div
                                         className={clsx(
-                                            'absolute right-0 sm:left-0 top-full mt-2 z-[70] min-w-[280px] rounded-xl border border-[var(--border)] bg-[var(--bg-card)] p-3 origin-top-right sm:origin-top-left transition-all duration-200',
+                                            'absolute left-0 top-full mt-2 z-[999] w-[min(calc(100vw-3rem),18rem)] rounded-xl border border-[var(--border)] bg-[var(--bg-card)] p-3 origin-top-left transition-all duration-200',
                                             showRefine ? 'opacity-100 scale-100 pointer-events-auto' : 'opacity-0 scale-95 pointer-events-none'
                                         )}
                                     >

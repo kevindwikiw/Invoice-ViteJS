@@ -333,8 +333,8 @@ export default function InvoiceActivity() {
                         subtitle={`INVOICE AUDIT RECORDS (${activity.length} SHOWN / ${totalLogs} TOTAL)`}
                     />
 
-                    <div className="overflow-x-auto rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)]/10">
-                        <div className="min-w-[980px]">
+                    <div className="overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)]/10 md:overflow-x-auto">
+                        <div className="md:min-w-[980px]">
                             <div className="hidden md:grid grid-cols-[1.35fr_.95fr_.95fr_1.05fr_2.2fr] gap-4 px-6 py-3.5 border-b border-[var(--border)] bg-[var(--bg-elevated)]/30">
                                 {['Invoice', 'Log Type', 'Actor', 'Timestamp', 'Log Details'].map((header) => (
                                     <div

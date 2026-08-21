@@ -108,9 +108,14 @@ export default function UserManagement() {
                 ...current,
                 [openMemberId]: {
                     ...draft,
-                    permissions: draft.permissions.map((permission) => (
-                        permission.key === key ? { ...permission, override } : permission
-                    )),
+                    permissions: draft.permissions.some((permission) => permission.key === key)
+                        ? draft.permissions.map((permission) => (
+                            permission.key === key ? { ...permission, override } : permission
+                        ))
+                        : [
+                            ...draft.permissions,
+                            { key, override, effective: override === 'grant' },
+                        ],
                 },
             };
         });

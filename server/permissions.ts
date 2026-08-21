@@ -6,6 +6,7 @@ export const FEATURE_PERMISSION_KEYS = [
     "view_billing_history",
     "edit_billing_history",
     "view_audit_logs",
+    "view_feedback_inbox",
 ] as const;
 
 export type FeaturePermissionKey = typeof FEATURE_PERMISSION_KEYS[number];

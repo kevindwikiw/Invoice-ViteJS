@@ -1,4 +1,4 @@
-import { memo, useRef, useState, useEffect, type Dispatch, type SetStateAction, type KeyboardEvent as ReactKeyboardEvent } from 'react';
+import { memo, useRef, useState, useEffect, type Dispatch, type MouseEvent as ReactMouseEvent, type SetStateAction, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import {
     AlertCircle,
     Check,
@@ -124,7 +124,7 @@ export function MemberDirectory({
                     <div
                         id="member-refine-panel"
                         className={clsx(
-                            'absolute right-0 top-full z-[70] mt-2 min-w-[280px] rounded-xl border border-[var(--border)] bg-[var(--bg-card)] p-3 shadow-xl origin-top-right transition-all duration-200 sm:left-0 sm:right-auto sm:origin-top-left',
+                            'absolute left-0 top-full z-[999] mt-2 w-[min(calc(100vw-3rem),18rem)] rounded-xl border border-[var(--border)] bg-[var(--bg-card)] p-3 shadow-xl origin-top-left transition-all duration-200',
                             showRefine ? 'pointer-events-auto scale-100 opacity-100' : 'pointer-events-none scale-95 opacity-0',
                         )}
                     >
@@ -404,7 +404,7 @@ function PermissionPanel({
     onSave: () => void;
 }) {
     return (
-        <div className="border-t border-[var(--border)] bg-[var(--bg-deep)]/45 px-5 py-5 animate-in slide-in-from-top-1 duration-150" onClick={(event) => event.stopPropagation()}>
+            <div className="border-t border-[var(--border)] bg-[var(--bg-deep)]/45 px-5 py-5 animate-in slide-in-from-top-1 duration-150" onClick={(event) => event.stopPropagation()} onKeyDown={(event) => event.stopPropagation()}>
             <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                 <div>
                     <h4 className="text-sm font-semibold text-[var(--text-primary)]">Feature access</h4>
@@ -441,19 +441,8 @@ function PermissionPanel({
                                     <p className="mt-0.5 text-[11px] text-[var(--text-muted)]">{row.description}</p>
                                 </div>
                                 <div className="flex shrink-0 rounded-lg border border-[var(--border)] bg-[var(--bg-card)] p-1">
-                                    <PermissionButton
-                                        active={allowed}
-                                        icon={Check}
-                                        label="Allow"
-                                        onClick={() => onChange(row.key, 'grant')}
-                                    />
-                                    <PermissionButton
-                                        active={!allowed}
-                                        icon={X}
-                                        label="Block"
-                                        danger
-                                        onClick={() => onChange(row.key, 'deny')}
-                                    />
+                                    <PermissionButton active={allowed} icon={Check} label="Allow" onClick={() => onChange(row.key, 'grant')} />
+                                    <PermissionButton active={!allowed} icon={X} label="Block" danger onClick={() => onChange(row.key, 'deny')} />
                                 </div>
                             </div>
                         );
@@ -477,17 +466,23 @@ function PermissionButton({
     danger?: boolean;
     onClick: () => void;
 }) {
+    const handleClick = (event: ReactMouseEvent<HTMLButtonElement>) => {
+        event.preventDefault();
+        event.stopPropagation();
+        onClick();
+    };
+
     return (
         <button
             type="button"
-            onClick={onClick}
+            onClick={handleClick}
             className={clsx(
-                'inline-flex items-center gap-1 rounded-md px-3 py-1.5 text-[10px] font-semibold transition-colors',
+                'inline-flex items-center gap-1 rounded-md border px-3 py-1.5 text-[10px] font-semibold transition-colors',
                 active
                     ? danger
-                        ? 'bg-rose-500/10 text-rose-400'
-                        : 'bg-emerald-500/10 text-emerald-400'
-                    : 'text-[var(--text-muted)] hover:text-[var(--text-secondary)]',
+                        ? 'border-rose-500/30 bg-rose-500/10 text-rose-400'
+                        : 'border-emerald-500/30 bg-emerald-500/10 text-emerald-400'
+                    : 'border-transparent text-[var(--text-muted)] hover:border-[var(--border)] hover:text-[var(--text-secondary)]',
             )}
         >
             <Icon size={11} />

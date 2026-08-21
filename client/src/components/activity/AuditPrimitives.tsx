@@ -225,7 +225,7 @@ export function AuditRefine({
                 <Filter size={13} />
                 Refine
             </button>
-            <div className={clsx('absolute right-0 top-full z-[999] mt-2 min-w-[280px] rounded-xl border border-[var(--border)] bg-[var(--bg-card)] p-3 origin-top-right shadow-xl transition-all duration-200 sm:left-0 sm:right-auto sm:origin-top-left', open ? 'pointer-events-auto scale-100 opacity-100' : 'pointer-events-none scale-95 opacity-0')}>
+            <div className={clsx('absolute left-0 top-full z-[999] mt-2 w-[min(calc(100vw-3rem),18rem)] rounded-xl border border-[var(--border)] bg-[var(--bg-card)] p-3 origin-top-left shadow-xl transition-all duration-200', open ? 'pointer-events-auto scale-100 opacity-100' : 'pointer-events-none scale-95 opacity-0')}>
                 <div className="space-y-3">
                     {actions.length > 0 && activeAction && onActionChange && (
                         <label className="block text-[10px] font-medium uppercase tracking-[0.2em] text-[var(--text-muted)]">
