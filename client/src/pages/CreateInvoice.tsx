@@ -113,6 +113,7 @@ export default function CreateInvoice() {
     const editInvoiceKey = editId == null ? '' : String(editId);
     const [previewDraft] = useState<PreviewDraft | null>(restorePreviewDraft);
     const [showPackageCatalog, setShowPackageCatalog] = useState(false);
+    const [fillRemainingSnapshot, setFillRemainingSnapshot] = useState<number | null>(null);
 
     const {
         invoiceNo, setInvoiceNo, seqPrefix, setSeqPrefix, seqNext, setSeqNext, seqPadding, setSeqPadding,
@@ -318,17 +319,10 @@ export default function CreateInvoice() {
     );
     const grandTotal = useMemo(() => Math.max(0, subtotal - cashback), [subtotal, cashback]);
     const scheduledPaymentTotal = useMemo(() =>
-        paymentTerms
-            .filter((term) => term.id !== 'full')
-            .reduce((sum, term) => sum + term.amount, 0),
+        paymentTerms.reduce((sum, term) => sum + term.amount, 0),
         [paymentTerms]
     );
-    const resolvedPaymentTerms = useMemo(() => {
-        const settlementAmount = Math.max(0, grandTotal - scheduledPaymentTotal);
-        return paymentTerms.map((term) =>
-            term.id === 'full' ? { ...term, amount: settlementAmount } : term
-        );
-    }, [grandTotal, paymentTerms, scheduledPaymentTotal]);
+    const resolvedPaymentTerms = paymentTerms;
     const totalAllocated = useMemo(() =>
         resolvedPaymentTerms.reduce((sum, term) => sum + term.amount, 0),
         [resolvedPaymentTerms]
@@ -338,7 +332,7 @@ export default function CreateInvoice() {
     const cashbackStepUp = (curr: number) => Math.min(maxCashback, curr + 200000);
     const cashbackStepDown = (curr: number) => Math.max(0, curr - 200000);
     const canIncreaseCashback = cashback < maxCashback;
-    const canAddPaymentTerm = paymentTerms.length < 6 && scheduledPaymentTotal < grandTotal;
+    const canAddPaymentTerm = paymentTerms.length < 6;
 
     // CART ACTIONS
     const availablePackageIds = useMemo(() => new Set(packages.map(packageRowId)), [packages]);
@@ -470,7 +464,7 @@ export default function CreateInvoice() {
     // PAYMENT ACTIONS
     const updatePaymentTerm = <Key extends keyof PaymentTerm>(id: string, field: Key, value: PaymentTerm[Key]) => {
         if (field === 'id') return; // Cannot update ID
-        if (id === 'full' && field === 'amount') return;
+        if (id === 'full' && field === 'amount') setFillRemainingSnapshot(null);
 
         setPaymentTerms(prev => {
             if (field !== 'amount') {
@@ -478,7 +472,7 @@ export default function CreateInvoice() {
             }
 
             const otherScheduledTotal = prev
-                .filter((term) => term.id !== id && term.id !== 'full')
+                .filter((term) => term.id !== id)
                 .reduce((sum, term) => sum + term.amount, 0);
             const amount = Math.min(Math.max(0, Number(value) || 0), Math.max(0, grandTotal - otherScheduledTotal));
 
@@ -486,14 +480,14 @@ export default function CreateInvoice() {
         });
     };
     const stepPaymentTerm = (id: string, dir: 'up' | 'down') => {
-        if (id === 'full') return;
+        if (id === 'full') setFillRemainingSnapshot(null);
 
         setPaymentTerms(prev => {
             const term = prev.find((item) => item.id === id);
             if (!term) return prev;
 
             const otherScheduledTotal = prev
-                .filter((item) => item.id !== id && item.id !== 'full')
+                .filter((item) => item.id !== id)
                 .reduce((sum, item) => sum + item.amount, 0);
             const maxAmount = Math.max(0, grandTotal - otherScheduledTotal);
             const amount = dir === 'up'
@@ -502,6 +496,23 @@ export default function CreateInvoice() {
 
             return prev.map((item) => item.id === id ? { ...item, amount } : item);
         });
+    };
+    const fillRemaining = () => {
+        const previousSettlementAmount = paymentTerms.find((term) => term.id === 'full')?.amount ?? 0;
+        setFillRemainingSnapshot(previousSettlementAmount);
+        setPaymentTerms(prev => {
+            const scheduledWithoutSettlement = prev
+                .filter((term) => term.id !== 'full')
+                .reduce((sum, term) => sum + term.amount, 0);
+            const settlementAmount = Math.max(0, grandTotal - scheduledWithoutSettlement);
+
+            return prev.map((term) => term.id === 'full' ? { ...term, amount: settlementAmount } : term);
+        });
+    };
+    const undoFillRemaining = () => {
+        if (fillRemainingSnapshot === null) return;
+        setPaymentTerms(prev => prev.map((term) => term.id === 'full' ? { ...term, amount: fillRemainingSnapshot } : term));
+        setFillRemainingSnapshot(null);
     };
     const addPaymentTerm = () => {
         if (!canAddPaymentTerm) return;
@@ -600,6 +611,7 @@ export default function CreateInvoice() {
             invoiceNo: payload.invoiceNo, 
             clientName: payload.clientName, 
             date: payload.weddingDate, 
+            createdAt: new Date().toISOString(),
             totalAmount: payload.totalAmount,
             paymentProofs: JSON.stringify(combinedProofs), // To be parsed by InvoiceDetail
             invoiceData: JSON.stringify({ ...payload }), 
@@ -1048,6 +1060,9 @@ export default function CreateInvoice() {
                             stepPaymentTerm={stepPaymentTerm}
                             removePaymentTerm={removePaymentTerm}
                             addPaymentTerm={addPaymentTerm}
+                            fillRemaining={fillRemaining}
+                            undoFillRemaining={undoFillRemaining}
+                            hasFilledRemaining={fillRemainingSnapshot !== null}
                             remaining={remaining}
                             canIncreaseCashback={canIncreaseCashback}
                             canAddPaymentTerm={canAddPaymentTerm}

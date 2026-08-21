@@ -166,7 +166,8 @@ export const InvoiceDetail = () => {
         if (!pdfUrl) return;
         const link = document.createElement('a');
         link.href = pdfUrl;
-        link.download = `Invoice-${invoice?.invoiceNo || 'Draft'}.pdf`;
+        const invoiceNo = String(invoice?.invoiceNo || 'Draft').replace(/[<>:"/\\|?*]/g, '-');
+        link.download = `${invoiceNo}.pdf`;
         document.body.appendChild(link);
         link.click();
         document.body.removeChild(link);

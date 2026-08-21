@@ -1,4 +1,4 @@
-import { ShoppingCart, Trash2, Package, Info, X } from 'lucide-react';
+import { ShoppingCart, Trash2, Package, Info, Minus, Plus, X } from 'lucide-react';
 import clsx from 'clsx';
 import type { InvoiceItem, PaymentTerm } from '../types/invoice';
 
@@ -23,6 +23,9 @@ interface BillItemsProps {
     stepPaymentTerm: (id: string, dir: 'up' | 'down') => void;
     removePaymentTerm: (id: string) => void;
     addPaymentTerm: () => void;
+    fillRemaining: () => void;
+    undoFillRemaining: () => void;
+    hasFilledRemaining: boolean;
     remaining: number;
     canAddPaymentTerm: boolean;
     hasError?: boolean;
@@ -49,10 +52,23 @@ export function BillItems({
     stepPaymentTerm,
     removePaymentTerm,
     addPaymentTerm,
+    fillRemaining,
+    undoFillRemaining,
+    hasFilledRemaining,
     remaining,
     canAddPaymentTerm,
     hasError,
 }: BillItemsProps) {
+    const allocationState = remaining > 0 ? 'UNALLOCATED' : remaining < 0 ? 'OVERALLOCATED' : 'ALLOCATED';
+    const allocationClass = remaining > 0
+        ? 'border-orange-500/25 bg-orange-500/10 text-orange-500'
+        : remaining < 0
+            ? 'border-red-500/25 bg-red-500/10 text-red-500'
+            : 'border-emerald-500/25 bg-emerald-500/10 text-emerald-500';
+    const allocationDetail = remaining < 0
+        ? `Over by ${rupiah(Math.abs(remaining))}`
+        : `Remaining: ${rupiah(remaining)}`;
+
     return (
         <>
 
@@ -86,34 +102,36 @@ export function BillItems({
                 </div>
             ) : (
                 <>
-                    {/* Table Header (Desktop) */}
-                    <div className="hidden md:grid grid-cols-[minmax(0,1fr)_56px_160px_32px] gap-3 border-b border-[var(--border)] bg-[var(--bg-elevated)]/30 px-2 py-3 text-[10px] font-bold uppercase tracking-[0.2em] text-[var(--text-muted)]">
-                        <div className="pl-7 text-left">Service / Item</div>
-                        <div className="text-center">Qty</div>
-                        <div className="text-center">Price</div>
-                        <div className="text-center">Actions</div>
-                    </div>
-
-                    {/* Merge Button Header */}
-                    {selectedRowIds.size >= 2 && (
-                        <div className="flex justify-between items-center bg-[var(--accent)]/10 border border-[var(--accent)]/30 p-2 rounded mb-2 animate-in fade-in">
-                            <span className="text-xs text-[var(--accent)] font-bold px-2">{selectedRowIds.size} Items Selected</span>
-                            <button
-                                onClick={onShowMergeModal}
-                                className="text-xs bg-[var(--accent)] text-[var(--bg-deep)] px-3 py-1.5 rounded font-bold uppercase tracking-wider hover:opacity-90 transition-opacity"
-                            >
-                                Merge Selected
-                            </button>
+                    <div className="overflow-x-auto rounded-lg border border-[var(--border)]">
+                    <div className="md:min-w-[880px]">
+                        {/* Table Header (Desktop) */}
+                        <div className="hidden rounded-t-lg md:grid md:grid-cols-[minmax(0,1fr)_170px_80px_300px] gap-4 border-b border-[var(--border)] bg-[var(--bg-elevated)]/45 px-4 py-3 text-[11px] font-semibold tracking-[0.06em] text-[var(--text-secondary)]">
+                            <div className="pl-8 text-left">Description</div>
+                            <div className="text-right">Price</div>
+                            <div className="text-center">Qty</div>
+                            <div className="pr-1 text-right">Total</div>
                         </div>
-                    )}
 
-                    {/* Items List */}
-                    <div className="space-y-2">
+                        {/* Merge Button Header */}
+                        {selectedRowIds.size >= 2 && (
+                            <div className="flex items-center justify-between border-b border-[var(--accent)]/25 bg-[var(--accent)]/10 px-4 py-2 animate-in fade-in">
+                                <span className="text-xs font-bold text-[var(--accent)]">{selectedRowIds.size} Items Selected</span>
+                                <button
+                                    onClick={onShowMergeModal}
+                                    className="rounded-md bg-[var(--accent)] px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider text-[var(--bg-deep)] transition-opacity hover:opacity-90"
+                                >
+                                    Merge Selected
+                                </button>
+                            </div>
+                        )}
+
+                        {/* Items List */}
+                        <div>
                         {items.map(item => (
                             <div key={item.id}>
                                 {/* Desktop View */}
-                                <div className="grid grid-cols-[minmax(0,1fr)_56px_160px_32px] gap-3 py-3 border-b border-[var(--border)]/60 items-center hover:bg-[var(--bg-elevated)]/35 px-2 transition-colors group relative hover:z-[50]">
-                                    <div className="flex items-start gap-2">
+                                <div className="hidden md:grid md:grid-cols-[minmax(0,1fr)_170px_80px_300px] gap-4 border-b border-[var(--border)]/60 px-4 py-4 items-center transition-colors group relative hover:z-[50] hover:bg-[var(--bg-elevated)]/35 last:border-b-0">
+                                    <div className="flex items-start gap-3">
                                         <div className="pt-1">
                                             {!item.isBundle ? (
                                                 <input
@@ -139,10 +157,28 @@ export function BillItems({
                                                     value={item.desc}
                                                     onChange={(e) => updateItem(item.id, 'desc', e.target.value)}
                                                     className={clsx(
-                                                        "w-full !h-auto !min-h-0 !border-0 !bg-transparent !p-0 !shadow-none !ring-0 focus:!ring-0 text-sm placeholder-[var(--text-muted)] leading-tight font-display",
+                                                        "min-w-0 flex-1 !h-auto !min-h-0 !border-0 !bg-transparent !p-0 !shadow-none !ring-0 focus:!ring-0 text-sm placeholder-[var(--text-muted)] leading-tight font-display",
                                                         item.isBundle ? "text-[var(--accent)] font-semibold" : "text-[var(--text-primary)] font-semibold"
                                                     )}
                                                 />
+                                                <div className="flex shrink-0 items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
+                                                    {item.isBundle && (
+                                                        <button
+                                                            onClick={() => unmergeBundle(item.id)}
+                                                            className="rounded p-1 text-[var(--text-muted)] transition-colors hover:bg-[var(--accent)]/10 hover:text-[var(--accent)]"
+                                                            title="Unmerge Bundle"
+                                                        >
+                                                            <Info size={14} />
+                                                        </button>
+                                                    )}
+                                                    <button
+                                                        onClick={() => deleteItem(item.id)}
+                                                        className="rounded p-1 text-[var(--text-muted)] transition-colors hover:bg-red-500/10 hover:text-red-500"
+                                                        title="Remove item"
+                                                    >
+                                                        <Trash2 size={14} />
+                                                    </button>
+                                                </div>
                                             </div>
                                             {item.details && (
                                                 <div className="mt-1.5 flex flex-col gap-1 font-sans font-normal leading-relaxed">
@@ -177,38 +213,38 @@ export function BillItems({
                                             )}
                                         </div>
                                     </div>
-                                    <div className="text-center text-sm font-medium text-[var(--text-primary)]">
-                                        {item.qty}
-                                    </div>
-                                    <div className="flex h-8 items-center justify-end px-1">
-                                        <div className="flex items-center gap-2">
-                                            <span className="w-5 shrink-0 text-right text-[10px] font-bold text-[var(--accent)] opacity-60">Rp</span>
-                                            <span className="w-24 text-right text-sm font-medium tabular-nums text-[var(--text-primary)] font-display">
+                                    <div className="flex h-8 items-center justify-end">
+                                        <div className="flex items-center justify-end gap-1">
+                                            <span className="shrink-0 text-right text-[10px] font-bold text-[var(--accent)] opacity-60">Rp</span>
+                                            <span className="w-20 text-right text-sm font-medium tabular-nums text-[var(--text-primary)] font-display">
                                                 {item.price.toLocaleString('id-ID')}
                                             </span>
                                         </div>
                                     </div>
-                                    <div className="flex items-center justify-center gap-1">
-                                        {item.isBundle && (
-                                            <button
-                                                onClick={() => unmergeBundle(item.id)}
-                                                className="text-[var(--text-muted)] hover:text-[var(--accent)] p-1"
-                                                title="Unmerge Bundle"
-                                            >
-                                                <Info size={14} />
-                                            </button>
-                                        )}
-                                        <button
-                                            onClick={() => deleteItem(item.id)}
-                                            className="text-[var(--text-muted)] hover:text-red-500 p-1 transition-all"
-                                        >
-                                            <Trash2 size={14} />
-                                        </button>
+                                    <div className="flex justify-center">
+                                        <input
+                                            id={`item-quantity-desktop-${item.id}`}
+                                            name={`itemQuantityDesktop-${item.id}`}
+                                            aria-label={`Quantity for ${item.desc}`}
+                                            type="number"
+                                            min="1"
+                                            value={item.qty}
+                                            onChange={(e) => updateItem(item.id, 'qty', Math.max(1, Number(e.target.value) || 1))}
+                                            className="h-8 w-12 rounded border border-transparent bg-transparent p-0 text-center font-display text-xs font-medium tabular-nums text-[var(--text-primary)] outline-none transition-colors hover:border-[var(--border)] focus:border-[var(--accent)]"
+                                        />
+                                    </div>
+                                    <div className="flex h-8 items-center justify-end pr-1">
+                                        <div className="flex items-center justify-end gap-1">
+                                            <span className="shrink-0 text-right text-[10px] font-bold text-[var(--accent)] opacity-60">Rp</span>
+                                            <span className="w-24 text-right text-sm font-semibold tabular-nums text-[var(--text-primary)] font-display">
+                                                {(item.price * item.qty).toLocaleString('id-ID')}
+                                            </span>
+                                        </div>
                                     </div>
                                 </div>
 
                                 {/* Mobile View */}
-                                <div className="md:hidden py-4 border-b border-[var(--border)]/50 space-y-3">
+                                <div className="md:hidden border-b border-[var(--border)]/60 px-4 py-4 space-y-3 last:border-b-0">
                                     <div className="flex items-start gap-3">
                                         <div className="pt-0.5 shrink-0 text-left">
                                             {!item.isBundle ? (
@@ -267,177 +303,112 @@ export function BillItems({
                                                 )}
                                             />
                                         </div>
-                                        <div className="flex items-center gap-3 bg-[var(--bg-elevated)] rounded-full px-4 py-1 border border-[var(--border)]">
-                                            <span className="font-mono-var text-xs font-bold w-4 text-center">{item.qty}</span>
+                                        <div className="flex items-center gap-2 rounded-md border border-[var(--border)] bg-[var(--bg-elevated)] px-2 py-1">
+                                            <label htmlFor={`item-quantity-mobile-${item.id}`} className="text-[9px] font-bold uppercase tracking-[0.12em] text-[var(--text-muted)]">Qty</label>
+                                            <input
+                                                id={`item-quantity-mobile-${item.id}`}
+                                                name={`itemQuantityMobile-${item.id}`}
+                                                aria-label={`Quantity for ${item.desc}`}
+                                                type="number"
+                                                min="1"
+                                                value={item.qty}
+                                                onChange={(e) => updateItem(item.id, 'qty', Math.max(1, Number(e.target.value) || 1))}
+                                                className="h-6 w-8 border-0 bg-transparent p-0 text-center font-display text-xs font-medium text-[var(--text-primary)] outline-none"
+                                            />
                                         </div>
                                     </div>
                                 </div>
                             </div>
                         ))}
-                    </div>
+                        </div>
 
-                    {/* Totals Section */}
-                    <div className="mt-8 pt-6 border-t border-[var(--border)]/70">
-                        <div className="space-y-5">
-                            <div className="grid grid-cols-[minmax(0,1fr)_56px_160px_32px] gap-3 px-2 items-center">
-                                <div className="col-span-2 text-right pr-6">
-                                    <span className="text-[10px] font-bold uppercase tracking-[0.2em] text-[var(--text-muted)]">Subtotal</span>
-                                </div>
-                                <div className="flex h-8 w-[160px] items-center justify-end px-2">
-                                    <div className="flex items-center gap-2">
-                                        <span className="w-5 shrink-0 text-right text-[10px] font-bold text-[var(--accent)] opacity-60">Rp</span>
-                                        <span className="w-24 text-right text-sm font-medium tabular-nums text-[var(--text-primary)] font-display">
-                                            {subtotal.toLocaleString('id-ID')}
-                                        </span>
-                                    </div>
-                                </div>
-                                <div></div>
-                            </div>
-
-                            <div className="grid grid-cols-[minmax(0,1fr)_56px_160px_32px] gap-3 px-2 items-center">
-                                <div className="col-span-2 text-right pr-6">
-                                    <label htmlFor="cashback-amount" className="text-[10px] font-bold uppercase tracking-[0.2em] text-[var(--text-muted)]">Cashback</label>
-                                </div>
-                                <div className="text-left py-1">
-                                    <div className="flex items-center border border-[var(--border)] rounded-md px-2 py-0 bg-transparent gap-1.5 h-9 w-[160px] justify-between">
-                                        <button
-                                            type="button"
-                                            onClick={() => setCashback((prev) => cashbackStepDown(prev))}
-                                            disabled={cashback === 0}
-                                            className="flex h-5 w-4 shrink-0 items-center justify-center text-xs text-[var(--text-muted)] transition-colors hover:text-[var(--accent)] disabled:cursor-not-allowed disabled:opacity-30"
-                                        >
-                                            -
-                                        </button>
-                                        <div className="flex-1 flex justify-end items-center gap-2">
-                                            <span className="text-[11px] font-bold text-[var(--accent)] opacity-60 w-5 text-right shrink-0">Rp</span>
-                                            <input
-                                                id="cashback-amount"
-                                                name="cashbackAmount"
-                                                aria-label="Cashback amount"
-                                                type="text"
-                                                value={cashback.toLocaleString('id-ID')}
-                                                readOnly
-                                                className="w-24 !h-auto !min-h-0 !border-0 !bg-transparent !p-0 !shadow-none !ring-0 text-sm text-right text-[var(--text-primary)] font-bold outline-none tabular-nums font-display"
-                                            />
-                                        </div>
-                                        <button
-                                            type="button"
-                                            onClick={() => setCashback((prev) => cashbackStepUp(prev))}
-                                            disabled={!canIncreaseCashback}
-                                            className="flex h-5 w-4 shrink-0 items-center justify-center text-xs text-[var(--accent)] transition-colors hover:opacity-70 disabled:cursor-not-allowed disabled:opacity-30"
-                                        >
-                                            +
-                                        </button>
-                                    </div>
-                                </div>
-                                <div></div>
-                            </div>
-
-                            <div className="pt-6 mt-2 space-y-3 border-t border-[var(--border)]/30">
-                                <div className="grid grid-cols-[minmax(0,1fr)_56px_160px_32px] gap-3 px-2 items-center mb-1">
-                                    <div className="col-span-2 text-right pr-6">
-                                        <span className="text-[10px] font-bold uppercase tracking-[0.2em] text-[var(--accent)]">Jadwal Termin</span>
-                                    </div>
-                                    <div className="flex justify-start">
-                                        <div className={clsx(
-                                            "text-[9px] uppercase font-bold px-2.5 py-1 rounded-full tracking-widest transition-all whitespace-nowrap",
-                                            remaining === 0 ? "text-emerald-500 bg-emerald-500/10 border border-emerald-500/20" :
-                                                remaining < 0
-                                                    ? "text-red-500 bg-red-500/10 border border-red-500/20"
-                                                    : "text-orange-500 bg-orange-500/10 border border-orange-500/20 shadow-sm shadow-orange-500/5"
-                                        )}>
-                                            {remaining === 0 ? 'Auto balanced' : remaining < 0 ? `Overallocated: ${rupiah(Math.abs(remaining))}` : `Unallocated: ${rupiah(remaining)}`}
-                                        </div>
-                                    </div>
-                                    <div></div>
-                                </div>
-
-                                {paymentTerms.map((term) => (
-                                    <div key={term.id} className="group relative grid grid-cols-[minmax(0,1fr)_56px_160px_32px] gap-3 px-2 items-center py-0.5 transition-all hover:bg-[var(--bg-elevated)]/20 rounded-md">
-                                        <div className="col-span-2 text-right pr-6">
-                                            <input
-                                                id={`payment-term-label-${term.id}`}
-                                                name={`paymentTermLabel-${term.id}`}
-                                                aria-label={`Label for ${term.label}`}
-                                                type="text"
-                                                value={term.label}
-                                                onChange={(e) => updatePaymentTerm(term.id, 'label', e.target.value)}
-                                                disabled={term.locked}
-                                                className="w-full !h-auto !min-h-0 !border-0 !bg-transparent !p-0 !shadow-none !ring-0 focus:!ring-0 text-[10px] text-right text-[var(--text-secondary)] font-bold uppercase tracking-[0.2em] disabled:opacity-70 outline-none font-sans"
-                                            />
-                                        </div>
-                                        <div className="flex items-center">
-                                            <div className="flex items-center border border-[var(--border)] rounded-md px-2 py-0 bg-transparent gap-1.5 h-9 w-[160px] justify-between">
-                                                <button
-                                                    type="button"
-                                                    onClick={() => stepPaymentTerm(term.id, 'down')}
-                                                    disabled={term.id === 'full'}
-                                                    className="flex h-5 w-4 shrink-0 items-center justify-center text-xs text-[var(--text-muted)] transition-colors hover:text-[var(--accent)] disabled:cursor-not-allowed disabled:opacity-30"
-                                                >
-                                                    -
-                                                </button>
-                                                <div className="flex-1 flex justify-end items-center gap-2">
-                                                    <span className="text-[10px] font-bold text-[var(--accent)] opacity-60 w-5 text-right shrink-0">Rp</span>
-                                                    {term.locked ? (
-                                                        <span className="w-24 h-8 flex items-center justify-end text-right text-sm font-bold text-[var(--text-primary)] tabular-nums leading-none font-display">
-                                                            {term.amount.toLocaleString('id-ID')}
-                                                        </span>
-                                                    ) : (
-                                                        <input
-                                                            id={`payment-term-amount-${term.id}`}
-                                                            name={`paymentTermAmount-${term.id}`}
-                                                            aria-label={`Amount for ${term.label}`}
-                                                            type="text"
-                                                            value={term.amount.toLocaleString('id-ID')}
-                                                            onChange={(e) => {
-                                                                const val = e.target.value.replace(/\D/g, '');
-                                                                updatePaymentTerm(term.id, 'amount', Number(val));
-                                                            }}
-                                                            className="w-24 h-8 !min-h-0 !border-0 !bg-transparent !p-0 !shadow-none !ring-0 focus:!ring-0 text-sm text-right text-[var(--text-primary)] font-bold outline-none tabular-nums leading-none font-display"
-                                                        />
-                                                    )}
-                                                </div>
-                                                <button
-                                                    type="button"
-                                                    onClick={() => stepPaymentTerm(term.id, 'up')}
-                                                    disabled={term.id === 'full'}
-                                                    className="flex h-5 w-4 shrink-0 items-center justify-center text-xs text-[var(--accent)] transition-colors hover:opacity-70 disabled:cursor-not-allowed disabled:opacity-30"
-                                                >
-                                                    +
-                                                </button>
-                                            </div>
-                                        </div>
-                                        <div className="flex justify-center">
-                                            {!term.locked && (
-                                                <button onClick={() => removePaymentTerm(term.id)} className="text-[var(--text-muted)] hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity p-1">
-                                                    <X size={12} />
-                                                </button>
-                                            )}
-                                        </div>
-                                    </div>
-                                ))}
-
-                                {/* Bottom Controls: Right Aligned */}
-                                <div className="grid grid-cols-[minmax(0,1fr)_56px_160px_32px] gap-3 px-2 pt-2 items-center">
-                                    <div className="col-span-2"></div>
-                                    <div className="flex w-[160px]">
-                                        <button type="button" onClick={addPaymentTerm} disabled={!canAddPaymentTerm} className="flex-1 rounded border border-dashed border-[var(--border)] py-1 text-[8px] font-bold uppercase tracking-widest text-[var(--text-muted)] transition-colors hover:text-[var(--accent)] disabled:cursor-not-allowed disabled:opacity-35">+ Termin</button>
-                                    </div>
-                                    <div></div>
+                    {/* Settlement ledger */}
+                    <div className="border-t border-[var(--border)] pt-4">
+                        <div className="space-y-1">
+                            <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-4 border-b border-[var(--border)]/60 px-4 py-3 md:grid-cols-[minmax(0,1fr)_170px_80px_300px]">
+                                <span className="label-xs text-[var(--text-muted)] md:col-span-3 md:text-right">Subtotal</span>
+                                <div className="flex items-baseline justify-end gap-3">
+                                    <span className="text-[10px] font-bold text-[var(--accent)]/70">Rp</span>
+                                    <span className="font-display text-lg font-semibold tabular-nums text-[var(--text-primary)]">{subtotal.toLocaleString('id-ID')}</span>
                                 </div>
                             </div>
 
-                            {/* Grand Total Row */}
-                            <div className="flex justify-between items-center w-full mt-12 pt-8 border-t-2 border-[var(--border)]/40 px-2">
-                                <span className="text-[10px] font-bold uppercase tracking-[0.2em] text-[var(--text-muted)]">Grand Total</span>
-                                <div className="flex items-baseline gap-2">
-                                    <span className="w-5 text-right text-[10px] font-bold text-[var(--accent)] opacity-60">Rp</span>
-                                    <span className="w-28 text-right text-2xl font-semibold leading-none tracking-tight tabular-nums text-[var(--text-primary)] font-display">
-                                        {grandTotal.toLocaleString('id-ID')}
-                                    </span>
+                            <div className="grid grid-cols-[minmax(0,1fr)_11rem] items-center gap-3 border-b border-[var(--border)]/60 px-4 py-3 md:grid-cols-[minmax(0,1fr)_170px_80px_300px] md:gap-4">
+                                <label htmlFor="cashback-amount" className="label-xs shrink-0 text-[var(--text-muted)] md:col-span-3 md:text-right">Cashback</label>
+                                <div className="flex h-10 w-full items-center rounded-md border border-[var(--border)] bg-[var(--bg-elevated)]/20 px-1.5">
+                                    <button type="button" onClick={() => setCashback((prev) => cashbackStepDown(prev))} disabled={cashback === 0} aria-label="Decrease cashback" title="Decrease cashback" className="flex h-7 w-8 shrink-0 items-center justify-center rounded text-[var(--text-muted)] transition-colors hover:bg-[var(--bg-elevated)] hover:text-[var(--accent)] disabled:cursor-not-allowed disabled:opacity-30">
+                                        <Minus size={13} />
+                                    </button>
+                                    <button type="button" onClick={() => setCashback((prev) => cashbackStepUp(prev))} disabled={!canIncreaseCashback} aria-label="Increase cashback" title="Increase cashback" className="flex h-7 w-8 shrink-0 items-center justify-center rounded text-[var(--accent)] transition-colors hover:bg-[var(--accent)]/10 disabled:cursor-not-allowed disabled:opacity-30">
+                                        <Plus size={13} />
+                                    </button>
+                                    <div className="flex min-w-0 flex-1 items-center justify-end gap-1">
+                                        <span className="text-[10px] font-bold text-[var(--accent)]/70">Rp</span>
+                  <span id="cashback-amount" className="font-display text-lg font-semibold tabular-nums text-[var(--text-primary)]">{cashback.toLocaleString('id-ID')}</span>
+                                    </div>
                                 </div>
                             </div>
                         </div>
+
+                        <div className="mt-5 border-t border-[var(--border)] pt-4">
+                            <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-4 border-b border-[var(--border)]/60 px-4 py-4 md:grid-cols-[minmax(0,1fr)_170px_80px_300px]">
+                                <div className="md:col-span-3">
+                                    <div className="text-sm font-semibold text-[var(--text-primary)]">Payment Status</div>
+                                    <div className="mt-1 text-xs text-[var(--text-muted)]">{allocationDetail}</div>
+                                </div>
+          <span className={clsx("rounded-full border px-3 py-1 text-center text-[9px] font-bold uppercase tracking-[0.12em]", allocationClass)}>{allocationState}</span>
+                            </div>
+                        </div>
+
+                        <div className="mt-4 border-t border-[var(--border)] pt-4">
+                            <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-4 border-b border-[var(--border)]/60 px-4 py-3 md:grid-cols-[minmax(0,1fr)_170px_80px_300px]">
+                                <span className="label-xs text-[var(--accent)] md:col-span-3 md:text-right">Jadwal Termin</span>
+                                {hasFilledRemaining ? (
+                                    <button type="button" onClick={undoFillRemaining} className="w-full rounded-md border border-[var(--border)] bg-[var(--bg-elevated)]/40 px-2 py-1.5 text-[9px] font-bold uppercase tracking-[0.1em] text-[var(--text-secondary)] transition-colors hover:border-[var(--accent)]/50 hover:text-[var(--accent)]">Undo fill</button>
+                                ) : remaining > 0 ? (
+                                    <button type="button" onClick={fillRemaining} className="w-full rounded-md border border-[var(--accent)]/35 bg-[var(--accent)]/10 px-2 py-1.5 text-[9px] font-bold uppercase tracking-[0.1em] text-[var(--accent)] transition-colors hover:bg-[var(--accent)]/20">Fill remaining</button>
+                                ) : <span />}
+                            </div>
+
+                            <div>
+                                {paymentTerms.map((term) => (
+                                    <div key={term.id} className="group relative grid grid-cols-[minmax(0,1fr)_11rem] items-center gap-3 border-b border-[var(--border)]/60 px-4 py-3 md:grid-cols-[minmax(0,1fr)_170px_80px_300px] md:gap-4">
+                                        <div className="min-w-0 md:col-span-3">
+                                            {term.locked ? (
+                                                <span className="label-xs block w-full text-left text-[var(--text-muted)] md:text-right">{term.label}</span>
+                                            ) : (
+                                                <input id={`payment-term-label-${term.id}`} name={`paymentTermLabel-${term.id}`} aria-label={`Label for ${term.label}`} type="text" value={term.label} onChange={(e) => updatePaymentTerm(term.id, 'label', e.target.value)} className="w-full !h-auto !min-h-0 !border-0 !bg-transparent !p-0 !shadow-none !ring-0 focus:!ring-0 !text-[10px] !font-bold !tracking-[0.15em] !uppercase !leading-none text-left text-[var(--text-muted)] outline-none md:text-right" />
+                                            )}
+                                        </div>
+                                        <div className="flex items-center gap-2">
+                                            <div className="flex h-10 min-w-0 flex-1 items-center rounded-md border border-[var(--border)] bg-[var(--bg-elevated)]/20 px-1.5">
+                                                <button type="button" onClick={() => stepPaymentTerm(term.id, 'down')} aria-label={`Decrease ${term.label}`} title="Decrease amount" className="flex h-7 w-8 shrink-0 items-center justify-center rounded text-[var(--text-muted)] transition-colors hover:bg-[var(--bg-elevated)] hover:text-[var(--accent)]"><Minus size={13} /></button>
+                                                <button type="button" onClick={() => stepPaymentTerm(term.id, 'up')} aria-label={`Increase ${term.label}`} title="Increase amount" className="flex h-7 w-8 shrink-0 items-center justify-center rounded text-[var(--accent)] transition-colors hover:bg-[var(--accent)]/10"><Plus size={13} /></button>
+                                                <div className="flex min-w-0 flex-1 items-center justify-end gap-2">
+                                                    <span className="text-[10px] font-bold text-[var(--accent)]/70">Rp</span>
+                                                    {term.locked ? <span className="w-full text-right font-display text-base font-semibold tabular-nums text-[var(--text-primary)]">{term.amount.toLocaleString('id-ID')}</span> : <input id={`payment-term-amount-${term.id}`} name={`paymentTermAmount-${term.id}`} aria-label={`Amount for ${term.label}`} type="text" value={term.amount.toLocaleString('id-ID')} onChange={(e) => updatePaymentTerm(term.id, 'amount', Number(e.target.value.replace(/\D/g, '')))} className="w-full !h-auto !min-h-0 !border-0 !bg-transparent !p-0 !shadow-none !ring-0 focus:!ring-0 text-right font-display text-base font-semibold tabular-nums text-[var(--text-primary)] outline-none" />}
+                                                </div>
+                                            </div>
+                                        </div>
+                                        {!term.locked && <button type="button" onClick={() => removePaymentTerm(term.id)} aria-label={`Remove ${term.label}`} title="Remove payment term" className="absolute right-[316px] top-1/2 hidden h-7 w-7 -translate-y-1/2 items-center justify-center rounded text-[var(--text-muted)] transition-colors hover:bg-red-500/10 hover:text-red-500 md:flex md:opacity-0 md:group-hover:opacity-100"><X size={14} /></button>}
+                                    </div>
+                                ))}
+                            </div>
+
+                            <div className="grid grid-cols-1 px-4 pt-3 md:grid-cols-[minmax(0,1fr)_170px_80px_300px]">
+                                <button type="button" onClick={addPaymentTerm} disabled={!canAddPaymentTerm} className="flex h-10 w-full items-center justify-center gap-2 rounded-md border border-dashed border-[var(--border)] text-[10px] font-bold uppercase tracking-[0.15em] text-[var(--text-muted)] transition-colors hover:border-[var(--accent)]/60 hover:text-[var(--accent)] disabled:cursor-not-allowed disabled:opacity-35 md:col-start-4"><Plus size={13} /> Add Payment Term</button>
+                            </div>
+                        </div>
+
+                        <div className="mt-5 grid grid-cols-[minmax(0,1fr)_auto] items-end gap-4 border-t-2 border-[var(--border)] px-4 py-5 md:grid-cols-[minmax(0,1fr)_170px_80px_300px]">
+                            <span className="label-xs text-[var(--accent)] md:col-span-3 md:text-right">Grand Total</span>
+                            <div className="flex items-baseline justify-end gap-3">
+                                <span className="text-[10px] font-bold text-[var(--accent)]/70">Rp</span>
+                                <span className="font-display text-3xl font-semibold tabular-nums text-[var(--text-primary)]">{grandTotal.toLocaleString('id-ID')}</span>
+                            </div>
+                        </div>
+                    </div>
+                    </div>
                     </div>
                 </>
             )}

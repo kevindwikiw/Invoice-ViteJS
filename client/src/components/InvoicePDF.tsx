@@ -117,6 +117,8 @@ type Invoice = {
     invoiceNo?: string | number | null;
     clientName?: string | null;
     date?: string | Date | null;
+    createdAt?: string | Date | null;
+    created_at?: string | Date | null;
 };
 
 // ======================
@@ -710,6 +712,8 @@ export const InvoicePDF = ({ invoice, proofs = [] }: { invoice: Invoice; proofs?
         const tz = s(data.timeZone, DEFAULT_TIMEZONE);
         const weddingDate = (data.weddingDate ?? invoice?.date ?? "") as unknown;
         const dateStr = formatDateSafe(weddingDate, tz);
+        const createdDate = invoice?.createdAt ?? invoice?.created_at ?? invoice?.date ?? weddingDate;
+        const createdDateStr = formatDateSafe(createdDate, tz);
         const venue = s(data.venue, "");
         const hours = s(data.hours, ""); 
         const notes = s(data.notes, ""); 
@@ -736,7 +740,7 @@ export const InvoicePDF = ({ invoice, proofs = [] }: { invoice: Invoice; proofs?
                 <Page size="A4" style={styles.page}>
                     <Header />
 
-                    <View style={[styles.metaContainer, { marginTop: TOP_BAR_H + mm(4), justifyContent: 'flex-end', alignItems: 'flex-start' }]}>
+                    <View style={[styles.metaContainer, { marginTop: TOP_BAR_H + mm(6), justifyContent: 'flex-end', alignItems: 'flex-start' }]}>
                         {/* INVOICE TO (Right Aligned Cluster) */}
                         <View style={{ marginRight: 20, alignItems: 'flex-end' }}>
                             <Text style={{ fontFamily: 'Helvetica-Bold', fontSize: 8, color: COLORS.DARK_GRAY, textTransform: 'uppercase', marginBottom: 2, textAlign: 'right' }}>
@@ -767,7 +771,7 @@ export const InvoicePDF = ({ invoice, proofs = [] }: { invoice: Invoice; proofs?
                                     Created:
                                 </Text>
                                 <Text style={{ fontSize: 9, fontFamily: 'Helvetica', color: COLORS.BLACK, textAlign: 'right' }}>
-                                    {dateStr}
+                                    {createdDateStr}
                                 </Text>
                             </View>
                         </View>

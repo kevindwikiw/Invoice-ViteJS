@@ -147,13 +147,9 @@ function extractInvoiceMetadata(invoiceData: unknown, fallbackDate = ''): Invoic
 }
 
 function deriveStatus(invoiceData: unknown): 'LUNAS' | 'DP' | 'DP+TERMIN' | 'UNPAID' {
-    const terms = extractInvoiceMetadata(invoiceData).paymentTerms
-    const pelunasan = terms.find(term => term.id === 'full' || term.label?.toLowerCase().includes('pelunasan'))
-    if (pelunasan && pelunasan.amount > 0) return 'LUNAS'
-
-    const paidOthers = terms.filter(term => term.id !== 'full' && term.amount > 0)
-    if (paidOthers.length > 1) return 'DP+TERMIN'
-    if (paidOthers.length === 1) return 'DP'
+    // Payment terms describe the planned schedule, not amounts already received.
+    // The invoice model does not yet persist a verified payment ledger/status.
+    void invoiceData
     return 'UNPAID'
 }
 
@@ -315,7 +311,7 @@ export default function InvoiceHistory() {
                 .replace(/[<>:"/\\|?*]/g, '-')
 
             link.href = url
-            link.download = `Invoice-${invoiceNo}.pdf`
+            link.download = `${invoiceNo}.pdf`
             document.body.appendChild(link)
             link.click()
             link.remove()
