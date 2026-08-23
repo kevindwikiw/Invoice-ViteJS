@@ -23,7 +23,15 @@ import { compressImage } from '../utils/image';
 import { invoiceItemFromPackage, packageRowId } from '../lib/packageCatalog';
 
 // Utility
-const rupiah = (n: number) => `Rp ${n.toLocaleString('id-ID')} `;
+const safeNumber = (value: unknown, fallback = 0) => {
+    const numberValue = typeof value === 'number'
+        ? value
+        : typeof value === 'string'
+            ? Number(value.replace(/[^\d.-]/g, ''))
+            : Number(value);
+    return Number.isFinite(numberValue) ? numberValue : fallback;
+};
+const rupiah = (n: number) => `Rp ${safeNumber(n).toLocaleString('id-ID')} `;
 import { fetchWithAuth } from '../lib/api';
 import { useToast } from '../context/ToastContext';
 import { useCreateInvoiceState } from '../hooks/useCreateInvoiceState';
@@ -104,6 +112,42 @@ const dataUrlToFile = (dataUrl: string, index: number): File => {
     }
 
     return new File([bytes], `preview-proof-${index + 1}.${extension}`, { type: mime });
+};
+
+const normalizeInvoiceItem = (item: Partial<InvoiceItem>, index: number): InvoiceItem => {
+    const id = String(item.id || item._rowId || `item_${Date.now()}_${index}`);
+    const bundleSrc = Array.isArray(item._bundleSrc)
+        ? item._bundleSrc.map((bundleItem, bundleIndex) => normalizeInvoiceItem(bundleItem, bundleIndex))
+        : undefined;
+
+    return {
+        ...item,
+        id,
+        desc: String(item.desc || item.name || 'Untitled item'),
+        details: item.details || '',
+        price: safeNumber(item.price),
+        qty: Math.max(1, safeNumber(item.qty, 1)),
+        isBundle: Boolean(item.isBundle),
+        _rowId: String(item._rowId || id),
+        ...(bundleSrc ? { _bundleSrc: bundleSrc } : {}),
+    };
+};
+
+const normalizePaymentTerms = (terms: Partial<PaymentTerm>[]): PaymentTerm[] => {
+    const normalized = terms.map((term, index) => ({
+        id: String(term.id || `term_${Date.now()}_${index}`),
+        label: String(term.label || `Termin ${index + 1}`),
+        amount: safeNumber(term.amount),
+        locked: Boolean(term.locked),
+    }));
+
+    const hasDownPayment = normalized.some((term) => term.id === 'dp');
+    const hasSettlement = normalized.some((term) => term.id === 'full');
+    return [
+        ...(hasDownPayment ? [] : [{ id: 'dp', label: 'Down Payment', amount: 0, locked: true }]),
+        ...normalized,
+        ...(hasSettlement ? [] : [{ id: 'full', label: 'Pelunasan', amount: 0, locked: true }]),
+    ];
 };
 
 export default function CreateInvoice() {
@@ -216,9 +260,9 @@ export default function CreateInvoice() {
             setClientPhone(draft.clientPhone || '');
             setEventTitle(draft.eventTitle || '');
             setHours(draft.hours || '');
-            setCartItems(Array.isArray(draft.items) ? draft.items : []);
-            if (Array.isArray(draft.paymentTerms)) setPaymentTerms(draft.paymentTerms);
-            setCashback(draft.cashback || 0);
+            setCartItems(Array.isArray(draft.items) ? draft.items.map(normalizeInvoiceItem) : []);
+            if (Array.isArray(draft.paymentTerms)) setPaymentTerms(normalizePaymentTerms(draft.paymentTerms));
+            setCashback(safeNumber(draft.cashback));
             setBankName(draft.bankName || '');
             setBankAcc(draft.bankAcc || '');
             setBankHolder(draft.bankHolder || '');
@@ -314,24 +358,24 @@ export default function CreateInvoice() {
 
     // CALCULATIONS
     const subtotal = useMemo(() =>
-        cartItems.reduce((sum, item) => sum + (item.price * item.qty), 0),
+        cartItems.reduce((sum, item) => sum + (safeNumber(item.price) * Math.max(1, safeNumber(item.qty, 1))), 0),
         [cartItems]
     );
-    const grandTotal = useMemo(() => Math.max(0, subtotal - cashback), [subtotal, cashback]);
+    const grandTotal = useMemo(() => Math.max(0, subtotal - safeNumber(cashback)), [subtotal, cashback]);
     const scheduledPaymentTotal = useMemo(() =>
-        paymentTerms.reduce((sum, term) => sum + term.amount, 0),
+        paymentTerms.reduce((sum, term) => sum + safeNumber(term.amount), 0),
         [paymentTerms]
     );
     const resolvedPaymentTerms = paymentTerms;
     const totalAllocated = useMemo(() =>
-        resolvedPaymentTerms.reduce((sum, term) => sum + term.amount, 0),
+        resolvedPaymentTerms.reduce((sum, term) => sum + safeNumber(term.amount), 0),
         [resolvedPaymentTerms]
     );
     const remaining = grandTotal - totalAllocated;
     const maxCashback = Math.max(0, subtotal - scheduledPaymentTotal);
     const cashbackStepUp = (curr: number) => Math.min(maxCashback, curr + 200000);
     const cashbackStepDown = (curr: number) => Math.max(0, curr - 200000);
-    const canIncreaseCashback = cashback < maxCashback;
+    const canIncreaseCashback = safeNumber(cashback) < maxCashback;
     const canAddPaymentTerm = paymentTerms.length < 6;
 
     // CART ACTIONS
@@ -435,7 +479,7 @@ export default function CreateInvoice() {
         if (selectedItems.length < 2) return;
 
         const price = mergePriceMode === 'sum' 
-            ? selectedItems.reduce((sum, item) => sum + (item.price * item.qty), 0)
+            ? selectedItems.reduce((sum, item) => sum + (safeNumber(item.price) * Math.max(1, safeNumber(item.qty, 1))), 0)
             : mergeCustomPrice;
 
         const title = mergeTitle || `Bundling: ${selectedItems.map(i => i.desc).slice(0, 2).join(' + ')}...`;
@@ -473,7 +517,7 @@ export default function CreateInvoice() {
 
             const otherScheduledTotal = prev
                 .filter((term) => term.id !== id)
-                .reduce((sum, term) => sum + term.amount, 0);
+                .reduce((sum, term) => sum + safeNumber(term.amount), 0);
             const amount = Math.min(Math.max(0, Number(value) || 0), Math.max(0, grandTotal - otherScheduledTotal));
 
             return prev.map(term => term.id === id ? { ...term, amount } : term);
@@ -488,7 +532,7 @@ export default function CreateInvoice() {
 
             const otherScheduledTotal = prev
                 .filter((item) => item.id !== id)
-                .reduce((sum, item) => sum + item.amount, 0);
+                .reduce((sum, item) => sum + safeNumber(item.amount), 0);
             const maxAmount = Math.max(0, grandTotal - otherScheduledTotal);
             const amount = dir === 'up'
                 ? Math.min(maxAmount, term.amount + 200000)
@@ -503,7 +547,7 @@ export default function CreateInvoice() {
         setPaymentTerms(prev => {
             const scheduledWithoutSettlement = prev
                 .filter((term) => term.id !== 'full')
-                .reduce((sum, term) => sum + term.amount, 0);
+                .reduce((sum, term) => sum + safeNumber(term.amount), 0);
             const settlementAmount = Math.max(0, grandTotal - scheduledWithoutSettlement);
 
             return prev.map((term) => term.id === 'full' ? { ...term, amount: settlementAmount } : term);
@@ -544,16 +588,17 @@ export default function CreateInvoice() {
             setClientName(editInvoiceData.clientName || editInvoiceData.client_name || '');
             setIsManualInvoice(true);
             try {
-                const data = typeof editInvoiceData.invoiceData === 'string' ? JSON.parse(editInvoiceData.invoiceData) : editInvoiceData.invoice_data;
+                const rawInvoiceData = editInvoiceData.invoiceData ?? editInvoiceData.invoice_data;
+                const data = typeof rawInvoiceData === 'string' ? JSON.parse(rawInvoiceData) : rawInvoiceData;
                 if (data) {
                     if (data.venue) setVenue(data.venue);
                     if (data.weddingDate) setWeddingDate(data.weddingDate);
                     if (data.clientPhone) setClientPhone(data.clientPhone);
                     if (data.eventTitle) setEventTitle(data.eventTitle);
                     if (data.hours) setHours(data.hours);
-                    if (data.cashback !== undefined) setCashback(data.cashback);
-                    if (data.items) setCartItems(data.items.map((it: InvoiceItem) => ({ ...it, _rowId: it._rowId || it.id || String(Math.random()) })));
-                    if (data.paymentTerms) setPaymentTerms(data.paymentTerms);
+                    if (data.cashback !== undefined) setCashback(safeNumber(data.cashback));
+                    if (Array.isArray(data.items)) setCartItems(data.items.map(normalizeInvoiceItem));
+                    if (Array.isArray(data.paymentTerms)) setPaymentTerms(normalizePaymentTerms(data.paymentTerms));
                     if (data.notes) setNotes(data.notes);
                 }
                 const proofs = editInvoiceData.paymentProofs || editInvoiceData.payment_proofs;

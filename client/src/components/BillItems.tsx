@@ -2,6 +2,17 @@ import { ShoppingCart, Trash2, Package, Info, Minus, Plus, X } from 'lucide-reac
 import clsx from 'clsx';
 import type { InvoiceItem, PaymentTerm } from '../types/invoice';
 
+const safeNumber = (value: unknown, fallback = 0) => {
+    const numberValue = typeof value === 'number'
+        ? value
+        : typeof value === 'string'
+            ? Number(value.replace(/[^\d.-]/g, ''))
+            : Number(value);
+    return Number.isFinite(numberValue) ? numberValue : fallback;
+};
+
+const formatNumber = (value: unknown) => safeNumber(value).toLocaleString('id-ID');
+
 interface BillItemsProps {
     items: InvoiceItem[];
     selectedRowIds: Set<string>;
@@ -217,7 +228,7 @@ export function BillItems({
                                         <div className="flex items-center justify-end gap-1">
                                             <span className="shrink-0 text-right text-[10px] font-bold text-[var(--accent)] opacity-60">Rp</span>
                                             <span className="w-20 text-right text-sm font-medium tabular-nums text-[var(--text-primary)] font-display">
-                                                {item.price.toLocaleString('id-ID')}
+                                                {formatNumber(item.price)}
                                             </span>
                                         </div>
                                     </div>
@@ -228,7 +239,7 @@ export function BillItems({
                                             aria-label={`Quantity for ${item.desc}`}
                                             type="number"
                                             min="1"
-                                            value={item.qty}
+                                            value={Math.max(1, safeNumber(item.qty, 1))}
                                             onChange={(e) => updateItem(item.id, 'qty', Math.max(1, Number(e.target.value) || 1))}
                                             className="h-8 w-12 rounded border border-transparent bg-transparent p-0 text-center font-display text-xs font-medium tabular-nums text-[var(--text-primary)] outline-none transition-colors hover:border-[var(--border)] focus:border-[var(--accent)]"
                                         />
@@ -237,7 +248,7 @@ export function BillItems({
                                         <div className="flex items-center justify-end gap-1">
                                             <span className="shrink-0 text-right text-[10px] font-bold text-[var(--accent)] opacity-60">Rp</span>
                                             <span className="w-24 text-right text-sm font-semibold tabular-nums text-[var(--text-primary)] font-display">
-                                                {(item.price * item.qty).toLocaleString('id-ID')}
+                                                {formatNumber(safeNumber(item.price) * Math.max(1, safeNumber(item.qty, 1)))}
                                             </span>
                                         </div>
                                     </div>
@@ -294,7 +305,7 @@ export function BillItems({
                                                 id={`item-price-mobile-${item.id}`}
                                                 name={`itemPriceMobile-${item.id}`}
                                                 type="number"
-                                                value={item.price}
+                                                value={safeNumber(item.price)}
                                                 onChange={(e) => updateItem(item.id, 'price', Number(e.target.value))}
                                                 disabled={!item.isBundle}
                                                 className={clsx(
@@ -311,7 +322,7 @@ export function BillItems({
                                                 aria-label={`Quantity for ${item.desc}`}
                                                 type="number"
                                                 min="1"
-                                                value={item.qty}
+                                                value={Math.max(1, safeNumber(item.qty, 1))}
                                                 onChange={(e) => updateItem(item.id, 'qty', Math.max(1, Number(e.target.value) || 1))}
                                                 className="h-6 w-8 border-0 bg-transparent p-0 text-center font-display text-xs font-medium text-[var(--text-primary)] outline-none"
                                             />
@@ -329,7 +340,7 @@ export function BillItems({
                                 <span className="label-xs text-[var(--text-muted)] md:col-span-3 md:text-right">Subtotal</span>
                                 <div className="flex items-baseline justify-end gap-3">
                                     <span className="text-[10px] font-bold text-[var(--accent)]/70">Rp</span>
-                                    <span className="font-display text-lg font-semibold tabular-nums text-[var(--text-primary)]">{subtotal.toLocaleString('id-ID')}</span>
+                                    <span className="font-display text-lg font-semibold tabular-nums text-[var(--text-primary)]">{formatNumber(subtotal)}</span>
                                 </div>
                             </div>
 
@@ -344,7 +355,7 @@ export function BillItems({
                                     </button>
                                     <div className="flex min-w-0 flex-1 items-center justify-end gap-1">
                                         <span className="text-[10px] font-bold text-[var(--accent)]/70">Rp</span>
-                  <span id="cashback-amount" className="font-display text-lg font-semibold tabular-nums text-[var(--text-primary)]">{cashback.toLocaleString('id-ID')}</span>
+                  <span id="cashback-amount" className="font-display text-lg font-semibold tabular-nums text-[var(--text-primary)]">{formatNumber(cashback)}</span>
                                     </div>
                                 </div>
                             </div>
@@ -386,7 +397,7 @@ export function BillItems({
                                                 <button type="button" onClick={() => stepPaymentTerm(term.id, 'up')} aria-label={`Increase ${term.label}`} title="Increase amount" className="flex h-7 w-8 shrink-0 items-center justify-center rounded text-[var(--accent)] transition-colors hover:bg-[var(--accent)]/10"><Plus size={13} /></button>
                                                 <div className="flex min-w-0 flex-1 items-center justify-end gap-2">
                                                     <span className="text-[10px] font-bold text-[var(--accent)]/70">Rp</span>
-                                                    {term.locked ? <span className="w-full text-right font-display text-base font-semibold tabular-nums text-[var(--text-primary)]">{term.amount.toLocaleString('id-ID')}</span> : <input id={`payment-term-amount-${term.id}`} name={`paymentTermAmount-${term.id}`} aria-label={`Amount for ${term.label}`} type="text" value={term.amount.toLocaleString('id-ID')} onChange={(e) => updatePaymentTerm(term.id, 'amount', Number(e.target.value.replace(/\D/g, '')))} className="w-full !h-auto !min-h-0 !border-0 !bg-transparent !p-0 !shadow-none !ring-0 focus:!ring-0 text-right font-display text-base font-semibold tabular-nums text-[var(--text-primary)] outline-none" />}
+                                                    {term.locked ? <span className="w-full text-right font-display text-base font-semibold tabular-nums text-[var(--text-primary)]">{formatNumber(term.amount)}</span> : <input id={`payment-term-amount-${term.id}`} name={`paymentTermAmount-${term.id}`} aria-label={`Amount for ${term.label}`} type="text" value={formatNumber(term.amount)} onChange={(e) => updatePaymentTerm(term.id, 'amount', Number(e.target.value.replace(/\D/g, '')))} className="w-full !h-auto !min-h-0 !border-0 !bg-transparent !p-0 !shadow-none !ring-0 focus:!ring-0 text-right font-display text-base font-semibold tabular-nums text-[var(--text-primary)] outline-none" />}
                                                 </div>
                                             </div>
                                         </div>
@@ -404,7 +415,7 @@ export function BillItems({
                             <span className="label-xs text-[var(--accent)] md:col-span-3 md:text-right">Grand Total</span>
                             <div className="flex items-baseline justify-end gap-3">
                                 <span className="text-[10px] font-bold text-[var(--accent)]/70">Rp</span>
-                                <span className="font-display text-3xl font-semibold tabular-nums text-[var(--text-primary)]">{grandTotal.toLocaleString('id-ID')}</span>
+                                <span className="font-display text-3xl font-semibold tabular-nums text-[var(--text-primary)]">{formatNumber(grandTotal)}</span>
                             </div>
                         </div>
                     </div>
