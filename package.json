@@ -6,6 +6,9 @@
     "client",
     "server"
   ],
+  "overrides": {
+    "esbuild": ">=0.25.4"
+  },
   "scripts": {
     "dev:client": "bun --cwd client dev",
     "dev:server": "bun --cwd server dev",
