@@ -3,11 +3,10 @@ import clsx from 'clsx';
 import type { InvoiceItem, PaymentTerm } from '../types/invoice';
 
 const safeNumber = (value: unknown, fallback = 0) => {
-    const numberValue = typeof value === 'number'
-        ? value
-        : typeof value === 'string'
-            ? Number(value.replace(/[^\d.-]/g, ''))
-            : Number(value);
+    const normalizedValue = typeof value === 'string'
+        ? value.trim().replace(/[^\d-]/g, '')
+        : value;
+    const numberValue = Number(normalizedValue);
     return Number.isFinite(numberValue) ? numberValue : fallback;
 };
 

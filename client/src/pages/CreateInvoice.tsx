@@ -24,11 +24,10 @@ import { invoiceItemFromPackage, packageRowId } from '../lib/packageCatalog';
 
 // Utility
 const safeNumber = (value: unknown, fallback = 0) => {
-    const numberValue = typeof value === 'number'
-        ? value
-        : typeof value === 'string'
-            ? Number(value.replace(/[^\d.-]/g, ''))
-            : Number(value);
+    const normalizedValue = typeof value === 'string'
+        ? value.trim().replace(/[^\d-]/g, '')
+        : value;
+    const numberValue = Number(normalizedValue);
     return Number.isFinite(numberValue) ? numberValue : fallback;
 };
 const rupiah = (n: number) => `Rp ${safeNumber(n).toLocaleString('id-ID')} `;
@@ -114,23 +113,38 @@ const dataUrlToFile = (dataUrl: string, index: number): File => {
     return new File([bytes], `preview-proof-${index + 1}.${extension}`, { type: mime });
 };
 
-const normalizeInvoiceItem = (item: Partial<InvoiceItem>, index: number): InvoiceItem => {
-    const id = String(item.id || item._rowId || `item_${Date.now()}_${index}`);
-    const bundleSrc = Array.isArray(item._bundleSrc)
-        ? item._bundleSrc.map((bundleItem, bundleIndex) => normalizeInvoiceItem(bundleItem, bundleIndex))
+const firstText = (record: Record<string, unknown>, keys: string[]) => {
+    for (const key of keys) {
+        const value = record[key];
+        if (typeof value === 'string' && value.trim()) return value.trim();
+    }
+    return '';
+};
+
+const normalizeInvoiceItem = (item: unknown, index: number): InvoiceItem => {
+    const record = item && typeof item === 'object' ? item as Record<string, unknown> : {};
+    const id = String(record.id || record._rowId || record.packageId || record.package_id || `item_${Date.now()}_${index}`);
+    const rawBundleSrc = record._bundleSrc ?? record.bundleSrc ?? record.bundle_items;
+    const bundleSrc = Array.isArray(rawBundleSrc)
+        ? rawBundleSrc.map((bundleItem, bundleIndex) => normalizeInvoiceItem(bundleItem, bundleIndex))
         : undefined;
+    const description = firstText(record, [
+        'desc', 'Description', 'packageName', 'package_name', 'name', 'title', 'description',
+    ]);
+    const details = firstText(record, ['details', 'Details', 'packageDetails', 'package_details']);
+    const catalogDescription = firstText(record, ['description']);
 
     return {
-        ...item,
+        ...record,
         id,
-        desc: String(item.desc || item.name || 'Untitled item'),
-        details: item.details || '',
-        price: safeNumber(item.price),
-        qty: Math.max(1, safeNumber(item.qty, 1)),
-        isBundle: Boolean(item.isBundle),
-        _rowId: String(item._rowId || id),
+        desc: description || 'Untitled item',
+        details: details || (catalogDescription !== description ? catalogDescription : ''),
+        price: safeNumber(record.price ?? record.Price ?? record.unitPrice ?? record.unit_price),
+        qty: Math.max(1, safeNumber(record.qty ?? record.Qty ?? record.quantity, 1)),
+        isBundle: Boolean(record.isBundle ?? record.is_bundle),
+        _rowId: String(record._rowId || record.packageId || record.package_id || id),
         ...(bundleSrc ? { _bundleSrc: bundleSrc } : {}),
-    };
+    } as InvoiceItem;
 };
 
 const normalizePaymentTerms = (terms: Partial<PaymentTerm>[]): PaymentTerm[] => {
