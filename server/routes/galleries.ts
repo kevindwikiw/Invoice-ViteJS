@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { Buffer } from "node:buffer";
 import { randomUUID } from "node:crypto";
-import * as XLSX from "xlsx";
+import writeExcelFile from "write-excel-file/node";
 import { galleryAll, galleryBatch, galleryInsertReturningId, galleryOne, galleryRun } from "../db/galleries";
 import { fetchDriveFile, getDrivePhotoMetadata, listDrivePhotos } from "../lib/google-drive";
 import { resetGalleryPinAttempts } from "../middleware/rate-limit";
@@ -573,17 +573,18 @@ adminGalleriesRouter.get("/:id/export.xlsx", async (c) => {
                selected_filename as "selectedFilename", note, submitted_at as "submittedAt"
         FROM gallery_selections WHERE gallery_id = ? ORDER BY selected_filename
     `, [id]);
-    const worksheet = XLSX.utils.json_to_sheet(selections.map((row, index) => ({
-        No: index + 1,
-        Gallery: gallery.title,
-        DriveFileId: row.selectedDriveFileId,
-        Filename: row.selectedFilename,
-        Note: row.note || "",
-        SubmittedAt: row.submittedAt,
-    })));
-    const workbook = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(workbook, worksheet, "Selections");
-    const file = XLSX.write(workbook, { type: "buffer", bookType: "xlsx" });
+    const rows = [
+        ["No", "Gallery", "DriveFileId", "Filename", "Note", "SubmittedAt"],
+        ...selections.map((row, index) => [
+            index + 1,
+            gallery.title,
+            row.selectedDriveFileId,
+            row.selectedFilename,
+            row.note || "",
+            row.submittedAt,
+        ]),
+    ];
+    const file = await writeExcelFile(rows, { sheet: "Selections" }).toBuffer();
     return new Response(file, {
         headers: {
             "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",

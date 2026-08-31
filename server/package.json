@@ -11,7 +11,7 @@
     "drizzle-orm": "^0.45.1",
     "hono": "^4.11.7",
     "postgres": "^3.4.9",
-    "xlsx": "^0.18.5"
+    "write-excel-file": "^4.1.1"
   },
   "devDependencies": {
     "@types/bun": "latest",

@@ -1,6 +1,6 @@
 import { createClient, type InValue } from "@tursodatabase/serverless/compat";
 import { Database } from "bun:sqlite";
-import { databaseDriver, run, sqlite } from "./runtime";
+import { databaseDriver, sqlite } from "./runtime";
 
 type RateLimitRow = {
     key: string;
@@ -45,7 +45,8 @@ async function ensureRateLimitStorage(): Promise<void> {
     )`;
     const index = "CREATE INDEX IF NOT EXISTS idx_rate_limits_reset_at ON rate_limits(reset_at)";
     if (turso) {
-        await turso.batch([schema, index], "write");
+        await turso.execute(schema);
+        await turso.execute(index);
         return;
     }
     fallbackSqlite.prepare(schema).run();
