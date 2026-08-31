@@ -37,16 +37,16 @@ function tursoArgs(params: unknown[]): InValue[] {
 
 async function ensureRateLimitStorage(): Promise<void> {
     if (hasPartialTursoConfig) throw new Error("TURSO_DATABASE_URL and TURSO_AUTH_TOKEN must both be configured for shared rate limits.");
-    const schema = `CREATE TABLE IF NOT EXISTS rate_limits (
-        rate_key TEXT PRIMARY KEY,
-        count INTEGER NOT NULL,
-        reset_at INTEGER NOT NULL,
-        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-    )`;
+    const schema = "CREATE TABLE IF NOT EXISTS rate_limits (rate_key TEXT PRIMARY KEY, count INTEGER NOT NULL, reset_at INTEGER NOT NULL, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)";
     const index = "CREATE INDEX IF NOT EXISTS idx_rate_limits_reset_at ON rate_limits(reset_at)";
     if (turso) {
-        await turso.execute(schema);
-        await turso.execute(index);
+        try {
+            await turso.execute({ sql: schema, args: [] });
+            await turso.execute({ sql: index, args: [] });
+        } catch (error) {
+            console.error("Rate limit storage initialization failed.", error);
+            throw error;
+        }
         return;
     }
     fallbackSqlite.prepare(schema).run();
