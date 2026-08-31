@@ -1,10 +1,35 @@
 import { Hono } from "hono";
+import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import { sign } from "hono/jwt";
-import { resetRateLimit } from "../middleware/rate-limit";
+import { clientIp, resetRateLimit } from "../middleware/rate-limit";
 import { databaseDriver, one, run } from "../db/runtime";
 import { getEffectivePermissions, getPermissionOverrides } from "../permissions";
 
 const auth = new Hono();
+const ACCESS_COOKIE = "orbit_access";
+const REFRESH_COOKIE = "orbit_refresh";
+const ACCESS_TOKEN_SECONDS = 60 * 15;
+const REFRESH_TOKEN_SECONDS = 7 * 24 * 60 * 60;
+
+function cookieOptions(maxAge: number) {
+    return {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === "production",
+        sameSite: "Lax" as const,
+        path: "/",
+        maxAge,
+    };
+}
+
+function setAuthCookies(c: any, accessToken: string, refreshToken: string) {
+    setCookie(c, ACCESS_COOKIE, accessToken, cookieOptions(ACCESS_TOKEN_SECONDS));
+    setCookie(c, REFRESH_COOKIE, refreshToken, cookieOptions(REFRESH_TOKEN_SECONDS));
+}
+
+function clearAuthCookies(c: any) {
+    deleteCookie(c, ACCESS_COOKIE, { path: "/" });
+    deleteCookie(c, REFRESH_COOKIE, { path: "/" });
+}
 
 function generateRefreshToken(): string {
     return `${crypto.randomUUID().replaceAll("-", "")}${crypto.randomUUID().replaceAll("-", "")}`;
@@ -29,10 +54,7 @@ async function logAudit(event: string, data: {
 }
 
 function getClientInfo(c: any): { ip: string; userAgent: string } {
-    const ip = c.req.header("x-forwarded-for")?.split(",")[0].trim()
-        || c.req.header("x-real-ip")
-        || "unknown";
-    return { ip, userAgent: c.req.header("user-agent") || "unknown" };
+    return { ip: clientIp(c), userAgent: c.req.header("user-agent") || "unknown" };
 }
 
 const expiryCondition = databaseDriver === "postgres"
@@ -79,14 +101,13 @@ auth.post("/login", async (c) => {
 
         await run("UPDATE refresh_tokens SET revoked = 1 WHERE user_id = ?", [user.id]);
         await run(`INSERT INTO refresh_tokens (user_id, token, expires_at) VALUES (?, ?, ?)`, [user.id, refreshToken, refreshExpiresAt]);
-        resetRateLimit(ip);
+        await resetRateLimit(ip);
         await logAudit("LOGIN_SUCCESS", { userId: user.id, email, ip, userAgent, success: true });
 
         const permissionOverrides = await getPermissionOverrides(user.id);
+        setAuthCookies(c, accessToken, refreshToken);
         return c.json({
-            accessToken,
-            refreshToken,
-            expiresIn: 900,
+            expiresIn: ACCESS_TOKEN_SECONDS,
             user: {
                 id: user.id,
                 email: user.email,
@@ -106,7 +127,8 @@ auth.post("/login", async (c) => {
 auth.post("/refresh", async (c) => {
     const { ip, userAgent } = getClientInfo(c);
     try {
-        const { refreshToken } = await c.req.json();
+        const body = await c.req.json().catch(() => ({})) as { refreshToken?: string };
+        const refreshToken = getCookie(c, REFRESH_COOKIE) || body.refreshToken;
         if (!refreshToken) return c.json({ error: "Refresh token required" }, 400);
 
         const tokenData = await one<{
@@ -146,10 +168,9 @@ auth.post("/refresh", async (c) => {
         await logAudit("TOKEN_REFRESH", { userId: tokenData.user_id, email: tokenData.email, ip, userAgent, success: true });
 
         const permissionOverrides = await getPermissionOverrides(tokenData.user_id);
+        setAuthCookies(c, accessToken, nextRefreshToken);
         return c.json({
-            accessToken,
-            refreshToken: nextRefreshToken,
-            expiresIn: 900,
+            expiresIn: ACCESS_TOKEN_SECONDS,
             user: {
                 id: tokenData.user_id,
                 email: tokenData.email,
@@ -168,11 +189,13 @@ auth.post("/refresh", async (c) => {
 auth.post("/logout", async (c) => {
     const { ip, userAgent } = getClientInfo(c);
     try {
-        const { refreshToken } = await c.req.json();
+        const body = await c.req.json().catch(() => ({})) as { refreshToken?: string };
+        const refreshToken = getCookie(c, REFRESH_COOKIE) || body.refreshToken;
         if (refreshToken) {
             const result = await run("UPDATE refresh_tokens SET revoked = 1 WHERE token = ?", [refreshToken]);
             if (result.changes > 0) await logAudit("LOGOUT", { ip, userAgent, success: true });
         }
+        clearAuthCookies(c);
         return c.json({ success: true });
     } catch (e) {
         return c.json({ error: String(e) }, 500);

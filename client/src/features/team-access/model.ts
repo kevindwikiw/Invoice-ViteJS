@@ -83,6 +83,7 @@ export const ROLE_FEATURE_DEFAULTS: Record<UserRole, Record<FeaturePermission, b
         edit_billing_history: true,
         view_audit_logs: true,
         view_feedback_inbox: true,
+        manage_client_galleries: true,
     },
     admin: {
         view_market_insights: true,
@@ -90,6 +91,7 @@ export const ROLE_FEATURE_DEFAULTS: Record<UserRole, Record<FeaturePermission, b
         edit_billing_history: true,
         view_audit_logs: true,
         view_feedback_inbox: true,
+        manage_client_galleries: true,
     },
     employee: {
         view_market_insights: false,
@@ -97,6 +99,7 @@ export const ROLE_FEATURE_DEFAULTS: Record<UserRole, Record<FeaturePermission, b
         edit_billing_history: false,
         view_audit_logs: false,
         view_feedback_inbox: false,
+        manage_client_galleries: false,
     },
 };
 
@@ -129,6 +132,11 @@ export const PERMISSION_ROWS: Array<{
         key: 'view_feedback_inbox',
         label: 'Feedback Inbox',
         description: 'Review client feedback submissions and private photos.',
+    },
+    {
+        key: 'manage_client_galleries',
+        label: 'Client Galleries',
+        description: 'Create culling galleries, sync Google Drive photos, and export selections.',
     },
 ];
 

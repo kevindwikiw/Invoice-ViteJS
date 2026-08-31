@@ -11,6 +11,8 @@ const AnalyticsRoute = lazyRouteComponent(() => import('./pages/Analytics'))
 const InvoiceActivityRoute = lazyRouteComponent(() => import('./pages/InvoiceActivity'))
 const FeedbackRoute = lazyRouteComponent(() => import('./pages/Feedback'))
 const FeedbackInboxRoute = lazyRouteComponent(() => import('./pages/FeedbackInbox'))
+const ClientGalleriesRoute = lazyRouteComponent(() => import('./pages/ClientGalleries'))
+const ClientCullingGalleryRoute = lazyRouteComponent(() => import('./pages/ClientCullingGallery'))
 
 // Root route - Just the shell
 const rootRoute = createRootRoute({
@@ -35,6 +37,12 @@ const feedbackRoute = createRoute({
     getParentRoute: () => rootRoute,
     path: '/feedback',
     component: FeedbackRoute,
+})
+
+const clientCullingGalleryRoute = createRoute({
+    getParentRoute: () => rootRoute,
+    path: '/culling/$galleryId',
+    component: ClientCullingGalleryRoute,
 })
 
 // App Routes (Children of GlobalSidebar/Layout)
@@ -90,10 +98,17 @@ const feedbackInboxRoute = createRoute({
     component: FeedbackInboxRoute,
 })
 
+const clientGalleriesRoute = createRoute({
+    getParentRoute: () => layoutRoute,
+    path: '/galleries',
+    component: ClientGalleriesRoute,
+})
+
 // Build Tree
 const routeTree = rootRoute.addChildren([
     loginRoute,
     feedbackRoute,
+    clientCullingGalleryRoute,
     layoutRoute.addChildren([
         indexRoute,
         createInvoiceRoute,
@@ -103,6 +118,7 @@ const routeTree = rootRoute.addChildren([
         auditLogsRoute,
         userManagementRoute,
         feedbackInboxRoute,
+        clientGalleriesRoute,
     ])
 ])
 

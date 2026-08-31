@@ -87,6 +87,17 @@ Payment proofs are stored as base64 data URLs in the Supabase
 volume is required. Uploads are limited to 5 MB per file; keep an eye on
 database size if many large proofs are retained.
 
+Client photo culling galleries are available at `/galleries` for admins and
+`/culling/:galleryId` for clients. Admins can paste a full Google Drive folder
+URL; the API extracts and stores the folder ID. Gallery/culling metadata is kept
+out of the invoice Supabase database. Configure `GALLERY_DATABASE_URL` and
+`GALLERY_AUTH_TOKEN` for a dedicated Turso database, or omit them to reuse
+`TURSO_DATABASE_URL` and `TURSO_AUTH_TOKEN`. Configure Google Drive with either
+`GOOGLE_SERVICE_ACCOUNT_JSON` or `GOOGLE_SERVICE_ACCOUNT_EMAIL` plus
+`GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY`, then share each source Drive folder with
+the service account email. The app stores only Drive file metadata and submitted
+filenames; thumbnails and previews are proxied from Drive through the server.
+
 ### Database modes
 
 The Hono API selects its database at startup:

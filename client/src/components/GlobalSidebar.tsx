@@ -16,6 +16,7 @@ import {
     ChevronLeft,
     ChevronRight,
     MessageSquare,
+    Images,
     type LucideIcon,
 } from 'lucide-react';
 import clsx from 'clsx';
@@ -62,6 +63,7 @@ const ANALYTICS_ITEMS: Array<{ to: string; icon: LucideIcon; label: string; perm
 const ADMINISTRATION_ITEMS: Array<{ to: string; icon: LucideIcon; label: string; permission: FeaturePermission }> = [
     { to: '/activity', icon: ClipboardList, label: 'Audit Logs', permission: 'view_audit_logs' },
     { to: '/feedback-inbox', icon: MessageSquare, label: 'Feedback Inbox', permission: 'view_feedback_inbox' },
+    { to: '/galleries', icon: Images, label: 'Client Galleries', permission: 'manage_client_galleries' },
 ];
 
 type SidebarNavigationProps = {

@@ -14,7 +14,7 @@ import {
 } from '../components/activity/AuditPrimitives'
 import { UserAuditPanel } from '../components/activity/UserAuditPanel'
 import { SectionHeading } from '../components/SectionHeading'
-import { PAGE_SHELL_CLASS } from '../constants/uiContract'
+import { PAGE_SHELL_CLASS, SEGMENT_BUTTON_ACTIVE_CLASS, SEGMENT_BUTTON_BASE_CLASS, SEGMENT_BUTTON_INACTIVE_CLASS, SEGMENT_GROUP_CLASS } from '../constants/uiContract'
 import { PANEL_CARD_CLASS } from '../constants/invoice'
 
 type InvoiceActivityEntry = {
@@ -261,11 +261,11 @@ export default function InvoiceActivity() {
     const totalPages = Array.isArray(activityResponse) ? 1 : activityResponse?.totalPages ?? 1
     const totalLogs = Array.isArray(activityResponse) ? activity.length : activityResponse?.total ?? 0
     const scopeTabs = (
-        <div className="flex shrink-0 items-center rounded-xl border border-[var(--border)] bg-[var(--bg-deep)] p-1">
+        <div className={SEGMENT_GROUP_CLASS}>
             <button
                 type="button"
                 onClick={() => setScope('invoice')}
-                className={clsx('whitespace-nowrap rounded-xl px-4 py-1.5 text-xs font-medium tracking-[0.08em] transition-colors', scope === 'invoice' ? 'bg-[var(--bg-hover)] text-[var(--text-primary)] shadow-sm' : 'text-[var(--text-muted)] hover:text-[var(--text-secondary)]')}
+                className={clsx(SEGMENT_BUTTON_BASE_CLASS, 'cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)]', scope === 'invoice' ? SEGMENT_BUTTON_ACTIVE_CLASS : SEGMENT_BUTTON_INACTIVE_CLASS)}
             >
                 Invoice activity
             </button>
@@ -273,7 +273,7 @@ export default function InvoiceActivity() {
                 <button
                     type="button"
                     onClick={() => setScope('user')}
-                    className={clsx('whitespace-nowrap rounded-xl px-4 py-1.5 text-xs font-medium tracking-[0.08em] transition-colors', scope === 'user' ? 'bg-[var(--bg-hover)] text-[var(--text-primary)] shadow-sm' : 'text-[var(--text-muted)] hover:text-[var(--text-secondary)]')}
+                    className={clsx(SEGMENT_BUTTON_BASE_CLASS, 'cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)]', scope === 'user' ? SEGMENT_BUTTON_ACTIVE_CLASS : SEGMENT_BUTTON_INACTIVE_CLASS)}
                 >
                     User activity
                 </button>

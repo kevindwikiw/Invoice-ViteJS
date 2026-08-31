@@ -1,4 +1,5 @@
 import type { Context, Next } from "hono";
+import { getCookie } from "hono/cookie";
 import { verify } from "hono/jwt";
 
 interface JWTPayload {
@@ -17,12 +18,13 @@ type AuthEnv = {
 
 export const authMiddleware = async (c: Context<AuthEnv>, next: Next) => {
     const authHeader = c.req.header("Authorization");
+    const cookieToken = getCookie(c, "orbit_access");
 
-    if (!authHeader || !authHeader.startsWith("Bearer ")) {
+    if (!cookieToken && (!authHeader || !authHeader.startsWith("Bearer "))) {
         return c.json({ error: "No token provided" }, 401);
     }
 
-    const token = authHeader.slice("Bearer ".length).trim();
+    const token = cookieToken || authHeader!.slice("Bearer ".length).trim();
 
     if (!token) {
         return c.json({ error: "No token provided" }, 401);

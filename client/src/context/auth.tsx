@@ -4,7 +4,6 @@ import {
     apiFetch,
     clearAuthTokens,
     fetchWithAuth,
-    getRefreshToken,
     hasAccessToken,
     loadAuthTokens,
     saveAuthTokens,
@@ -12,7 +11,7 @@ import {
 
 // ============ TYPES ============
 export type UserRole = 'superadmin' | 'admin' | 'employee';
-export type FeaturePermission = 'view_market_insights' | 'view_billing_history' | 'edit_billing_history' | 'view_audit_logs' | 'view_feedback_inbox';
+export type FeaturePermission = 'view_market_insights' | 'view_billing_history' | 'edit_billing_history' | 'view_audit_logs' | 'view_feedback_inbox' | 'manage_client_galleries';
 export type PermissionEffect = 'grant' | 'deny';
 export type PermissionOverrideMode = PermissionEffect | 'inherit';
 
@@ -69,6 +68,7 @@ const ROLE_PERMISSIONS: Record<UserRole, Permission[]> = {
         'edit_billing_history',
         'view_audit_logs',
         'view_feedback_inbox',
+        'manage_client_galleries',
     ],
     admin: [
         'manage_users',
@@ -83,6 +83,7 @@ const ROLE_PERMISSIONS: Record<UserRole, Permission[]> = {
         'edit_billing_history',
         'view_audit_logs',
         'view_feedback_inbox',
+        'manage_client_galleries',
     ],
     employee: [
         'create_invoices',
@@ -92,7 +93,7 @@ const ROLE_PERMISSIONS: Record<UserRole, Permission[]> = {
     ]
 };
 
-const FEATURE_PERMISSIONS: FeaturePermission[] = ['view_market_insights', 'view_billing_history', 'edit_billing_history', 'view_audit_logs', 'view_feedback_inbox'];
+const FEATURE_PERMISSIONS: FeaturePermission[] = ['view_market_insights', 'view_billing_history', 'edit_billing_history', 'view_audit_logs', 'view_feedback_inbox', 'manage_client_galleries'];
 const IDLE_TIMEOUT_MS = 30 * 60 * 1000;
 const LAST_ACTIVITY_KEY = 'orbit_last_activity';
 
@@ -214,8 +215,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
                 return { success: false, error: data.error || 'Login failed' };
             }
 
-            // Store tokens
-            saveAuthTokens(data.accessToken, data.refreshToken, data.expiresIn);
+            // Credentials are stored in HttpOnly cookies by the server.
+            saveAuthTokens();
 
             // Store user
             setUser(data.user);
@@ -230,8 +231,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     };
 
     const logout = useCallback(async () => {
-        const oldRefresh = getRefreshToken();
-
         setUser(null);
         clearAuthTokens();
         localStorage.removeItem(LAST_ACTIVITY_KEY);
@@ -239,17 +238,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         // Notify other tabs immediately
         window.dispatchEvent(new Event('storage'));
 
-        // Call server logout to revoke refresh token
-        if (oldRefresh) {
-            try {
-                await apiFetch('/auth/logout', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ refreshToken: oldRefresh }),
-                });
-            } catch {
-                // Ignore errors
-            }
+        // Call server logout to revoke refresh token cookie.
+        try {
+            await apiFetch('/auth/logout', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+            });
+        } catch {
+            // Ignore errors
         }
     }, []);
 

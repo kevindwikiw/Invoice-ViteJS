@@ -9,11 +9,14 @@ import configRoutes from "./routes/config";
 import analyticsRoutes from "./routes/analytics";
 import sequencesRoutes from "./routes/sequences";
 import { feedbackAdminRoutes, publicFeedbackRoutes } from "./routes/feedback";
+import { adminGalleriesRouter, publicGalleriesRouter } from "./routes/galleries";
 import { authMiddleware, requireRole } from "./middleware/auth";
-import { loginRateLimiter } from "./middleware/rate-limit";
+import { galleryPinRateLimiter, loginRateLimiter } from "./middleware/rate-limit";
 import { ensureUserPermissionsTable, hasFeaturePermission } from "./permissions";
 import { databaseDriver, sqlite } from "./db/runtime";
 import { feedbackStorageDriver } from "./db/feedback";
+import { galleryStorageDriver } from "./db/galleries";
+import { rateLimitStorageDriver } from "./db/rate-limit";
 
 type AuthUser = {
     sub: number;
@@ -100,6 +103,8 @@ try {
     console.log("Postgres mode enabled; expecting the Supabase migration to be applied.");
 }
 console.log(`Feedback storage mode: ${feedbackStorageDriver}`);
+console.log(`Gallery storage mode: ${galleryStorageDriver}`);
+console.log(`Rate limit storage mode: ${rateLimitStorageDriver}`);
 
 const app = new Hono<AppEnv>();
 const allowedOrigins = (
@@ -115,7 +120,7 @@ app.use("/*", cors({
     },
     credentials: true,
     allowMethods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allowHeaders: ["Content-Type", "Authorization"],
+    allowHeaders: ["Content-Type", "Authorization", "x-gallery-token"],
 }));
 
 app.get("/api/health", (c) => c.json({ ok: true, service: "invoice-api" }));
@@ -125,6 +130,8 @@ app.post("/api/auth/login", loginRateLimiter);
 app.use("/api/auth/me", authMiddleware);
 app.route("/api/auth", authRoutes);
 app.route("/api/public/feedback", publicFeedbackRoutes);
+app.use("/api/public/galleries/:id/verify", galleryPinRateLimiter);
+app.route("/api/public/galleries", publicGalleriesRouter);
 
 for (const path of [
     "/api/packages",
@@ -134,6 +141,7 @@ for (const path of [
     "/api/analytics",
     "/api/sequences",
     "/api/feedback",
+    "/api/galleries",
 ]) {
     app.use(path, authMiddleware);
     app.use(`${path}/*`, authMiddleware);
@@ -145,6 +153,7 @@ app.route("/api/users", usersRoutes);
 app.route("/api/config", configRoutes);
 app.route("/api/analytics", analyticsRoutes);
 app.route("/api/sequences", sequencesRoutes);
+app.route("/api/galleries", adminGalleriesRouter);
 app.use("/api/feedback", requireRole("admin", "superadmin"));
 app.use("/api/feedback/*", requireRole("admin", "superadmin"));
 app.use("/api/feedback", async (c, next) => {
