@@ -3,7 +3,7 @@ import { Database } from "bun:sqlite";
 import { databaseDriver, sqlite } from "./runtime";
 
 type RateLimitRow = {
-    key: string;
+    rateKey: string;
     count: number;
     resetAt: number;
 };
@@ -38,7 +38,7 @@ function tursoArgs(params: unknown[]): InValue[] {
 async function ensureRateLimitStorage(): Promise<void> {
     if (hasPartialTursoConfig) throw new Error("TURSO_DATABASE_URL and TURSO_AUTH_TOKEN must both be configured for shared rate limits.");
     const schema = `CREATE TABLE IF NOT EXISTS rate_limits (
-        key TEXT PRIMARY KEY,
+        rate_key TEXT PRIMARY KEY,
         count INTEGER NOT NULL,
         reset_at INTEGER NOT NULL,
         updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -72,13 +72,13 @@ export async function hitRateLimit(key: string, windowMs: number, maxAttempts: n
     await ensureStorage();
     const resetAt = now + windowMs;
     const sql = `
-        INSERT INTO rate_limits (key, count, reset_at, updated_at)
+        INSERT INTO rate_limits (rate_key, count, reset_at, updated_at)
         VALUES (?, 1, ?, CURRENT_TIMESTAMP)
-        ON CONFLICT(key) DO UPDATE SET
+        ON CONFLICT(rate_key) DO UPDATE SET
             count = CASE WHEN rate_limits.reset_at <= ? THEN 1 ELSE rate_limits.count + 1 END,
             reset_at = CASE WHEN rate_limits.reset_at <= ? THEN ? ELSE rate_limits.reset_at END,
             updated_at = CURRENT_TIMESTAMP
-        RETURNING key, count, reset_at as "resetAt"
+        RETURNING rate_key as "rateKey", count, reset_at as "resetAt"
     `;
     const params = [key, resetAt, now, now, resetAt];
     let row: RateLimitRow | null = null;
@@ -101,10 +101,10 @@ export async function hitRateLimit(key: string, windowMs: number, maxAttempts: n
 export async function resetRateLimitKey(key: string): Promise<void> {
     await ensureStorage();
     if (turso) {
-        await turso.execute({ sql: "DELETE FROM rate_limits WHERE key = ?", args: [key] });
+        await turso.execute({ sql: "DELETE FROM rate_limits WHERE rate_key = ?", args: [key] });
         return;
     }
-    fallbackSqlite.prepare("DELETE FROM rate_limits WHERE key = ?").run(key);
+    fallbackSqlite.prepare("DELETE FROM rate_limits WHERE rate_key = ?").run(key);
 }
 
 export async function resetRateLimitSuffixes(scope: string, suffixes: string[]): Promise<void> {
@@ -113,11 +113,11 @@ export async function resetRateLimitSuffixes(scope: string, suffixes: string[]):
     const keys = suffixes.map((suffix) => `${scope}:%:${suffix}`);
     if (turso) {
         for (const key of keys) {
-            await turso.execute({ sql: "DELETE FROM rate_limits WHERE key LIKE ?", args: [key] });
+            await turso.execute({ sql: "DELETE FROM rate_limits WHERE rate_key LIKE ?", args: [key] });
         }
         return;
     }
-    const statement = fallbackSqlite.prepare("DELETE FROM rate_limits WHERE key LIKE ?");
+    const statement = fallbackSqlite.prepare("DELETE FROM rate_limits WHERE rate_key LIKE ?");
     for (const key of keys) statement.run(key);
 }
 
@@ -125,10 +125,10 @@ export async function remainingRateLimit(key: string, maxAttempts: number, now =
     await ensureStorage();
     let row: { count: number; resetAt: number } | null = null;
     if (turso) {
-        const result = await turso.execute({ sql: "SELECT count, reset_at as resetAt FROM rate_limits WHERE key = ?", args: [key] });
+        const result = await turso.execute({ sql: "SELECT count, reset_at as resetAt FROM rate_limits WHERE rate_key = ?", args: [key] });
         row = (result.rows[0] as unknown as { count: number; resetAt: number } | undefined) || null;
     } else {
-        row = fallbackSqlite.prepare("SELECT count, reset_at as resetAt FROM rate_limits WHERE key = ?").get(key) as { count: number; resetAt: number } | null;
+        row = fallbackSqlite.prepare("SELECT count, reset_at as resetAt FROM rate_limits WHERE rate_key = ?").get(key) as { count: number; resetAt: number } | null;
     }
     if (!row || Number(row.resetAt) < now) return maxAttempts;
     return Math.max(0, maxAttempts - Number(row.count));
