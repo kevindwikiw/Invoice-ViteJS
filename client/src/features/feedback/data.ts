@@ -117,6 +117,7 @@ export function useFeedbackQuery(filters: FeedbackFilters, enabled = true) {
         queryKey: ['feedback', filters],
         queryFn: () => fetchFeedback(filters),
         enabled,
+        staleTime: 60 * 1000,
     });
 }
 

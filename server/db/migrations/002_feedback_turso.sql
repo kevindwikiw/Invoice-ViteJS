@@ -10,6 +10,7 @@ create table if not exists feedback (
   tags text not null default '[]',
   message text not null,
   photo_data blob,
+  photo_drive_file_id text,
   photo_mime text,
   photo_size integer,
   status text not null default 'new' check (status in ('new', 'reviewed')),

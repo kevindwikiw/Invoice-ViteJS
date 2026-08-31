@@ -16,9 +16,10 @@ export type DrivePhoto = {
     height?: number | null;
 };
 
-const DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.readonly";
+const DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.readonly https://www.googleapis.com/auth/drive.file";
 const DRIVE_TOKEN_URL = "https://oauth2.googleapis.com/token";
 const DRIVE_API_BASE = "https://www.googleapis.com/drive/v3";
+const DRIVE_UPLOAD_BASE = "https://www.googleapis.com/upload/drive/v3";
 
 let tokenCache: DriveToken | null = null;
 
@@ -190,4 +191,37 @@ export async function fetchDriveFile(fileId: string, thumbnailLink?: string, wid
         throw new Error(message || `Unable to fetch Google Drive file (${response.status}).`);
     }
     return response;
+}
+
+export async function uploadDriveFile(folderId: string, file: File, filename: string): Promise<DrivePhoto> {
+    const token = await getDriveAccessToken();
+    const form = new FormData();
+    form.set("metadata", new Blob([JSON.stringify({
+        name: filename,
+        parents: [folderId],
+    })], { type: "application/json" }));
+    form.set("media", file, filename);
+
+    const params = new URLSearchParams({
+        uploadType: "multipart",
+        supportsAllDrives: "true",
+        fields: "id,name,mimeType,size,thumbnailLink,webViewLink,imageMediaMetadata(width,height)",
+    });
+    const response = await fetch(`${DRIVE_UPLOAD_BASE}/files?${params.toString()}`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+        body: form,
+    });
+    const data = await response.json().catch(() => ({})) as DrivePhoto & { error?: { message?: string }; imageMediaMetadata?: { width?: number; height?: number } };
+    if (!response.ok || !data.id) throw new Error(data.error?.message || `Unable to upload Google Drive file (${response.status}).`);
+    return {
+        id: data.id,
+        name: data.name,
+        mimeType: data.mimeType || file.type,
+        thumbnailLink: data.thumbnailLink,
+        webViewLink: data.webViewLink,
+        size: data.size,
+        width: data.imageMediaMetadata?.width ?? null,
+        height: data.imageMediaMetadata?.height ?? null,
+    };
 }

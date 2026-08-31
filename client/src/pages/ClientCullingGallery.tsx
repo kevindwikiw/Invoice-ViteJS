@@ -137,7 +137,7 @@ const PhotoTile = memo(function PhotoTile({
         <article className={clsx('group relative aspect-[4/3] overflow-hidden bg-[var(--bg-card)] transition-transform duration-200 hover:-translate-y-0.5', selected && 'ring-2 ring-[var(--accent)] ring-offset-2 ring-offset-[var(--bg-deep)]')}>
             <button type="button" onClick={() => onOpen(index)} className="h-full w-full bg-[var(--bg-card)] text-left" aria-label={`Open ${photo.filename}`}>
                 <img
-                    src={galleryThumbnailUrl(galleryId, photo.driveFileId, token)}
+                    src={galleryThumbnailUrl(galleryId, photo.driveFileId, token, photo.photoToken)}
                     alt={photo.filename}
                     loading="lazy"
                     className="h-full w-full object-cover opacity-0 transition-[opacity,transform] duration-500 group-hover:scale-[1.035]"
@@ -495,21 +495,21 @@ const Lightbox = memo(function Lightbox({
                 <div className="flex min-h-0 flex-1 items-center justify-center px-4 py-20 relative">
                     {currentIndex > 0 && (
                         <img 
-                            src={galleryPreviewUrl(galleryId, photos[currentIndex - 1].driveFileId, token)} 
-                            alt="Preload Previous" 
-                            className="absolute opacity-0 pointer-events-none" 
+                            src={galleryPreviewUrl(galleryId, photos[currentIndex - 1].driveFileId, token, photos[currentIndex - 1].photoToken)}
+                            alt="Preload Previous"
+                            className="absolute opacity-0 pointer-events-none"
                         />
                     )}
                     <img 
-                        src={galleryPreviewUrl(galleryId, photo.driveFileId, token)} 
-                        alt={photo.filename} 
-                        className="z-10 max-h-full max-w-full object-contain transition-opacity duration-200" 
+                        src={galleryPreviewUrl(galleryId, photo.driveFileId, token, photo.photoToken)}
+                        alt={photo.filename}
+                        className="z-10 max-h-full max-w-full object-contain transition-opacity duration-200"
                     />
                     {currentIndex < photos.length - 1 && (
                         <img 
-                            src={galleryPreviewUrl(galleryId, photos[currentIndex + 1].driveFileId, token)} 
-                            alt="Preload Next" 
-                            className="absolute opacity-0 pointer-events-none" 
+                            src={galleryPreviewUrl(galleryId, photos[currentIndex + 1].driveFileId, token, photos[currentIndex + 1].photoToken)}
+                            alt="Preload Next"
+                            className="absolute opacity-0 pointer-events-none"
                         />
                     )}
                 </div>
@@ -553,8 +553,8 @@ export default function ClientCullingGallery() {
     const [showSubmitConfirm, setShowSubmitConfirm] = useState(false);
     
     const photosQuery = useQuery({
-        queryKey: ['public-gallery-photos', galleryId, token, page],
-        queryFn: () => getPublicGalleryPhotos(galleryId, token, page, 60),
+        queryKey: ['public-gallery-photos', galleryId, token, page, showSelected],
+        queryFn: () => getPublicGalleryPhotos(galleryId, token, page, 60, showSelected),
         enabled: !!token,
         retry: false,
         placeholderData: keepPreviousData,
@@ -646,14 +646,14 @@ export default function ClientCullingGallery() {
         let cancelled = false;
         const warmNextPage = async () => {
             const nextPage = await queryClient.fetchQuery({
-                queryKey: ['public-gallery-photos', galleryId, token, page + 1],
-                queryFn: () => getPublicGalleryPhotos(galleryId, token, page + 1, 60),
+                queryKey: ['public-gallery-photos', galleryId, token, page + 1, false],
+                queryFn: () => getPublicGalleryPhotos(galleryId, token, page + 1, 60, false),
                 staleTime: 5 * 60 * 1000,
             });
             if (cancelled) return;
             nextPage.photos.forEach((photo) => {
                 const image = new Image();
-                image.src = galleryThumbnailUrl(galleryId, photo.driveFileId, token);
+                image.src = galleryThumbnailUrl(galleryId, photo.driveFileId, token, photo.photoToken);
             });
         };
         const idle = window.setTimeout(() => void warmNextPage(), 250);

@@ -193,9 +193,10 @@ app.get("*", async (c) => {
 
     const requestedFile = await serveClientFile(c.req.path);
     if (requestedFile) {
+        const immutableAsset = c.req.path.startsWith("/assets/") || c.req.path.startsWith("/static/");
         return c.body(requestedFile.stream(), 200, {
             "Content-Type": requestedFile.type || "application/octet-stream",
-            "Cache-Control": c.req.path.startsWith("/assets/") ? "public, max-age=31536000, immutable" : "no-cache",
+            "Cache-Control": immutableAsset ? "public, max-age=31536000, immutable" : "no-cache",
         });
     }
 

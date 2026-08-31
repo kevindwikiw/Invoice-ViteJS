@@ -1,5 +1,6 @@
 import { Hono } from "hono";
-import { feedbackAll, feedbackOne, feedbackRun } from "../db/feedback";
+import { feedbackAll, feedbackOne, feedbackRun, feedbackStorageDriver } from "../db/feedback";
+import { fetchDriveFile, uploadDriveFile } from "../lib/google-drive";
 import { feedbackRateLimiter } from "../middleware/rate-limit";
 
 type FeedbackStatus = "new" | "reviewed";
@@ -21,6 +22,7 @@ type FeedbackRow = {
 
 type FeedbackPhotoRow = {
     photo_data: ArrayBuffer | Uint8Array | null;
+    photo_drive_file_id?: string | null;
     photo_mime: string | null;
 };
 
@@ -57,8 +59,8 @@ const FEEDBACK_TAGS = new Set([
     "Cinematic Film",
     "Professional Service",
 ]);
-const PHOTO_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
-const MAX_PHOTO_BYTES = 1_500_000;
+const PHOTO_TYPES = new Set(["image/jpeg", "image/png", "image/webp", "image/heic", "image/heif"]);
+const MAX_PHOTO_BYTES = 20_000_000;
 
 function parseTags(value: unknown): string[] {
     let candidate: unknown = value;
@@ -118,19 +120,32 @@ publicFeedbackRoutes.post("/", feedbackRateLimiter, async (c) => {
             return c.json({ error: "Feedback note must not exceed 1000 characters." }, 400);
         }
         if (photo && (!PHOTO_TYPES.has(photo.type) || photo.size > MAX_PHOTO_BYTES)) {
-            return c.json({ error: photo.size > MAX_PHOTO_BYTES ? "Photo must be 1.5 MB or smaller." : "Use a JPEG, PNG, or WebP photo." }, 400);
+            return c.json({ error: photo.size > MAX_PHOTO_BYTES ? "Photo must be 20 MB or smaller." : "Use a JPEG, PNG, WebP, or HEIC photo." }, 400);
         }
 
         const legacyNotes = [loved, improvement].filter(Boolean).join("\n\n");
         const message = note || legacyNotes || "Rating and highlights only";
-        const photoData = photo ? new Uint8Array(await photo.arrayBuffer()) : null;
+        let photoData: Uint8Array | null = null;
+        let photoDriveFileId: string | null = null;
+        if (photo) {
+            const feedbackFolderId = process.env.FEEDBACK_DRIVE_FOLDER_ID?.trim();
+            if (feedbackFolderId) {
+                const safeName = photo.name.replace(/[^\w.\- ]+/g, "_").slice(0, 120) || "feedback-photo";
+                const uploaded = await uploadDriveFile(feedbackFolderId, photo, `${Date.now()}-${safeName}`);
+                photoDriveFileId = uploaded.id;
+            } else if (feedbackStorageDriver === "turso") {
+                return c.json({ error: "Feedback photo storage is not configured." }, 500);
+            } else {
+                photoData = new Uint8Array(await photo.arrayBuffer());
+            }
+        }
 
         await feedbackRun(`
             INSERT INTO feedback (
                 invoice_id, invoice_no, client_name, rating, tags, message,
-                photo_data, photo_mime, photo_size, status
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'new')
-        `, [null, "Anonymous", clientName || null, rating, JSON.stringify(tags), message, photoData, photo?.type || null, photo?.size || null]);
+                photo_data, photo_drive_file_id, photo_mime, photo_size, status
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'new')
+        `, [null, "Anonymous", clientName || null, rating, JSON.stringify(tags), message, photoData, photoDriveFileId, photo?.type || null, photo?.size || null]);
 
         return c.json({ success: true }, 201);
     } catch (error) {
@@ -179,7 +194,7 @@ feedbackAdminRoutes.get("/", async (c) => {
         const offset = (page - 1) * limit;
         const rows = await feedbackAll<FeedbackRow>(`
             SELECT id, invoice_id, invoice_no, client_name, rating, tags, message,
-                   CASE WHEN photo_data IS NULL THEN 0 ELSE 1 END AS has_photo, status,
+                   CASE WHEN photo_data IS NULL AND photo_drive_file_id IS NULL THEN 0 ELSE 1 END AS has_photo, status,
                    reviewed_by, reviewed_at, created_at
             FROM feedback
             ${where}
@@ -200,6 +215,7 @@ feedbackAdminRoutes.get("/", async (c) => {
             },
         };
 
+        c.header("Cache-Control", "private, max-age=60");
         return c.json({
             items: rows.map((row) => ({
                 id: Number(row.id),
@@ -233,13 +249,26 @@ feedbackAdminRoutes.get("/:id/photo", async (c) => {
         if (!Number.isInteger(id) || id <= 0) return c.json({ error: "Invalid feedback id." }, 400);
 
         const row = await feedbackOne<FeedbackPhotoRow>(`
-            SELECT photo_data, photo_mime FROM feedback WHERE id = ?
+            SELECT photo_data, photo_drive_file_id, photo_mime FROM feedback WHERE id = ?
         `, [id]);
-        if (!row?.photo_data) return c.json({ error: "Feedback photo not found." }, 404);
+        if (!row?.photo_data && !row?.photo_drive_file_id) return c.json({ error: "Feedback photo not found." }, 404);
 
-        const bytes = row.photo_data instanceof Uint8Array
-            ? row.photo_data
-            : new Uint8Array(row.photo_data);
+        if (row.photo_drive_file_id) {
+            const driveResponse = await fetchDriveFile(row.photo_drive_file_id);
+            return new Response(driveResponse.body, {
+                headers: {
+                    "Content-Type": driveResponse.headers.get("Content-Type") || row.photo_mime || "application/octet-stream",
+                    "Cache-Control": "private, max-age=3600, stale-while-revalidate=300",
+                    "Content-Disposition": "inline",
+                },
+            });
+        }
+
+        const photoData = row.photo_data;
+        if (!photoData) return c.json({ error: "Feedback photo not found." }, 404);
+        const bytes = photoData instanceof Uint8Array
+            ? photoData
+            : new Uint8Array(photoData);
         const payload = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
         return new Response(payload, {
             headers: {

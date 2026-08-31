@@ -46,6 +46,7 @@ async function initializeFeedbackStorage(): Promise<void> {
                 tags TEXT NOT NULL DEFAULT '[]',
                 message TEXT NOT NULL,
                 photo_data BLOB,
+                photo_drive_file_id TEXT,
                 photo_mime TEXT,
                 photo_size INTEGER,
                 status TEXT NOT NULL DEFAULT 'new' CHECK(status IN ('new', 'reviewed')),
@@ -63,6 +64,7 @@ async function initializeFeedbackStorage(): Promise<void> {
             ["client_name", "ALTER TABLE feedback ADD COLUMN client_name TEXT"],
             ["tags", "ALTER TABLE feedback ADD COLUMN tags TEXT NOT NULL DEFAULT '[]'"],
             ["photo_data", "ALTER TABLE feedback ADD COLUMN photo_data BLOB"],
+            ["photo_drive_file_id", "ALTER TABLE feedback ADD COLUMN photo_drive_file_id TEXT"],
             ["photo_mime", "ALTER TABLE feedback ADD COLUMN photo_mime TEXT"],
             ["photo_size", "ALTER TABLE feedback ADD COLUMN photo_size INTEGER"],
         ] as const;
@@ -84,6 +86,7 @@ async function initializeFeedbackStorage(): Promise<void> {
         tags TEXT NOT NULL DEFAULT '[]',
         message TEXT NOT NULL,
         photo_data BLOB,
+        photo_drive_file_id TEXT,
         photo_mime TEXT,
         photo_size INTEGER,
         status TEXT NOT NULL DEFAULT 'new' CHECK(status IN ('new', 'reviewed')),
@@ -100,6 +103,7 @@ async function initializeFeedbackStorage(): Promise<void> {
         ["client_name", "ALTER TABLE feedback ADD COLUMN client_name TEXT"],
         ["tags", "ALTER TABLE feedback ADD COLUMN tags TEXT NOT NULL DEFAULT '[]'"],
         ["photo_data", "ALTER TABLE feedback ADD COLUMN photo_data BLOB"],
+        ["photo_drive_file_id", "ALTER TABLE feedback ADD COLUMN photo_drive_file_id TEXT"],
         ["photo_mime", "ALTER TABLE feedback ADD COLUMN photo_mime TEXT"],
         ["photo_size", "ALTER TABLE feedback ADD COLUMN photo_size INTEGER"],
     ] as const;

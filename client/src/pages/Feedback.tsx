@@ -13,7 +13,6 @@ const RATING_REACTIONS: Record<(typeof RATINGS)[number], { emoji: string; label:
     5: { emoji: '🥰', label: 'Absolutely amazing!' },
 };
 const MAX_SOURCE_PHOTO_BYTES = 20_000_000;
-const MAX_UPLOAD_PHOTO_BYTES = 1_500_000;
 
 function PublicPageHeader({ darkMode, toggleTheme }: { darkMode: boolean; toggleTheme: () => void }) {
     return (
@@ -41,52 +40,10 @@ function PolaroidStack({ loading }: { loading: boolean }) {
     );
 }
 
-function loadPhoto(file: File): Promise<HTMLImageElement> {
-    return new Promise((resolve, reject) => {
-        const url = URL.createObjectURL(file);
-        const image = new Image();
-        image.onload = () => {
-            URL.revokeObjectURL(url);
-            resolve(image);
-        };
-        image.onerror = () => {
-            URL.revokeObjectURL(url);
-            reject(new Error('This photo format could not be prepared. Try a JPG or PNG.'));
-        };
-        image.src = url;
-    });
-}
-
-function canvasBlob(canvas: HTMLCanvasElement, quality: number): Promise<Blob> {
-    return new Promise((resolve, reject) => {
-        canvas.toBlob((blob) => blob ? resolve(blob) : reject(new Error('Unable to prepare this photo.')), 'image/jpeg', quality);
-    });
-}
-
 async function preparePhoto(file: File): Promise<File> {
     if (!file.type.startsWith('image/')) throw new Error('Choose an image file.');
     if (file.size > MAX_SOURCE_PHOTO_BYTES) throw new Error('Choose a photo smaller than 20 MB.');
-
-    const image = await loadPhoto(file);
-    const longestEdge = Math.max(image.naturalWidth, image.naturalHeight);
-    let scale = Math.min(1, 1600 / longestEdge);
-    const canvas = document.createElement('canvas');
-    const context = canvas.getContext('2d');
-    if (!context) throw new Error('Unable to prepare this photo.');
-
-    for (const quality of [0.84, 0.72, 0.6]) {
-        canvas.width = Math.max(1, Math.round(image.naturalWidth * scale));
-        canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
-        context.clearRect(0, 0, canvas.width, canvas.height);
-        context.drawImage(image, 0, 0, canvas.width, canvas.height);
-        const blob = await canvasBlob(canvas, quality);
-        if (blob.size <= MAX_UPLOAD_PHOTO_BYTES) {
-            const baseName = file.name.replace(/\.[^.]+$/, '') || 'orbit-memory';
-            return new File([blob], `${baseName}.jpg`, { type: 'image/jpeg', lastModified: Date.now() });
-        }
-        scale *= 0.82;
-    }
-    throw new Error('This photo is still too large. Try a smaller image.');
+    return file;
 }
 
 export default function Feedback() {

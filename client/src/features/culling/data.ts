@@ -30,6 +30,7 @@ export interface GalleryPhoto {
     height?: number | null;
     displayOrder: number;
     createdAt: string;
+    photoToken?: string;
 }
 
 export interface GallerySelection {
@@ -45,6 +46,14 @@ export interface GalleryDetail {
     gallery: GallerySummary;
     photos: GalleryPhoto[];
     selections: GallerySelection[];
+}
+
+export interface GalleryListResponse {
+    items: GallerySummary[];
+    page: number;
+    pageSize: number;
+    total: number;
+    totalPages: number;
 }
 
 export type AddonStatus = 'none' | 'pending' | 'quoted' | 'approved' | 'paid' | 'completed' | 'cancelled';
@@ -96,10 +105,17 @@ async function parseError(response: Response, fallback: string): Promise<Error> 
     return error;
 }
 
-export async function listGalleries(): Promise<GallerySummary[]> {
-    const response = await fetchWithAuth('/galleries');
+export async function listGalleries(input: { page?: number; pageSize?: number; status?: 'all' | GalleryStatus; search?: string } = {}): Promise<GalleryListResponse> {
+    const params = new URLSearchParams({
+        page: String(input.page || 1),
+        pageSize: String(input.pageSize || 10),
+    });
+    if (input.status && input.status !== 'all') params.set('status', input.status);
+    if (input.search?.trim()) params.set('search', input.search.trim());
+    const response = await fetchWithAuth(`/galleries?${params.toString()}`);
     if (!response.ok) throw await parseError(response, 'Unable to load galleries.');
-    return response.json();
+    const data = await response.json() as GallerySummary[] | GalleryListResponse;
+    return Array.isArray(data) ? { items: data, page: 1, pageSize: data.length || 10, total: data.length, totalPages: 1 } : data;
 }
 
 export async function getGalleryContact(): Promise<{ contactWhatsappUrl: string; message: string; requestMoreMessage?: string }> {
@@ -192,7 +208,7 @@ export async function getGalleryDetail(id: number): Promise<GalleryDetail> {
     return response.json();
 }
 
-export async function syncGallery(id: number): Promise<{ status: string; photoCount: number }> {
+export async function syncGallery(id: number): Promise<{ status: string; photoCount: number; changes?: number }> {
     const response = await fetchWithAuth(`/galleries/${id}/sync`, { method: 'POST' });
     if (!response.ok) throw await parseError(response, 'Unable to sync Google Drive folder.');
     return response.json();
@@ -236,8 +252,9 @@ export async function verifyGalleryPin(id: string, pin: string): Promise<{ token
     return response.json();
 }
 
-export async function getPublicGalleryPhotos(id: string, token: string, page = 1, pageSize = 60): Promise<PublicGalleryPhotos> {
-    const response = await apiFetch(`/public/galleries/${id}/photos?token=${encodeURIComponent(token)}&page=${page}&pageSize=${pageSize}`);
+export async function getPublicGalleryPhotos(id: string, token: string, page = 1, pageSize = 60, includeSelectedPhotos = false): Promise<PublicGalleryPhotos> {
+    const includeSelected = includeSelectedPhotos ? '&includeSelectedPhotos=1' : '';
+    const response = await apiFetch(`/public/galleries/${id}/photos?token=${encodeURIComponent(token)}&page=${page}&pageSize=${pageSize}${includeSelected}`);
     if (!response.ok) throw await parseError(response, 'Unable to load gallery photos.');
     return response.json();
 }
@@ -255,14 +272,20 @@ export async function submitGallerySelections(id: string, token: string, selecti
     return response.json();
 }
 
-export function galleryThumbnailUrl(galleryId: string | number, driveFileId: string, token: string): string {
-    return apiUrl(`/public/galleries/${galleryId}/photos/${encodeURIComponent(driveFileId)}/thumbnail?token=${encodeURIComponent(token)}`);
+export function galleryThumbnailUrl(galleryId: string | number, driveFileId: string, token: string, photoToken?: string): string {
+    const params = new URLSearchParams({ token });
+    if (photoToken) params.set('pt', photoToken);
+    return apiUrl(`/public/galleries/${galleryId}/photos/${encodeURIComponent(driveFileId)}/thumbnail?${params.toString()}`);
 }
 
-export function galleryContentUrl(galleryId: string | number, driveFileId: string, token: string): string {
-    return apiUrl(`/public/galleries/${galleryId}/photos/${encodeURIComponent(driveFileId)}/content?token=${encodeURIComponent(token)}`);
+export function galleryContentUrl(galleryId: string | number, driveFileId: string, token: string, photoToken?: string): string {
+    const params = new URLSearchParams({ token });
+    if (photoToken) params.set('pt', photoToken);
+    return apiUrl(`/public/galleries/${galleryId}/photos/${encodeURIComponent(driveFileId)}/content?${params.toString()}`);
 }
 
-export function galleryPreviewUrl(galleryId: string | number, driveFileId: string, token: string): string {
-    return apiUrl(`/public/galleries/${galleryId}/photos/${encodeURIComponent(driveFileId)}/preview?token=${encodeURIComponent(token)}`);
+export function galleryPreviewUrl(galleryId: string | number, driveFileId: string, token: string, photoToken?: string): string {
+    const params = new URLSearchParams({ token });
+    if (photoToken) params.set('pt', photoToken);
+    return apiUrl(`/public/galleries/${galleryId}/photos/${encodeURIComponent(driveFileId)}/preview?${params.toString()}`);
 }

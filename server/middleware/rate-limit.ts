@@ -1,6 +1,18 @@
 import type { Context, Next } from "hono";
 import { hitRateLimit, remainingRateLimit, resetRateLimitKey, resetRateLimitSuffixes } from "../db/rate-limit";
 
+const RATE_LIMIT_ERROR_LOG_MS = 60_000;
+const rateLimitErrorLogTimes = new Map<string, number>();
+
+function logRateLimitStorageError(key: string, message: string, error: unknown) {
+    const scope = key.split(":")[0] || key;
+    const now = Date.now();
+    const lastLoggedAt = rateLimitErrorLogTimes.get(scope) || 0;
+    if (now - lastLoggedAt < RATE_LIMIT_ERROR_LOG_MS) return;
+    rateLimitErrorLogTimes.set(scope, now);
+    console.error(message, error);
+}
+
 export function clientIp(c: Context): string {
     return c.req.header("fly-client-ip")
         || c.req.header("cf-connecting-ip")
@@ -40,7 +52,7 @@ export const resetGalleryPinAttempts = async (identifiers: string[]) => {
     try {
         await resetRateLimitSuffixes("gallery_pin", identifiers.filter(Boolean));
     } catch (error) {
-        console.error("Unable to reset gallery PIN rate limits.", error);
+        logRateLimitStorageError("gallery_pin", "Unable to reset gallery PIN rate limits.", error);
     }
 };
 
@@ -63,7 +75,7 @@ async function hitRateLimitSafely(key: string, windowMs: number, maxAttempts: nu
     try {
         return await hitRateLimit(key, windowMs, maxAttempts);
     } catch (error) {
-        console.error(`Rate limit check failed for ${key}. Allowing request.`, error);
+        logRateLimitStorageError(key, `Rate limit check failed for ${key}. Allowing request.`, error);
         return {
             allowed: true,
             count: 0,
@@ -77,7 +89,7 @@ export const resetRateLimit = async (ip: string) => {
     try {
         await resetRateLimitKey(`login:${ip}`);
     } catch (error) {
-        console.error(`Unable to reset login rate limit for ${ip}.`, error);
+        logRateLimitStorageError(`login:${ip}`, `Unable to reset login rate limit for ${ip}.`, error);
     }
 };
 
@@ -87,7 +99,7 @@ export const getRemainingAttempts = async (ip: string): Promise<number> => {
     try {
         return await remainingRateLimit(`login:${ip}`, maxAttempts);
     } catch (error) {
-        console.error(`Unable to read remaining login attempts for ${ip}.`, error);
+        logRateLimitStorageError(`login:${ip}`, `Unable to read remaining login attempts for ${ip}.`, error);
         return maxAttempts;
     }
 };

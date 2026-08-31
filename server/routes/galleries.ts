@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { Buffer } from "node:buffer";
-import { randomUUID } from "node:crypto";
+import { createHmac, randomUUID } from "node:crypto";
 import writeExcelFile from "write-excel-file/node";
 import { galleryAll, galleryBatch, galleryInsertReturningId, galleryOne, galleryRun } from "../db/galleries";
 import { fetchDriveFile, getDrivePhotoMetadata, listDrivePhotos } from "../lib/google-drive";
@@ -9,6 +9,7 @@ import { resetGalleryPinAttempts } from "../middleware/rate-limit";
 const adminGalleriesRouter = new Hono();
 const publicGalleriesRouter = new Hono();
 const GALLERY_TOKEN_TTL_SECONDS = 24 * 60 * 60;
+const PHOTO_TOKEN_TTL_SECONDS = 60 * 60;
 const DEFAULT_ADDON_UNIT_PRICE = 10_000;
 const DEFAULT_CONTACT_MESSAGE = "Halo Kak Admin Orbit\nSaya ingin meminta bantuan untuk membuka client gallery saya yaa.\n\nIni URL saya: {{gallery_url}}\nSaya client dari: {{gallery_title}}\n\nTerima kasih, Kak!";
 const DEFAULT_REQUEST_MORE_MESSAGE = "Halo Kak Admin Orbit\nSaya ingin meminta tambahan edited photos.\n\nIni URL saya: {{gallery_url}}\nSaya client dari: {{gallery_title}}\nPilihan saat ini: {{selected_count}} foto\nSaya ingin menambah: {{requested_count}} foto\nPromo: {{promo_label}}\nEstimasi biaya: {{estimated_price}}";
@@ -58,6 +59,15 @@ type SelectionRow = {
     submittedAt: string;
 };
 
+type PhotoTokenPayload = {
+    gid: number;
+    av: number;
+    fid: string;
+    thumb?: string;
+    mime?: string;
+    exp: number;
+};
+
 function photoShape(row: PhotoRow & Record<string, unknown>) {
     return {
         id: Number(row.id),
@@ -72,6 +82,21 @@ function photoShape(row: PhotoRow & Record<string, unknown>) {
         displayOrder: Number(row.displayOrder ?? row.display_order ?? 0),
         createdAt: String(row.createdAt ?? row.created_at ?? ""),
         ...(row.note !== undefined ? { note: row.note } : {}),
+    };
+}
+
+function publicPhotoShape(row: PhotoRow & Record<string, unknown>, accessVersion: number) {
+    const photo = photoShape(row);
+    return {
+        ...photo,
+        photoToken: createPhotoTokenSync({
+            gid: photo.galleryId,
+            av: accessVersion,
+            fid: photo.driveFileId,
+            thumb: typeof photo.thumbnailUrl === "string" ? photo.thumbnailUrl : "",
+            mime: photo.mimeType,
+            exp: Math.floor(Date.now() / 1000) + PHOTO_TOKEN_TTL_SECONDS,
+        }),
     };
 }
 
@@ -198,6 +223,48 @@ async function hmac(input: string): Promise<string> {
     return base64Url(await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(input)));
 }
 
+function hmacSync(input: string): string {
+    const secret = process.env.JWT_SECRET;
+    if (!secret) throw new Error("JWT_SECRET is required.");
+    return createHmac("sha256", secret).update(input).digest("base64url");
+}
+
+function createPhotoTokenSync(payload: PhotoTokenPayload): string {
+    const encoded = base64Url(JSON.stringify(payload));
+    return `${encoded}.${hmacSync(encoded)}`;
+}
+
+function verifyPhotoToken(token: string, galleryId: number, accessVersion: number, fileId: string): PhotoTokenPayload | null {
+    const [payload, signature] = token.split(".");
+    if (!payload || !signature || hmacSync(payload) !== signature) return null;
+    try {
+        const parsed = JSON.parse(fromBase64Url(payload)) as PhotoTokenPayload;
+        if (
+            parsed.gid !== galleryId
+            || parsed.av !== accessVersion
+            || parsed.fid !== fileId
+            || Number(parsed.exp || 0) <= Math.floor(Date.now() / 1000)
+        ) {
+            return null;
+        }
+        return parsed;
+    } catch {
+        return null;
+    }
+}
+
+function verifyStandalonePhotoToken(token: string, fileId: string): PhotoTokenPayload | null {
+    const [payload, signature] = token.split(".");
+    if (!payload || !signature || hmacSync(payload) !== signature) return null;
+    try {
+        const parsed = JSON.parse(fromBase64Url(payload)) as PhotoTokenPayload;
+        if (parsed.fid !== fileId || Number(parsed.exp || 0) <= Math.floor(Date.now() / 1000)) return null;
+        return parsed;
+    } catch {
+        return null;
+    }
+}
+
 async function createGalleryToken(galleryId: number, accessVersion: number): Promise<string> {
     const payload = base64Url(JSON.stringify({
         gid: galleryId,
@@ -242,25 +309,92 @@ function csvEscape(value: string | number | null | undefined): string {
     return /[",\n\r]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
 }
 
+async function photoForImageRequest(c: any, gallery: GalleryRow, fileId: string): Promise<PhotoRow | null> {
+    const tokenPayload = verifyPhotoToken(c.req.query("pt") || "", gallery.id, gallery.accessVersion, fileId);
+    if (tokenPayload) {
+        return {
+            id: 0,
+            galleryId: gallery.id,
+            driveFileId: tokenPayload.fid,
+            filename: tokenPayload.fid,
+            mimeType: tokenPayload.mime || "image/jpeg",
+            thumbnailUrl: tokenPayload.thumb || null,
+            webViewUrl: null,
+            width: null,
+            height: null,
+            displayOrder: 0,
+            createdAt: "",
+        };
+    }
+    return await galleryOne<PhotoRow>(`
+        SELECT id, gallery_id as "galleryId", drive_file_id as "driveFileId", filename, mime_type as "mimeType",
+               thumbnail_url as "thumbnailUrl", web_view_url as "webViewUrl", width, height,
+               display_order as "displayOrder", created_at as "createdAt"
+        FROM gallery_photos WHERE gallery_id = ? AND drive_file_id = ?
+    `, [gallery.id, fileId]);
+}
+
+function photoFromImageToken(c: any, fileId: string): PhotoRow | null {
+    const tokenPayload = verifyStandalonePhotoToken(c.req.query("pt") || "", fileId);
+    if (!tokenPayload) return null;
+    return {
+        id: 0,
+        galleryId: tokenPayload.gid,
+        driveFileId: tokenPayload.fid,
+        filename: tokenPayload.fid,
+        mimeType: tokenPayload.mime || "image/jpeg",
+        thumbnailUrl: tokenPayload.thumb || null,
+        webViewUrl: null,
+        width: null,
+        height: null,
+        displayOrder: 0,
+        createdAt: "",
+    };
+}
+
 adminGalleriesRouter.get("/", async (c) => {
     const denied = requireGalleryAdmin(c);
     if (denied) return denied;
 
+    const pageSize = Math.min(50, Math.max(1, Number(c.req.query("pageSize") || 10) || 10));
+    const page = Math.max(1, Number(c.req.query("page") || 1) || 1);
+    const status = normalizeStatus(c.req.query("status"), "draft");
+    const hasStatusFilter = c.req.query("status") === "open" || c.req.query("status") === "closed" || c.req.query("status") === "draft";
+    const search = String(c.req.query("search") || "").trim().slice(0, 100);
+    const conditions: string[] = [];
+    const params: unknown[] = [];
+    if (hasStatusFilter) {
+        conditions.push("g.status = ?");
+        params.push(status);
+    }
+    if (search) {
+        conditions.push("(LOWER(g.title) LIKE LOWER(?) OR LOWER(g.drive_folder_id) LIKE LOWER(?))");
+        const pattern = `%${search}%`;
+        params.push(pattern, pattern);
+    }
+    const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
+    const totalRow = await galleryOne<{ total: number }>(`SELECT COUNT(*) as total FROM galleries g ${where}`, params);
+    const total = Number(totalRow?.total || 0);
     const rows = await galleryAll<GalleryRow & { photoCount?: number; selectionCount?: number }>(`
         SELECT g.id, g.title, g.drive_folder_id as "driveFolderId", g.pin_hash as "pinHash", g.status,
                g.public_key as "publicKey", g.contact_whatsapp_url as "contactWhatsappUrl",
                g.max_selections as "maxSelections", g.additional_selection_limit as "additionalSelectionLimit",
                g.edit_addon_status as "editAddonStatus", g.edit_addon_pricing_mode as "editAddonPricingMode", g.edit_addon_price as "editAddonPrice",
                g.created_at as "createdAt", g.updated_at as "updatedAt", g.synced_at as "syncedAt",
-               COUNT(DISTINCT p.id) as "photoCount",
-               COUNT(DISTINCT s.id) as "selectionCount"
+               (SELECT COUNT(*) FROM gallery_photos p WHERE p.gallery_id = g.id) as "photoCount",
+               (SELECT COUNT(*) FROM gallery_selections s WHERE s.gallery_id = g.id) as "selectionCount"
         FROM galleries g
-        LEFT JOIN gallery_photos p ON p.gallery_id = g.id
-        LEFT JOIN gallery_selections s ON s.gallery_id = g.id
-        GROUP BY g.id, g.title, g.drive_folder_id, g.pin_hash, g.public_key, g.status, g.created_at, g.updated_at, g.synced_at, g.contact_whatsapp_url, g.max_selections, g.additional_selection_limit, g.edit_addon_status, g.edit_addon_pricing_mode, g.edit_addon_price
+        ${where}
         ORDER BY g.id DESC
-    `);
-    return c.json(rows.map((row) => galleryAdminShape(row, row)));
+        LIMIT ? OFFSET ?
+    `, [...params, pageSize, (page - 1) * pageSize]);
+    return c.json({
+        items: rows.map((row) => galleryAdminShape(row, row)),
+        page,
+        pageSize,
+        total,
+        totalPages: Math.max(1, Math.ceil(total / pageSize)),
+    });
 });
 
 adminGalleriesRouter.get("/settings/contact", async (c) => {
@@ -695,6 +829,7 @@ publicGalleriesRouter.post("/:id/verify", async (c) => {
 publicGalleriesRouter.get("/:id/photos", async (c) => {
     const result = await requirePublicGallery(c);
     if (result instanceof Response) return result;
+    const includeSelectedPhotos = c.req.query("includeSelectedPhotos") === "1";
     const total = Number((await galleryOne<{ total: number }>("SELECT COUNT(*) as total FROM gallery_photos WHERE gallery_id = ?", [result.gallery.id]))?.total || 0);
     const pageSize = Math.min(100, Math.max(1, Number(c.req.query("pageSize") || 60) || 60));
     const totalPages = Math.max(1, Math.ceil(total / pageSize));
@@ -702,42 +837,43 @@ publicGalleriesRouter.get("/:id/photos", async (c) => {
     const offset = (page - 1) * pageSize;
     const photos = await galleryAll<PhotoRow>(`
         SELECT id, gallery_id as "galleryId", drive_file_id as "driveFileId", filename, mime_type as "mimeType",
-               width, height, display_order as "displayOrder", created_at as "createdAt"
+               thumbnail_url as "thumbnailUrl", web_view_url as "webViewUrl", width, height, display_order as "displayOrder", created_at as "createdAt"
         FROM gallery_photos WHERE gallery_id = ? ORDER BY display_order, filename LIMIT ? OFFSET ?
     `, [result.gallery.id, pageSize, offset]);
     const selections = await galleryAll<{ selectedDriveFileId: string }>(`
         SELECT selected_drive_file_id as "selectedDriveFileId" FROM gallery_selections WHERE gallery_id = ?
     `, [result.gallery.id]);
-    const selectedPhotos = await galleryAll<PhotoRow & { note?: string | null }>(`
+    const selectedPhotos = includeSelectedPhotos ? await galleryAll<PhotoRow & { note?: string | null }>(`
         SELECT p.id, p.gallery_id as "galleryId", p.drive_file_id as "driveFileId", p.filename,
-               p.mime_type as "mimeType", p.width, p.height, p.display_order as "displayOrder",
+               p.mime_type as "mimeType", p.thumbnail_url as "thumbnailUrl", p.web_view_url as "webViewUrl", p.width, p.height, p.display_order as "displayOrder",
                p.created_at as "createdAt", s.note
         FROM gallery_photos p
         INNER JOIN gallery_selections s ON s.gallery_id = p.gallery_id AND s.selected_drive_file_id = p.drive_file_id
         WHERE p.gallery_id = ? ORDER BY p.display_order, p.filename
-    `, [result.gallery.id]);
+    `, [result.gallery.id]) : [];
     return c.json({
         gallery: galleryPublicShape(result.gallery),
-        photos: photos.map((photo) => photoShape(photo as PhotoRow & Record<string, unknown>)),
+        photos: photos.map((photo) => publicPhotoShape(photo as PhotoRow & Record<string, unknown>, result.gallery.accessVersion)),
         page,
         pageSize,
         total,
         totalPages,
         selectedDriveFileIds: selections.map((row) => selectionDriveFileId(row as Record<string, unknown>)).filter(Boolean),
-        selectedPhotos: selectedPhotos.map((photo) => photoShape(photo as PhotoRow & Record<string, unknown>)),
+        selectedPhotos: selectedPhotos.map((photo) => publicPhotoShape(photo as PhotoRow & Record<string, unknown>, result.gallery.accessVersion)),
     });
 });
 
 publicGalleriesRouter.get("/:id/photos/:fileId/thumbnail", async (c) => {
-    const result = await requirePublicGallery(c);
-    if (result instanceof Response) return result;
     const fileId = c.req.param("fileId");
-    const photo = await galleryOne<PhotoRow>(`
-        SELECT id, gallery_id as "galleryId", drive_file_id as "driveFileId", filename, mime_type as "mimeType",
-               thumbnail_url as "thumbnailUrl", web_view_url as "webViewUrl", width, height,
-               display_order as "displayOrder", created_at as "createdAt"
-        FROM gallery_photos WHERE gallery_id = ? AND drive_file_id = ?
-    `, [result.gallery.id, fileId]);
+    const tokenPhoto = photoFromImageToken(c, fileId);
+    let photo = tokenPhoto;
+    let galleryId = tokenPhoto?.galleryId ?? 0;
+    if (!photo) {
+        const result = await requirePublicGallery(c);
+        if (result instanceof Response) return result;
+        galleryId = result.gallery.id;
+        photo = await photoForImageRequest(c, result.gallery, fileId);
+    }
     if (!photo) return c.json({ error: "Photo not found" }, 404);
     let driveResponse: Response;
     try {
@@ -745,7 +881,7 @@ publicGalleriesRouter.get("/:id/photos/:fileId/thumbnail", async (c) => {
     } catch {
         const refreshed = await getDrivePhotoMetadata(photo.driveFileId);
         if (!refreshed.thumbnailLink) throw new Error("Google Drive did not return a thumbnail for this photo.");
-        await galleryRun("UPDATE gallery_photos SET thumbnail_url = ?, web_view_url = ? WHERE gallery_id = ? AND drive_file_id = ?", [refreshed.thumbnailLink, refreshed.webViewLink || null, result.gallery.id, photo.driveFileId]);
+        if (!tokenPhoto) await galleryRun("UPDATE gallery_photos SET thumbnail_url = ?, web_view_url = ? WHERE gallery_id = ? AND drive_file_id = ?", [refreshed.thumbnailLink, refreshed.webViewLink || null, galleryId, photo.driveFileId]);
         driveResponse = await fetchDriveFile(photo.driveFileId, refreshed.thumbnailLink, 320);
     }
     return new Response(driveResponse.body, {
@@ -757,15 +893,16 @@ publicGalleriesRouter.get("/:id/photos/:fileId/thumbnail", async (c) => {
 });
 
 publicGalleriesRouter.get("/:id/photos/:fileId/preview", async (c) => {
-    const result = await requirePublicGallery(c);
-    if (result instanceof Response) return result;
     const fileId = c.req.param("fileId");
-    const photo = await galleryOne<PhotoRow>(`
-        SELECT id, gallery_id as "galleryId", drive_file_id as "driveFileId", filename, mime_type as "mimeType",
-               thumbnail_url as "thumbnailUrl", web_view_url as "webViewUrl", width, height,
-               display_order as "displayOrder", created_at as "createdAt"
-        FROM gallery_photos WHERE gallery_id = ? AND drive_file_id = ?
-    `, [result.gallery.id, fileId]);
+    const tokenPhoto = photoFromImageToken(c, fileId);
+    let photo = tokenPhoto;
+    let galleryId = tokenPhoto?.galleryId ?? 0;
+    if (!photo) {
+        const result = await requirePublicGallery(c);
+        if (result instanceof Response) return result;
+        galleryId = result.gallery.id;
+        photo = await photoForImageRequest(c, result.gallery, fileId);
+    }
     if (!photo) return c.json({ error: "Photo not found" }, 404);
 
     let driveResponse: Response;
@@ -775,7 +912,7 @@ publicGalleriesRouter.get("/:id/photos/:fileId/preview", async (c) => {
         let refreshedThumbnail: string | undefined;
         try {
             const refreshed = await getDrivePhotoMetadata(photo.driveFileId);
-            await galleryRun("UPDATE gallery_photos SET thumbnail_url = ?, web_view_url = ? WHERE gallery_id = ? AND drive_file_id = ?", [refreshed.thumbnailLink || null, refreshed.webViewLink || null, result.gallery.id, photo.driveFileId]);
+            if (!tokenPhoto) await galleryRun("UPDATE gallery_photos SET thumbnail_url = ?, web_view_url = ? WHERE gallery_id = ? AND drive_file_id = ?", [refreshed.thumbnailLink || null, refreshed.webViewLink || null, galleryId, photo.driveFileId]);
             refreshedThumbnail = refreshed.thumbnailLink || undefined;
         } catch {
             refreshedThumbnail = undefined;
@@ -795,15 +932,13 @@ publicGalleriesRouter.get("/:id/photos/:fileId/preview", async (c) => {
 });
 
 publicGalleriesRouter.get("/:id/photos/:fileId/content", async (c) => {
-    const result = await requirePublicGallery(c);
-    if (result instanceof Response) return result;
     const fileId = c.req.param("fileId");
-    const photo = await galleryOne<PhotoRow>(`
-        SELECT id, gallery_id as "galleryId", drive_file_id as "driveFileId", filename, mime_type as "mimeType",
-               thumbnail_url as "thumbnailUrl", web_view_url as "webViewUrl", width, height,
-               display_order as "displayOrder", created_at as "createdAt"
-        FROM gallery_photos WHERE gallery_id = ? AND drive_file_id = ?
-    `, [result.gallery.id, fileId]);
+    let photo = photoFromImageToken(c, fileId);
+    if (!photo) {
+        const result = await requirePublicGallery(c);
+        if (result instanceof Response) return result;
+        photo = await photoForImageRequest(c, result.gallery, fileId);
+    }
     if (!photo) return c.json({ error: "Photo not found" }, 404);
     const driveResponse = await fetchDriveFile(photo.driveFileId);
     return new Response(driveResponse.body, {

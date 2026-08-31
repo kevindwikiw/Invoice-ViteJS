@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   AlertCircle,
@@ -26,6 +26,7 @@ import {
 import clsx from 'clsx';
 import { useAuth } from '../context/auth';
 import { useToast } from '../context/ToastContext';
+import { useDebouncedValue } from '../hooks/useDebouncedValue';
 import { SectionHeading } from '../components/SectionHeading';
 import { PANEL_CARD_CLASS } from '../constants/invoice';
 import {
@@ -647,8 +648,8 @@ function GalleryDetail({ gallery, close }: { gallery: GallerySummary; close: () 
 
   const sync = useMutation({
     mutationFn: syncGallery,
-    onSuccess: () => {
-      addToast('Drive folder synced.', 'success');
+    onSuccess: (result) => {
+      addToast(`Drive folder synced. ${result.changes ?? 0} changes.`, 'success');
       qc.invalidateQueries({ queryKey: ['galleries'] });
       qc.invalidateQueries({ queryKey: ['gallery-detail', data.id] });
     },
@@ -900,21 +901,23 @@ export default function ClientGalleries() {
   const { addToast } = useToast();
   const qc = useQueryClient();
   const canManage = hasPermission('manage_client_galleries');
-  const query = useQuery({ queryKey: ['galleries'], queryFn: listGalleries, enabled: canManage });
-  const galleries = query.data || [];
   const [search, setSearch] = useState('');
+  const debouncedSearch = useDebouncedValue(search);
   const [filter, setFilter] = useState<'all' | GalleryStatus>('all');
   const [page, setPage] = useState(1);
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
   const [contactOpen, setContactOpen] = useState(false);
-
-  const visible = useMemo(
-    () => galleries.filter((gallery) => (filter === 'all' || gallery.status === filter) && (!search.trim() || `${gallery.title} ${gallery.driveFolderId}`.toLowerCase().includes(search.trim().toLowerCase()))),
-    [filter, galleries, search]
-  );
-
-  const totalPages = Math.max(1, Math.ceil(visible.length / PAGE_SIZE));
+  const query = useQuery({
+    queryKey: ['galleries', page, filter, debouncedSearch],
+    queryFn: () => listGalleries({ page, pageSize: PAGE_SIZE, status: filter, search: debouncedSearch }),
+    enabled: canManage,
+    placeholderData: (previousData) => previousData,
+    staleTime: 60 * 1000,
+  });
+  const galleries = query.data?.items || [];
+  const total = query.data?.total || 0;
+  const totalPages = query.data?.totalPages || 1;
 
   // Menjaga agar halaman aktif selalu valid jika jumlah data/filter berubah
   useEffect(() => {
@@ -924,8 +927,8 @@ export default function ClientGalleries() {
   }, [page, totalPages]);
 
   const currentPage = Math.min(page, totalPages);
-  const pageItems = visible.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE);
-  const selected = visible.find((gallery) => gallery.id === selectedId);
+  const pageItems = galleries;
+  const selected = galleries.find((gallery) => gallery.id === selectedId);
 
   const create = useMutation({
     mutationFn: createGallery,
@@ -1047,7 +1050,7 @@ export default function ClientGalleries() {
             </div>
           </div>
           <div className="border-b border-[var(--border)] px-5 py-6 md:px-7">
-            <SectionHeading title="Gallery Workspace" subtitle={`${pageItems.length} SHOWN / ${visible.length} MATCHING / ${galleries.length} TOTAL`} />
+            <SectionHeading title="Gallery Workspace" subtitle={`${pageItems.length} SHOWN / ${total} MATCHING`} />
           </div>
           {query.isLoading ? (
             <div className="flex justify-center py-16">
@@ -1072,7 +1075,7 @@ export default function ClientGalleries() {
               deletePendingId={remove.isPending ? remove.variables ?? null : null}
             />
           )}
-          {!query.isLoading && !query.isError && <Pager page={currentPage} totalPages={totalPages} total={visible.length} limit={PAGE_SIZE} onChange={setPage} />}
+          {!query.isLoading && !query.isError && <Pager page={currentPage} totalPages={totalPages} total={total} limit={PAGE_SIZE} onChange={setPage} />}
         </section>
       </div>
 
