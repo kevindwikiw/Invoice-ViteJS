@@ -58,6 +58,25 @@ type SelectionRow = {
     submittedAt: string;
 };
 
+function photoShape(row: PhotoRow & Record<string, unknown>) {
+    return {
+        id: Number(row.id),
+        galleryId: Number(row.galleryId ?? row.gallery_id),
+        driveFileId: String(row.driveFileId ?? row.drive_file_id ?? ""),
+        filename: String(row.filename || ""),
+        mimeType: String(row.mimeType ?? row.mime_type ?? ""),
+        width: row.width == null ? null : Number(row.width),
+        height: row.height == null ? null : Number(row.height),
+        displayOrder: Number(row.displayOrder ?? row.display_order ?? 0),
+        createdAt: String(row.createdAt ?? row.created_at ?? ""),
+        ...(row.note !== undefined ? { note: row.note } : {}),
+    };
+}
+
+function selectionDriveFileId(row: Record<string, unknown>): string {
+    return String(row.selectedDriveFileId ?? row.selected_drive_file_id ?? "");
+}
+
 function getUser(c: any): AuthUser | undefined {
     return c.get("user") || c.get("jwtPayload");
 }
@@ -419,7 +438,7 @@ adminGalleriesRouter.get("/:id", async (c) => {
     `, [id]);
     return c.json({
         gallery: galleryAdminShape(gallery, { photoCount: photos.length, selectionCount: selections.length }),
-        photos,
+        photos: photos.map((photo) => photoShape(photo as PhotoRow & Record<string, unknown>)),
         selections,
     });
 });
@@ -649,13 +668,13 @@ publicGalleriesRouter.get("/:id/photos", async (c) => {
     `, [result.gallery.id]);
     return c.json({
         gallery: galleryPublicShape(result.gallery),
-        photos,
+        photos: photos.map((photo) => photoShape(photo as PhotoRow & Record<string, unknown>)),
         page,
         pageSize,
         total,
         totalPages,
-        selectedDriveFileIds: selections.map((row) => row.selectedDriveFileId),
-        selectedPhotos,
+        selectedDriveFileIds: selections.map((row) => selectionDriveFileId(row as Record<string, unknown>)).filter(Boolean),
+        selectedPhotos: selectedPhotos.map((photo) => photoShape(photo as PhotoRow & Record<string, unknown>)),
     });
 });
 
