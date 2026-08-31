@@ -65,6 +65,8 @@ function photoShape(row: PhotoRow & Record<string, unknown>) {
         driveFileId: String(row.driveFileId ?? row.drive_file_id ?? ""),
         filename: String(row.filename || ""),
         mimeType: String(row.mimeType ?? row.mime_type ?? ""),
+        thumbnailUrl: row.thumbnailUrl ?? row.thumbnail_url ?? null,
+        webViewUrl: row.webViewUrl ?? row.web_view_url ?? null,
         width: row.width == null ? null : Number(row.width),
         height: row.height == null ? null : Number(row.height),
         displayOrder: Number(row.displayOrder ?? row.display_order ?? 0),
@@ -528,30 +530,78 @@ adminGalleriesRouter.post("/:id/sync", async (c) => {
     if (!gallery) return c.json({ error: "Gallery not found" }, 404);
 
     const photos = await listDrivePhotos(gallery.driveFolderId);
-    const syncStatements: Array<{ sql: string; params: unknown[] }> = [
-        { sql: "DELETE FROM gallery_photos WHERE gallery_id = ?", params: [id] },
-    ];
+    const existingPhotos = await galleryAll<PhotoRow>(`
+        SELECT id, gallery_id as "galleryId", drive_file_id as "driveFileId", filename, mime_type as "mimeType",
+               thumbnail_url as "thumbnailUrl", web_view_url as "webViewUrl", width, height,
+               display_order as "displayOrder", created_at as "createdAt"
+        FROM gallery_photos WHERE gallery_id = ?
+    `, [id]);
+    const normalizedExistingPhotos = existingPhotos.map((photo) => photoShape(photo as PhotoRow & Record<string, unknown>));
+    const existingByDriveId = new Map(normalizedExistingPhotos.map((photo) => [photo.driveFileId, photo]));
+    const driveIds = new Set(photos.map((photo) => photo.id));
+    const syncStatements: Array<{ sql: string; params: unknown[] }> = [];
+
+    for (const existingPhoto of normalizedExistingPhotos) {
+        if (!driveIds.has(existingPhoto.driveFileId)) {
+            syncStatements.push({ sql: "DELETE FROM gallery_photos WHERE gallery_id = ? AND drive_file_id = ?", params: [id, existingPhoto.driveFileId] });
+        }
+    }
+
     for (const [index, photo] of photos.entries()) {
-        syncStatements.push({ sql: `
-            INSERT INTO gallery_photos (
-                gallery_id, drive_file_id, filename, mime_type, thumbnail_url,
-                web_view_url, width, height, display_order
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `, params: [
-            id,
-            photo.id,
-            photo.name,
-            photo.mimeType,
-            photo.thumbnailLink || null,
-            photo.webViewLink || null,
-            photo.width || null,
-            photo.height || null,
-            index,
-        ] });
+        const existingPhoto = existingByDriveId.get(photo.id);
+        const nextThumbnail = photo.thumbnailLink || null;
+        const nextWebView = photo.webViewLink || null;
+        const nextWidth = photo.width || null;
+        const nextHeight = photo.height || null;
+        if (!existingPhoto) {
+            syncStatements.push({ sql: `
+                INSERT INTO gallery_photos (
+                    gallery_id, drive_file_id, filename, mime_type, thumbnail_url,
+                    web_view_url, width, height, display_order
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            `, params: [
+                id,
+                photo.id,
+                photo.name,
+                photo.mimeType,
+                nextThumbnail,
+                nextWebView,
+                nextWidth,
+                nextHeight,
+                index,
+            ] });
+            continue;
+        }
+
+        if (
+            existingPhoto.filename !== photo.name
+            || existingPhoto.mimeType !== photo.mimeType
+            || (existingPhoto.thumbnailUrl || null) !== nextThumbnail
+            || (existingPhoto.webViewUrl || null) !== nextWebView
+            || (existingPhoto.width || null) !== nextWidth
+            || (existingPhoto.height || null) !== nextHeight
+            || Number(existingPhoto.displayOrder) !== index
+        ) {
+            syncStatements.push({ sql: `
+                UPDATE gallery_photos
+                SET filename = ?, mime_type = ?, thumbnail_url = ?, web_view_url = ?, width = ?, height = ?, display_order = ?
+                WHERE gallery_id = ? AND drive_file_id = ?
+            `, params: [
+                photo.name,
+                photo.mimeType,
+                nextThumbnail,
+                nextWebView,
+                nextWidth,
+                nextHeight,
+                index,
+                id,
+                photo.id,
+            ] });
+        }
     }
     syncStatements.push({ sql: "UPDATE galleries SET synced_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = ?", params: [id] });
     await galleryBatch(syncStatements);
-    return c.json({ status: "synced", photoCount: photos.length });
+    return c.json({ status: "synced", photoCount: photos.length, changes: Math.max(0, syncStatements.length - 1) });
 });
 
 adminGalleriesRouter.get("/:id/export.csv", async (c) => {
