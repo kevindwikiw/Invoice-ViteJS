@@ -495,7 +495,7 @@ function GalleryTable({
   return (
     <div className="overflow-x-auto min-h-[300px]">
       <table className="w-full min-w-[780px] text-left text-xs">
-        <thead className="border-y border-[var(--border)] text-[10px] uppercase tracking-wider text-[var(--text-muted)]">
+        <thead className="border-y border-[var(--border)] text-[10px] font-medium uppercase tracking-[0.2em] text-[var(--text-muted)]">
           <tr>
             <th className="px-7 py-3.5">Gallery</th>
             <th className="text-center">Status</th>
@@ -521,7 +521,7 @@ function GalleryTable({
               }}
             >
               <td className="max-w-[260px] px-7 py-5">
-                <p className="truncate font-display text-lg text-[var(--text-primary)]">{gallery.title}</p>
+                <p className="truncate text-sm font-semibold text-[var(--text-primary)]" title={gallery.title}>{gallery.title}</p>
                 <a
                   href={driveUrl(gallery)}
                   target="_blank"
@@ -529,7 +529,7 @@ function GalleryTable({
                   title="Open Google Drive folder"
                   aria-label={`Open Google Drive folder for ${gallery.title}`}
                   onClick={(event) => event.stopPropagation()}
-                  className="mt-2 inline-flex max-w-full items-center gap-2 rounded-full border border-[var(--border)] bg-[var(--bg-elevated)] px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-[var(--text-secondary)] transition-colors hover:border-[var(--accent)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)]"
+                  className="mt-2 inline-flex max-w-full items-center gap-2 rounded-full border border-[var(--border)] bg-[var(--bg-elevated)] px-3 py-1.5 text-[9px] font-bold uppercase tracking-[0.12em] text-[var(--text-secondary)] transition-colors hover:border-[var(--accent)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)]"
                 >
                   <span className="flex h-4 w-4 items-center justify-center rounded-full border border-[var(--border)] text-[var(--accent)]">
                     <FolderSync size={10} />
@@ -540,10 +540,10 @@ function GalleryTable({
               <td className="text-center">
                 <StatusQuickActions gallery={gallery} pending={statusPendingId === gallery.id} onChange={(status) => onStatusChange(gallery.id, status)} />
               </td>
-              <td className="text-[var(--text-secondary)]">{gallery.photoCount}</td>
-              <td className="text-[var(--text-secondary)]">{gallery.selectionCount}</td>
-              <td className="text-[var(--text-secondary)]">{gallery.maxSelections ? gallery.maxSelections : <Unlimited />}</td>
-              <td className="text-[var(--text-muted)]">{gallery.syncedAt ? dateFormat.format(new Date(gallery.syncedAt)) : 'Never'}</td>
+              <td className="text-xs font-medium tabular-nums text-[var(--text-secondary)]">{gallery.photoCount}</td>
+              <td className="text-xs font-medium tabular-nums text-[var(--text-secondary)]">{gallery.selectionCount}</td>
+              <td className="text-xs font-medium tabular-nums text-[var(--text-secondary)]">{gallery.maxSelections ? gallery.maxSelections : <Unlimited />}</td>
+              <td className="text-[10px] font-medium leading-4 text-[var(--text-muted)]">{gallery.syncedAt ? dateFormat.format(new Date(gallery.syncedAt)) : 'Never'}</td>
               <td className="px-7 text-center">
                 <div className="flex justify-center gap-1.5">
                   <ClientLinkMenu gallery={gallery} />
