@@ -703,10 +703,19 @@ publicGalleriesRouter.get("/:id/photos/:fileId/preview", async (c) => {
     try {
         driveResponse = await fetchDriveFile(photo.driveFileId, photo.thumbnailUrl || undefined, 1600);
     } catch {
-        const refreshed = await getDrivePhotoMetadata(photo.driveFileId);
-        if (!refreshed.thumbnailLink) throw new Error("Google Drive did not return a preview for this photo.");
-        await galleryRun("UPDATE gallery_photos SET thumbnail_url = ?, web_view_url = ? WHERE gallery_id = ? AND drive_file_id = ?", [refreshed.thumbnailLink, refreshed.webViewLink || null, result.gallery.id, photo.driveFileId]);
-        driveResponse = await fetchDriveFile(photo.driveFileId, refreshed.thumbnailLink, 1600);
+        let refreshedThumbnail: string | undefined;
+        try {
+            const refreshed = await getDrivePhotoMetadata(photo.driveFileId);
+            await galleryRun("UPDATE gallery_photos SET thumbnail_url = ?, web_view_url = ? WHERE gallery_id = ? AND drive_file_id = ?", [refreshed.thumbnailLink || null, refreshed.webViewLink || null, result.gallery.id, photo.driveFileId]);
+            refreshedThumbnail = refreshed.thumbnailLink || undefined;
+        } catch {
+            refreshedThumbnail = undefined;
+        }
+        try {
+            driveResponse = await fetchDriveFile(photo.driveFileId, refreshedThumbnail, 1600);
+        } catch {
+            driveResponse = await fetchDriveFile(photo.driveFileId);
+        }
     }
     return new Response(driveResponse.body, {
         headers: {
