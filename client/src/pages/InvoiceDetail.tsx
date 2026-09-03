@@ -5,7 +5,7 @@ import { ProofsSidebar } from '../components/ProofsSidebar'
 import { InvoicePDF } from '../components/InvoicePDF'
 import { ArrowLeft, Loader2, Download, Printer, Image as ImageIcon, History } from 'lucide-react'
 import { Link } from '@tanstack/react-router'
-import { fetchWithAuth, resolveProofDataUrls } from '../lib/api'
+import { fetchWithAuth, parsePaymentProofs, resolveProofDataUrls } from '../lib/api'
 import { useToast } from '../context/ToastContext'
 import { useState, useMemo, useEffect } from 'react'
 import clsx from 'clsx'
@@ -49,16 +49,11 @@ export const InvoiceDetail = () => {
     const [showProofs, setShowProofs] = useState(false)
     const [pdfUrl, setPdfUrl] = useState<string | null>(null)
 
-    const rawProofs = invoice?.paymentProofs
+    const rawProofs = invoice?.paymentProofs ?? invoice?.payment_proofs
 
     // Memoize proofs to prevent new array reference on every render
     const proofs: string[] = useMemo(() => {
-        if (!rawProofs) return []
-        try {
-            return JSON.parse(rawProofs)
-        } catch {
-            return []
-        }
+        return parsePaymentProofs(rawProofs)
     }, [rawProofs])
 
     // Generate PDF blob manually with Debounce — prevents UI lag during rapid changes

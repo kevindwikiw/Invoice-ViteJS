@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { Buffer } from "node:buffer";
-import { all, insertReturningId, one, run } from "../db/runtime";
+import { all, databaseDriver, insertReturningId, one, run } from "../db/runtime";
 import { hasFeaturePermission } from "../permissions";
 
 const invoicesRouter = new Hono();
@@ -43,6 +43,18 @@ function parseProofs(value: unknown): string[] {
 }
 
 type PaymentTerm = { id?: unknown; label?: unknown; amount?: unknown };
+type InvoicePaymentStatus = "LUNAS" | "DP" | "DP+TERMIN" | "UNPAID";
+type InvoiceListRow = {
+    id: number;
+    invoiceNo?: string | null;
+    clientName?: string | null;
+    date?: string | null;
+    totalAmount?: number | null;
+    __invoiceData?: string | null;
+    proofCount?: number | null;
+    isArchived?: boolean | number | null;
+    createdAt?: string | null;
+};
 
 function asRecord(value: unknown): Record<string, unknown> {
     return typeof value === "object" && value !== null ? value as Record<string, unknown> : {};
@@ -70,6 +82,78 @@ function invoicePaymentTerms(invoiceData: unknown): PaymentTerm[] {
     } catch {
         return [];
     }
+}
+
+function invoiceText(value: unknown): string {
+    return value == null ? "" : String(value).trim();
+}
+
+function invoiceMetadataSummary(invoiceData: unknown, fallbackDate = "") {
+    if (typeof invoiceData !== "string" || !invoiceData) return { venue: "", eventDate: fallbackDate, notes: "" };
+
+    try {
+        const data = asRecord(JSON.parse(invoiceData));
+        const meta = asRecord(data.meta);
+        const value = (camel: string, snake: string) => data[camel] ?? data[snake] ?? meta[camel] ?? meta[snake];
+
+        return {
+            venue: invoiceText(value("venue", "venue")),
+            eventDate: invoiceText(value("weddingDate", "wedding_date")) || fallbackDate,
+            notes: invoiceText(value("notes", "notes")),
+        };
+    } catch {
+        return { venue: "", eventDate: fallbackDate, notes: "" };
+    }
+}
+
+function invoicePaymentStatus(invoiceData: unknown, totalAmount: number): InvoicePaymentStatus {
+    const paidTerms = invoicePaymentTerms(invoiceData).filter((term) => Number(term.amount || 0) > 0);
+    if (!paidTerms.length) return "UNPAID";
+
+    const paidTotal = paidTerms.reduce((sum, term) => sum + Number(term.amount || 0), 0);
+    const hasFullPayment = paidTerms.some((term) => {
+        const id = String(term.id || "").toLowerCase();
+        const label = String(term.label || "").toLowerCase();
+        return id === "full" || label.includes("pelunasan");
+    });
+
+    if (hasFullPayment || (totalAmount > 0 && paidTotal >= totalAmount)) return "LUNAS";
+    return paidTerms.length > 1 ? "DP+TERMIN" : "DP";
+}
+
+function invoiceProofCountExpression(): string {
+    if (databaseDriver === "postgres") {
+        return `CASE
+            WHEN payment_proofs IS NULL OR payment_proofs = '' THEN 0
+            ELSE COALESCE(jsonb_array_length(payment_proofs::jsonb), 0)
+        END as "proofCount"`;
+    }
+
+    return `CASE
+        WHEN payment_proofs IS NULL OR payment_proofs = '' OR json_valid(payment_proofs) = 0 THEN 0
+        ELSE COALESCE(json_array_length(payment_proofs), 0)
+    END as "proofCount"`;
+}
+
+function invoiceListShape(row: InvoiceListRow) {
+    const metadata = invoiceMetadataSummary(row.__invoiceData, row.date || "");
+    const directProofCount = Math.max(0, Number(row.proofCount || 0));
+    const fallbackProofCount = directProofCount > 0 ? 0 : legacyProofs(row.__invoiceData).length;
+
+    return {
+        id: Number(row.id),
+        invoiceNo: row.invoiceNo ?? null,
+        clientName: row.clientName ?? null,
+        date: row.date ?? null,
+        totalAmount: Number(row.totalAmount || 0),
+        isArchived: row.isArchived ?? false,
+        createdAt: row.createdAt ?? null,
+        venue: metadata.venue,
+        eventDate: metadata.eventDate,
+        notes: metadata.notes,
+        paymentStatus: invoicePaymentStatus(row.__invoiceData, Number(row.totalAmount || 0)),
+        proofCount: directProofCount || fallbackProofCount,
+    };
 }
 
 function legacyProofs(invoiceData: unknown): string[] {
@@ -186,9 +270,16 @@ invoicesRouter.get("/", async (c) => {
         const total = Number(summary?.total || 0);
         const totalPages = Math.max(1, Math.ceil(total / safeLimit));
         const page = Math.min(requestedPage, totalPages);
-        const rows = await all(`SELECT id, invoice_no as "invoiceNo", client_name as "clientName", date, total_amount as "totalAmount", invoice_data as "invoiceData", payment_proofs as "paymentProofs", is_archived as "isArchived", created_at as "createdAt" FROM invoices ${where} ORDER BY id DESC LIMIT ? OFFSET ?`, [...params, safeLimit, (page - 1) * safeLimit]);
+        const rows = await all<InvoiceListRow>(`
+            SELECT id, invoice_no as "invoiceNo", client_name as "clientName", date,
+                   total_amount as "totalAmount", invoice_data as "__invoiceData",
+                   ${invoiceProofCountExpression()}, is_archived as "isArchived",
+                   created_at as "createdAt"
+            FROM invoices ${where}
+            ORDER BY id DESC LIMIT ? OFFSET ?
+        `, [...params, safeLimit, (page - 1) * safeLimit]);
         return c.json({
-            items: rows.map((row) => exposeProofs(row as { paymentProofs?: unknown; invoiceData?: unknown })),
+            items: rows.map(invoiceListShape),
             page,
             limit: safeLimit,
             total,

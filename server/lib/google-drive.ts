@@ -176,16 +176,26 @@ export async function getDrivePhotoMetadata(fileId: string): Promise<DrivePhoto>
     };
 }
 
-function resizedThumbnailUrl(thumbnailLink: string, width: number): string {
-    return thumbnailLink.replace(/=s\d+(?:-[^?]*)?$/, `=w${width}-h${width}`);
+function resizedThumbnailUrl(thumbnailLink: string, width: number, preferWebp = true, preserveAspectRatio = false): string {
+    const resize = `=w${width}${preserveAspectRatio ? "" : `-h${width}`}${preferWebp ? "-rw" : ""}`;
+    return thumbnailLink.replace(/=s\d+(?:-[^?]*)?$/, resize);
 }
 
-export async function fetchDriveFile(fileId: string, thumbnailLink?: string, width?: number): Promise<Response> {
+export async function fetchDriveFile(fileId: string, thumbnailLink?: string, width?: number, preserveAspectRatio = false): Promise<Response> {
     const token = await getDriveAccessToken();
     const url = thumbnailLink
-        ? resizedThumbnailUrl(thumbnailLink, width || 320)
+        ? resizedThumbnailUrl(thumbnailLink, width || 320, true, preserveAspectRatio)
         : `${DRIVE_API_BASE}/files/${encodeURIComponent(fileId)}?alt=media&supportsAllDrives=true`;
-    const response = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+    const headers = {
+        Authorization: `Bearer ${token}`,
+        Accept: "image/webp,image/*;q=0.8,*/*;q=0.5",
+    };
+    let response = await fetch(url, { headers });
+
+    if (!response.ok && thumbnailLink) {
+        response = await fetch(resizedThumbnailUrl(thumbnailLink, width || 320, false, preserveAspectRatio), { headers });
+    }
+
     if (!response.ok) {
         const message = await response.text().catch(() => "");
         throw new Error(message || `Unable to fetch Google Drive file (${response.status}).`);

@@ -5,6 +5,7 @@ import {
   ChevronDown,
   ChevronLeft,
   ChevronRight,
+  Clock3,
   Clipboard,
   Download,
   ExternalLink,
@@ -36,8 +37,17 @@ import {
   SEGMENT_BUTTON_INACTIVE_CLASS,
   SEGMENT_GROUP_CLASS,
 } from '../constants/uiContract';
+
+import type {
+  GalleryStatus,
+  GallerySummary
+} from '../features/culling/culling.types';
+
 import {
-  calculateAddonQuote,
+  calculateAddonQuote
+} from '../features/culling/culling.public';
+
+import {
   createGallery,
   deleteGallery,
   downloadGallerySelections,
@@ -49,17 +59,21 @@ import {
   saveGalleryContact,
   syncGallery,
   updateGallery,
-  type GalleryStatus,
-  type GallerySummary,
-} from '../features/culling/data';
+} from '../features/culling/culling.admin';
 
 const PAGE_SIZE = 10;
 const dateFormat = new Intl.DateTimeFormat('en-GB', { dateStyle: 'medium', timeStyle: 'short' });
 const idrFormat = new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 });
-const inputClass = 'h-10 w-full rounded-lg border border-[var(--border)] bg-[var(--bg-deep)] px-3 text-sm text-[var(--text-primary)] outline-none focus:border-[var(--accent)]';
+const inputClass = 'h-11 w-full rounded-md border border-[var(--border)] bg-[var(--bg-deep)] px-3.5 text-sm text-[var(--text-primary)] outline-none transition-colors placeholder:text-[var(--text-muted)]/60 hover:border-[var(--text-muted)] focus:border-[var(--accent)] focus:ring-1 focus:ring-[var(--accent)]';
 const publicUrl = (gallery: GallerySummary) => `${window.location.origin}/culling/${gallery.publicKey || gallery.id}`;
 const driveUrl = (gallery: GallerySummary) => (gallery.driveFolderId.startsWith('http') ? gallery.driveFolderId : `https://drive.google.com/drive/folders/${gallery.driveFolderId}`);
 const parseIdr = (value: FormDataEntryValue | null) => Number(String(value || '').replace(/\D/g, '')) || 0;
+
+function deadlineLabel(gallery: Pick<GallerySummary, 'selectionDeadlineAt' | 'isExpired'>): string {
+  if (!gallery.selectionDeadlineAt) return 'Not set';
+  if (gallery.isExpired) return 'Expired';
+  return dateFormat.format(new Date(gallery.selectionDeadlineAt));
+}
 
 const Unlimited = () => (
   <span title="Unlimited" aria-label="Unlimited">
@@ -96,7 +110,7 @@ function useDismissableMenu(open: boolean, close: () => void) {
   return ref;
 }
 
-function Modal({ title, close, children }: { title: string; close: () => void; children: ReactNode }) {
+function Modal({ title, close, children, widthClass = 'max-w-2xl' }: { title: string; close: () => void; children: ReactNode; widthClass?: string }) {
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') close();
@@ -115,31 +129,28 @@ function Modal({ title, close, children }: { title: string; close: () => void; c
         if (event.target === event.currentTarget) close();
       }}
     >
-      <div className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-xl border border-[var(--border)] bg-[var(--bg-card)] shadow-2xl">
-        <header className="flex items-start justify-between gap-4 border-b border-[var(--border)] p-5">
-          <div>
-            <p className="label-xs text-[var(--accent)]">ORBIT WORKSPACE</p>
-            <h2 className="mt-1 font-display text-xl text-[var(--text-primary)]">{title}</h2>
-          </div>
+      <div className={clsx('max-h-[90vh] w-full overflow-y-auto rounded-lg border border-[var(--border)] bg-[var(--bg-card)] shadow-2xl', widthClass)}>
+        <header className="flex items-center justify-between gap-4 border-b border-[var(--border)] px-6 py-5">
+          <h2 className="font-display text-xl text-[var(--text-primary)]">{title}</h2>
           <button
             type="button"
             onClick={close}
             aria-label={`Close ${title}`}
-            className="flex h-9 w-9 cursor-pointer items-center justify-center rounded-lg border border-[var(--border)] hover:border-[var(--accent)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)]"
+            className="flex h-9 w-9 cursor-pointer items-center justify-center rounded-md border border-[var(--border)] text-[var(--text-muted)] transition-colors hover:border-[var(--accent)] hover:text-[var(--text-primary)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)]"
           >
             <X size={16} />
           </button>
         </header>
-        <div className="p-5">{children}</div>
+        <div className="px-6 py-5">{children}</div>
       </div>
     </div>
   );
 }
 
-function Field({ label, children }: { label: string; children: ReactNode }) {
+function Field({ label, title, children }: { label: string; title?: string; children: ReactNode }) {
   return (
-    <label className="block space-y-1.5">
-      <span className="label-2xs text-[var(--text-muted)]">{label}</span>
+    <label className="block space-y-2">
+      <span className="block text-[11px] font-semibold text-[var(--text-secondary)]" title={title}>{label}</span>
       {children}
     </label>
   );
@@ -189,12 +200,12 @@ function CreateGalleryModal({
 }: {
   close: () => void;
   pending: boolean;
-  submit: (input: { title: string; driveFolderUrl: string; pin: string; status: GalleryStatus; maxSelections: number }) => void;
+  submit: (input: { title: string; driveFolderUrl: string; pin: string; status: GalleryStatus; maxSelections: number; selectionDurationHours: number }) => void;
 }) {
   return (
-    <Modal title="Create gallery" close={close}>
+    <Modal title="Create gallery" close={close} widthClass="max-w-lg">
       <form
-        className="space-y-4"
+        className="space-y-5"
         onSubmit={(event) => {
           event.preventDefault();
           const data = new FormData(event.currentTarget);
@@ -204,29 +215,40 @@ function CreateGalleryModal({
             pin: String(data.get('pin') || ''),
             status: 'draft',
             maxSelections: Math.min(500, Math.max(0, Number(data.get('limit')) || 0)),
+            selectionDurationHours: Math.min(8760, Math.max(1, Number(data.get('duration')) || 72)),
           });
         }}
       >
-        <Field label="Gallery title">
+        <Field label="Gallery name">
           <input name="title" required placeholder="Aldian & Panpan Prewedding" className={inputClass} />
         </Field>
-        <Field label="Google Drive folder URL">
+        <Field label="Google Drive folder">
           <input name="drive" required placeholder="https://drive.google.com/drive/folders/..." className={inputClass} />
         </Field>
         <div className="grid gap-4 sm:grid-cols-2">
           <Field label="Client PIN">
-            <input name="pin" required minLength={4} placeholder="4821" className={inputClass} />
+            <input name="pin" required minLength={4} inputMode="numeric" autoComplete="off" placeholder="4821" className={inputClass} />
           </Field>
-          <Field label="Master selection limit (0 = Unlimited)">
-            <input name="limit" required type="number" min="0" max="500" defaultValue="50" className={inputClass} />
+          <Field label="Selection window">
+            <div className="relative">
+              <input name="duration" required type="number" min="1" max="8760" defaultValue="72" className={clsx(inputClass, 'pr-16 tabular-nums')} />
+              <span className="pointer-events-none absolute inset-y-0 right-3.5 flex items-center text-[11px] font-medium text-[var(--text-muted)]">hours</span>
+            </div>
           </Field>
         </div>
-        <div className="flex justify-end gap-2 pt-3">
-          <button type="button" onClick={close} className="h-10 cursor-pointer rounded-lg border border-[var(--border)] px-4 text-[10px] font-bold uppercase hover:border-[var(--accent)]">
+        <Field label="Selection limit">
+          <div className="relative">
+            <input name="limit" required type="number" min="0" max="500" defaultValue="50" className={clsx(inputClass, 'pr-16 tabular-nums')} />
+            <span className="pointer-events-none absolute inset-y-0 right-3.5 flex items-center text-[11px] font-medium text-[var(--text-muted)]">photos</span>
+          </div>
+          <span className="block text-[10px] leading-4 text-[var(--text-muted)]">Use 0 for unlimited selections.</span>
+        </Field>
+        <div className="flex items-center justify-end gap-2 border-t border-[var(--border)] pt-4">
+          <button type="button" onClick={close} className="h-10 cursor-pointer rounded-md px-4 text-[11px] font-semibold text-[var(--text-secondary)] transition-colors hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)]">
             Cancel
           </button>
-          <button disabled={pending} className="inline-flex h-10 cursor-pointer items-center gap-2 rounded-lg bg-[var(--accent)] px-4 text-[10px] font-black uppercase text-[var(--bg-deep)] disabled:cursor-not-allowed disabled:opacity-50">
-            {pending && <Loader2 size={14} className="animate-spin" />}
+          <button disabled={pending} className="inline-flex h-10 cursor-pointer items-center gap-2 rounded-md bg-[var(--accent)] px-4 text-[11px] font-bold text-[var(--bg-deep)] transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50">
+            {pending ? <Loader2 size={14} className="animate-spin" /> : <Plus size={14} />}
             Create gallery
           </button>
         </div>
@@ -495,15 +517,16 @@ function GalleryTable({
 
   return (
     <div className="overflow-x-auto min-h-[300px]">
-      <table className="w-full min-w-[780px] text-left text-xs">
+      <table className="w-full min-w-[900px] text-left text-xs">
         <thead className="border-y border-[var(--border)] text-[10px] font-medium uppercase tracking-[0.2em] text-[var(--text-muted)]">
           <tr>
             <th className="px-7 py-3.5">Gallery</th>
             <th className="text-center">Status</th>
-            <th>Photos</th>
-            <th>Submitted</th>
-            <th>Master limit</th>
-            <th>Last synced</th>
+            <th className="text-center">Photos</th>
+            <th className="text-center">Submitted</th>
+            <th className="text-center">Master limit</th>
+            <th className="text-center">Deadline</th>
+            <th className="text-center">Last synced</th>
             <th className="px-7 text-center">Actions</th>
           </tr>
         </thead>
@@ -523,6 +546,7 @@ function GalleryTable({
             >
               <td className="max-w-[260px] px-7 py-5">
                 <p className="truncate text-sm font-semibold text-[var(--text-primary)]" title={gallery.title}>{gallery.title}</p>
+                {gallery.isExpired && <span className="mt-1.5 inline-flex items-center gap-1 text-[9px] font-bold uppercase tracking-[0.12em] text-rose-400"><Clock3 size={10} /> Expired</span>}
                 <a
                   href={driveUrl(gallery)}
                   target="_blank"
@@ -541,10 +565,11 @@ function GalleryTable({
               <td className="text-center">
                 <StatusQuickActions gallery={gallery} pending={statusPendingId === gallery.id} onChange={(status) => onStatusChange(gallery.id, status)} />
               </td>
-              <td className="text-xs font-medium tabular-nums text-[var(--text-secondary)]">{gallery.photoCount}</td>
-              <td className="text-xs font-medium tabular-nums text-[var(--text-secondary)]">{gallery.selectionCount}</td>
-              <td className="text-xs font-medium tabular-nums text-[var(--text-secondary)]">{gallery.maxSelections ? gallery.maxSelections : <Unlimited />}</td>
-              <td className="text-[10px] font-medium leading-4 text-[var(--text-muted)]">{gallery.syncedAt ? dateFormat.format(new Date(gallery.syncedAt)) : 'Never'}</td>
+              <td className="text-center text-xs font-medium tabular-nums text-[var(--text-secondary)]">{gallery.photoCount}</td>
+              <td className="text-center text-xs font-medium tabular-nums text-[var(--text-secondary)]">{gallery.selectionCount}</td>
+              <td className="text-center text-xs font-medium tabular-nums text-[var(--text-secondary)]">{gallery.maxSelections ? gallery.maxSelections : <span className="inline-flex justify-center"><Unlimited /></span>}</td>
+              <td className={clsx('text-center text-[10px] font-medium leading-4', gallery.isExpired ? 'text-rose-400' : 'text-[var(--text-muted)]')}>{deadlineLabel(gallery)}</td>
+              <td className="text-center text-[10px] font-medium leading-4 text-[var(--text-muted)]">{gallery.syncedAt ? dateFormat.format(new Date(gallery.syncedAt)) : 'Never'}</td>
               <td className="px-7 text-center">
                 <div className="flex justify-center gap-1.5">
                   <ClientLinkMenu gallery={gallery} />
@@ -661,6 +686,7 @@ function GalleryDetail({ gallery, close }: { gallery: GallerySummary; close: () 
   const [addonUnitPrice, setAddonUnitPrice] = useState(() => Number(data.addon?.unitPrice ?? 10_000));
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- Refresh the local add-on draft from newly fetched gallery data.
     setPaymentStatus(data.addonStatus === 'paid' ? 'paid' : 'unpaid');
     setAddonDraftLimit(Number(data.additionalLimit || 0));
     setAddonUnitPrice(Number(data.addon?.unitPrice ?? 10_000));
@@ -670,7 +696,8 @@ function GalleryDetail({ gallery, close }: { gallery: GallerySummary; close: () 
   const masterLimit = Number(data.maxSelections || 0);
   const addonLimit = Number(data.additionalLimit || 0);
   const activeLimit = masterLimit ? masterLimit + (addonPaid ? addonLimit : 0) : 0;
-  const addonEstimatedTotal = calculateAddonQuote(addonDraftLimit, addonUnitPrice).total;
+  const discountRules = data.addon?.discountRules;
+  const addonEstimatedTotal = calculateAddonQuote(addonDraftLimit, addonUnitPrice, discountRules).total;
   const submittedCount = Number(data.selectionCount || 0);
   const link = publicUrl(data);
   const driveUrl = data.driveFolderId.startsWith('http') ? data.driveFolderId : `https://drive.google.com/drive/folders/${data.driveFolderId}`;
@@ -692,6 +719,9 @@ function GalleryDetail({ gallery, close }: { gallery: GallerySummary; close: () 
           <div>
             <p className="text-xs text-[var(--text-muted)]">
               {data.photoCount} photos, {data.selectionCount} submitted
+            </p>
+            <p className={clsx('mt-1.5 inline-flex items-center gap-1.5 text-[10px] font-semibold', data.isExpired ? 'text-rose-400' : 'text-[var(--text-secondary)]')}>
+              <Clock3 size={12} /> {deadlineLabel(data)} · {data.selectionDurationHours ?? (data.selectionDurationDays || 3) * 24} hours
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
@@ -740,23 +770,27 @@ function GalleryDetail({ gallery, close }: { gallery: GallerySummary; close: () 
         </div>
 
         {/* Memasang key={data.updatedAt || data.id} memastikan form ter-refresh jika data server berubah */}
-        <div key={`${data.id}-${data.updatedAt}-${data.maxSelections}-${data.additionalLimit}-${data.addonStatus}`} className="space-y-4 rounded-xl border border-[var(--border)] p-4">
+        <div key={`${data.id}-${data.updatedAt}-${data.maxSelections}-${data.selectionDurationHours}-${data.additionalLimit}-${data.addonStatus}`} className="space-y-4 rounded-xl border border-[var(--border)] p-4">
           <form
             onSubmit={(event) => {
               event.preventDefault();
               const form = new FormData(event.currentTarget);
               const nextMasterLimit = Math.min(500, Math.max(0, Number(form.get('master-limit')) || 0));
+              const nextDurationHours = Math.min(8760, Math.max(1, Number(form.get('selection-duration')) || 72));
               const nextActiveLimit = nextMasterLimit ? nextMasterLimit + (data.addonStatus === 'paid' ? addonLimit : 0) : 0;
               if (nextActiveLimit && submittedCount > nextActiveLimit) {
                 addToast(`Active limit cannot be lower than ${submittedCount} submitted selections.`, 'error');
                 return;
               }
+              const currentDurationHours = Number(data.selectionDurationHours ?? (data.selectionDurationDays || 3) * 24);
+              const durationChanged = nextDurationHours !== currentDurationHours;
               update.mutate({
                 id: data.id,
                 title: String(form.get('title') || data.title).trim(),
                 driveFolderUrl: String(form.get('driveFolderUrl') || driveUrl).trim(),
                 pin: String(form.get('pin') || ''),
                 maxSelections: nextMasterLimit,
+                ...(durationChanged ? { selectionDurationHours: nextDurationHours } : {}),
               });
             }}
             className="space-y-4"
@@ -768,12 +802,18 @@ function GalleryDetail({ gallery, close }: { gallery: GallerySummary; close: () 
               <Field label="Google Drive folder URL">
                 <input name="driveFolderUrl" required defaultValue={driveUrl} className={inputClass} />
               </Field>
-              <div className="grid gap-4 sm:grid-cols-2">
+              <div className="grid gap-4 sm:grid-cols-3">
                 <Field label="Client PIN">
                   <input name="pin" minLength={4} placeholder="Set a new PIN (optional)" className={inputClass} />
                 </Field>
-                <Field label="Master selection limit (0 = Unlimited)">
+                <Field label="Master limit (0 = Unlimited)" title="Master selection limit (0 = Unlimited)">
                   <input name="master-limit" type="number" min="0" max="500" defaultValue={masterLimit || ''} placeholder="Unlimited" className={inputClass} />
+                </Field>
+                <Field label="Selection window">
+                  <div className="relative">
+                    <input name="selection-duration" required type="number" min="1" max="8760" defaultValue={data.selectionDurationHours ?? (data.selectionDurationDays || 3) * 24} className={clsx(inputClass, 'pr-16 tabular-nums')} />
+                    <span className="pointer-events-none absolute inset-y-0 right-3.5 flex items-center text-[11px] font-medium text-[var(--text-muted)]">hours</span>
+                  </div>
                 </Field>
               </div>
             </div>
@@ -922,6 +962,7 @@ export default function ClientGalleries() {
   // Menjaga agar halaman aktif selalu valid jika jumlah data/filter berubah
   useEffect(() => {
     if (page > totalPages) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- A delete or filter can shrink the server-side page range.
       setPage(totalPages);
     }
   }, [page, totalPages]);

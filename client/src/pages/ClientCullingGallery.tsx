@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useState, useCallback, memo, type CSSProperties } from 'react';
+import { useEffect, useMemo, useState, useCallback, useRef, memo, type CSSProperties } from 'react';
 import { useParams } from '@tanstack/react-router';
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { AlertCircle, Check, CheckSquare, ChevronLeft, ChevronRight, HelpCircle, ImageIcon, Instagram, Loader2, Lock, MessageCircle, Moon, Send, Sun, X } from 'lucide-react';
+import { AlertCircle, Check, CheckSquare, ChevronLeft, ChevronRight, Clock3, HelpCircle, ImageIcon, ImageOff, Instagram, Loader2, Lock, MessageCircle, Moon, Send, Sun, X } from 'lucide-react';
 import clsx from 'clsx';
 
 import orbitLogo from '../assets/pdf/logo.png';
@@ -13,9 +13,12 @@ import {
     getPublicGalleryPhotos,
     submitGallerySelections,
     verifyGalleryPin,
-    type GalleryPhoto,
-    type PublicGallery,
-} from '../features/culling/data';
+} from '../features/culling/culling.public';
+
+import type {
+    GalleryPhoto,
+    PublicGallery,
+} from '../features/culling/culling.types';
 
 function tokenKey(galleryId: string): string {
     return `orbit_culling_token_${galleryId}`;
@@ -33,7 +36,53 @@ function tutorialKey(galleryId: string): string { return `orbit_culling_tutorial
 type GalleryTheme = 'black' | 'white';
 type GalleryContactSettings = { contactWhatsappUrl?: string; message?: string; requestMoreMessage?: string };
 
+const GALLERY_PAGE_SIZE = 50;
+
 const idrFormat = new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 });
+
+function useSelectionCountdown(deadlineAt?: string | null, serverTime?: string) {
+    const [clientNow, setClientNow] = useState(() => Date.now());
+    const serverOffset = useMemo(() => {
+        const parsedServerTime = serverTime ? Date.parse(serverTime) : Number.NaN;
+        // eslint-disable-next-line react-hooks/purity -- Calibrate once whenever fresh server time arrives.
+        return Number.isFinite(parsedServerTime) ? parsedServerTime - Date.now() : 0;
+    }, [serverTime]);
+    const deadline = deadlineAt ? Date.parse(deadlineAt) : Number.NaN;
+
+    useEffect(() => {
+        if (!Number.isFinite(deadline)) return;
+        const timer = window.setInterval(() => setClientNow(Date.now()), 1000);
+        return () => window.clearInterval(timer);
+    }, [deadline]);
+
+    const remainingMs = Number.isFinite(deadline) ? Math.max(0, deadline - (clientNow + serverOffset)) : null;
+    const totalSeconds = Math.floor((remainingMs ?? 0) / 1000);
+    return {
+        isExpired: remainingMs !== null && remainingMs <= 0,
+        remainingMs,
+        days: Math.floor(totalSeconds / 86_400),
+        hours: Math.floor((totalSeconds % 86_400) / 3_600),
+        minutes: Math.floor((totalSeconds % 3_600) / 60),
+        seconds: totalSeconds % 60,
+    };
+}
+
+function CountdownLabel({ countdown }: { countdown: ReturnType<typeof useSelectionCountdown> }) {
+    if (countdown.remainingMs === null) return null;
+    const urgent = countdown.remainingMs <= 24 * 60 * 60 * 1000;
+    const mobileLabel = countdown.days > 0
+        ? `${countdown.days}d ${countdown.hours}h`
+        : `${String(countdown.hours).padStart(2, '0')}:${String(countdown.minutes).padStart(2, '0')}:${String(countdown.seconds).padStart(2, '0')}`;
+    const desktopLabel = `${String(countdown.days).padStart(2, '0')}d : ${String(countdown.hours).padStart(2, '0')}h : ${String(countdown.minutes).padStart(2, '0')}m : ${String(countdown.seconds).padStart(2, '0')}s`;
+
+    return (
+        <span className={clsx('flex h-7 shrink-0 items-center gap-1 rounded-md border bg-[var(--bg-card)] px-1.5 text-[9px] font-bold tabular-nums sm:h-8 sm:gap-1.5 sm:px-2.5 sm:text-[10px]', urgent ? 'border-rose-500/45 text-rose-400' : 'border-[var(--border)] text-[var(--text-secondary)]')} title="Selection time remaining">
+            <Clock3 size={12} />
+            <span className="sm:hidden">{mobileLabel}</span>
+            <span className="hidden sm:inline">{desktopLabel}</span>
+        </span>
+    );
+}
 
 function galleryThemeKey(galleryId: string): string {
     return `orbit_culling_theme_${galleryId}`;
@@ -41,6 +90,69 @@ function galleryThemeKey(galleryId: string): string {
 
 function readGalleryTheme(galleryId: string): GalleryTheme {
     return localStorage.getItem(galleryThemeKey(galleryId)) === 'white' ? 'white' : 'black';
+}
+
+type PreviewImageCacheEntry = {
+    image: HTMLImageElement;
+    promise: Promise<void>;
+    ready: boolean;
+};
+
+const PREVIEW_IMAGE_CACHE_LIMIT = 5;
+const previewImageCache = new Map<string, PreviewImageCacheEntry>();
+
+function touchPreviewImageCache(url: string, entry: PreviewImageCacheEntry): void {
+    previewImageCache.delete(url);
+    previewImageCache.set(url, entry);
+
+    while (previewImageCache.size > PREVIEW_IMAGE_CACHE_LIMIT) {
+        const oldestUrl = previewImageCache.keys().next().value as string | undefined;
+        if (!oldestUrl) break;
+        previewImageCache.delete(oldestUrl);
+    }
+}
+
+function isPreviewImageReady(url: string): boolean {
+    return previewImageCache.get(url)?.ready === true;
+}
+
+function preloadPreviewImage(url: string, priority: 'high' | 'low' = 'low'): Promise<void> {
+    const cached = previewImageCache.get(url);
+    if (cached) {
+        if (priority === 'high') cached.image.fetchPriority = 'high';
+        touchPreviewImageCache(url, cached);
+        return cached.promise;
+    }
+
+    const image = new Image();
+    image.decoding = 'async';
+    image.fetchPriority = priority;
+
+    const entry: PreviewImageCacheEntry = { image, promise: Promise.resolve(), ready: false };
+    entry.promise = new Promise<void>((resolve, reject) => {
+        image.onload = () => {
+            const finish = () => {
+                entry.ready = true;
+                touchPreviewImageCache(url, entry);
+                resolve();
+            };
+
+            if (typeof image.decode === 'function') {
+                void image.decode().catch(() => undefined).then(finish);
+            } else {
+                finish();
+            }
+        };
+        image.onerror = () => {
+            previewImageCache.delete(url);
+            reject(new Error('Unable to preload gallery preview.'));
+        };
+    });
+
+    previewImageCache.set(url, entry);
+    image.src = url;
+    touchPreviewImageCache(url, entry);
+    return entry.promise;
 }
 
 const BLACK_THEME = {
@@ -83,7 +195,7 @@ const OrbitLogo = memo(function OrbitLogo({
             <img
                 src={orbitLogo}
                 alt="Orbit Logo"
-                className="h-auto w-24 object-contain sm:w-28 lg:w-30"
+                className="h-auto w-20 object-contain sm:w-28 lg:w-30"
                 style={{ filter: isInverted ? 'invert(1)' : 'none' }}
             />
         </div>
@@ -93,7 +205,7 @@ const OrbitLogo = memo(function OrbitLogo({
 function ThemeToggle({ theme, onToggle }: { theme: GalleryTheme; onToggle: () => void }) {
     const nextTheme = theme === 'black' ? 'white' : 'black';
     return (
-        <button type="button" onClick={onToggle} title={`Switch to ${nextTheme} mode`} aria-label={`Switch to ${nextTheme} mode`} className="flex h-8.5 w-8.5 items-center justify-center rounded-full border border-[var(--border)] bg-[var(--bg-card)] text-[var(--text-secondary)] transition-colors hover:border-[var(--accent)] hover:text-[var(--accent)]">
+        <button type="button" onClick={onToggle} title={`Switch to ${nextTheme} mode`} aria-label={`Switch to ${nextTheme} mode`} className="flex h-8 w-8 items-center justify-center rounded-full border border-[var(--border)] bg-[var(--bg-card)] text-[var(--text-secondary)] transition-colors hover:border-[var(--accent)] hover:text-[var(--accent)] sm:h-8.5 sm:w-8.5">
             {theme === 'black' ? <Sun size={14} /> : <Moon size={14} />}
         </button>
     );
@@ -121,34 +233,90 @@ const PhotoTile = memo(function PhotoTile({
     selected,
     token,
     galleryId,
-    index,
+    displayIndex,
     onOpen,
+    onPrefetch,
     onToggle,
 }: {
     photo: GalleryPhoto;
     selected: boolean;
     token: string;
     galleryId: string;
-    index: number;
-    onOpen: (index: number) => void;
+    displayIndex: number;
+    onOpen: (driveFileId: string) => void;
+    onPrefetch: (photo: GalleryPhoto) => void;
     onToggle: (driveFileId: string) => void;
 }) {
+    const [hasError, setHasError] = useState(false);
+    const prefetchTimerRef = useRef<number | null>(null);
+
+    const cancelScheduledPrefetch = () => {
+        if (prefetchTimerRef.current == null) return;
+        window.clearTimeout(prefetchTimerRef.current);
+        prefetchTimerRef.current = null;
+    };
+
+    const schedulePrefetch = () => {
+        cancelScheduledPrefetch();
+        prefetchTimerRef.current = window.setTimeout(() => {
+            prefetchTimerRef.current = null;
+            if (!hasError) onPrefetch(photo);
+        }, 120);
+    };
+
+    useEffect(() => () => {
+        if (prefetchTimerRef.current != null) window.clearTimeout(prefetchTimerRef.current);
+    }, []);
+
     return (
-        <article className={clsx('group relative aspect-[4/3] overflow-hidden bg-[var(--bg-card)] transition-transform duration-200 hover:-translate-y-0.5', selected && 'ring-2 ring-[var(--accent)] ring-offset-2 ring-offset-[var(--bg-deep)]')}>
-            <button type="button" onClick={() => onOpen(index)} className="h-full w-full bg-[var(--bg-card)] text-left" aria-label={`Open ${photo.filename}`}>
-                <img
-                    src={galleryThumbnailUrl(galleryId, photo.driveFileId, token, photo.photoToken)}
-                    alt={photo.filename}
-                    loading="lazy"
-                    className="h-full w-full object-cover opacity-0 transition-[opacity,transform] duration-500 group-hover:scale-[1.035]"
-                    onLoad={(event) => event.currentTarget.classList.remove('opacity-0')}
-                />
+        <article className={clsx('group relative aspect-[4/3] overflow-hidden bg-[var(--bg-card)] transition-transform duration-150 hover:-translate-y-0.5 [content-visibility:auto] [contain-intrinsic-size:180px_135px]', selected && 'ring-2 ring-[var(--accent)] ring-offset-2 ring-offset-[var(--bg-deep)]')}>
+            <button
+                type="button"
+                onClick={() => !hasError && onOpen(photo.driveFileId)}
+                onFocus={() => !hasError && onPrefetch(photo)}
+                onPointerEnter={(event) => { if (event.pointerType === 'mouse' && !hasError) schedulePrefetch(); }}
+                onPointerLeave={cancelScheduledPrefetch}
+                onPointerDown={() => {
+                    cancelScheduledPrefetch();
+                    if (!hasError) onPrefetch(photo);
+                }}
+                className="h-full w-full bg-[var(--bg-card)] text-left"
+                aria-label={`Open ${photo.filename}`}
+            >
+                {!hasError ? (
+                    <img
+                        src={galleryThumbnailUrl(galleryId, photo.driveFileId, token, photo.photoToken)}
+                        alt={photo.filename}
+                        loading="lazy"
+                        decoding="async"
+                        className="h-full w-full object-cover opacity-0 transition-[opacity,transform] duration-200 group-hover:scale-[1.015]"
+                        onLoad={(event) => event.currentTarget.classList.remove('opacity-0')}
+                        onError={() => setHasError(true)}
+                    />
+                ) : (
+                    <div className="flex h-full w-full flex-col items-center justify-center bg-[var(--bg-elevated)] text-[var(--text-muted)]">
+                        <ImageOff size={24} className="mb-2 opacity-50" />
+                        <span className="text-[9px] font-bold uppercase tracking-[0.16em] opacity-60">
+                            Failed to load
+                        </span>
+                    </div>
+                )}
+
                 <div className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/80 via-black/30 to-transparent p-3">
                     <p className="truncate text-[10px] font-semibold text-white">{photo.filename}</p>
-                    <p className="mt-1 text-[8px] font-bold uppercase tracking-[0.16em] text-white/55">#{String(index + 1).padStart(3, '0')}</p>
+                    <p className="mt-1 text-[8px] font-bold uppercase tracking-[0.16em] text-white/55">#{String(displayIndex + 1).padStart(3, '0')}</p>
                 </div>
                 <div className={clsx('pointer-events-none absolute inset-0 bg-[var(--accent-muted)] transition-opacity duration-200', selected ? 'opacity-100' : 'opacity-0')} />
             </button>
+            {selected && (
+                <>
+                    <div className="pointer-events-none absolute left-2 top-2 flex h-7 items-center gap-1 rounded-full border border-[var(--accent)] bg-[var(--accent)] px-2 text-[9px] font-black uppercase tracking-[0.1em] text-[var(--bg-deep)] shadow-lg shadow-black/35">
+                        <CheckSquare size={11} strokeWidth={2.6} />
+                        Picked
+                    </div>
+                    <div className="pointer-events-none absolute inset-0 border-[3px] border-[var(--accent)] shadow-[inset_0_0_0_1px_var(--bg-deep)]" />
+                </>
+            )}
             <button
                 type="button"
                 onClick={() => onToggle(photo.driveFileId)}
@@ -176,8 +344,15 @@ function PinGate({
     const [pin, setPin] = useState('');
     const [error, setError] = useState('');
     const [contactUrl, setContactUrl] = useState<string | null>(null);
-    const [isClosed, setIsClosed] = useState(false);
+    const [lockCode, setLockCode] = useState<'GALLERY_CLOSED' | 'GALLERY_EXPIRED' | null>(null);
     const [isRateLimited, setIsRateLimited] = useState(false);
+    const isClosed = lockCode !== null;
+    const isExpired = lockCode === 'GALLERY_EXPIRED';
+    const lockedMessage = isExpired
+        ? 'The selection deadline has ended. Please contact the admin if you need more time.'
+        : isRateLimited
+            ? 'Too many PIN attempts. Please contact the admin to unlock access.'
+            : 'This gallery is currently locked. Please contact the admin to unlock access.';
     
     const verifyMutation = useMutation({
         mutationFn: () => verifyGalleryPin(galleryId, pin),
@@ -188,9 +363,9 @@ function PinGate({
         onError: (mutationError) => {
             setError(mutationError instanceof Error ? mutationError.message : 'Unable to unlock gallery.');
             const galleryError = mutationError as Error & { code?: string; contactUrl?: string | null; status?: number };
-            if (galleryError.code === 'GALLERY_CLOSED') {
+            if (galleryError.code === 'GALLERY_CLOSED' || galleryError.code === 'GALLERY_EXPIRED') {
                 setContactUrl(galleryError.contactUrl || null);
-                setIsClosed(true);
+                setLockCode(galleryError.code);
             }
             if (galleryError.status === 429) {
                 setIsRateLimited(true);
@@ -217,28 +392,71 @@ function PinGate({
                         setIsRateLimited(false);
                         verifyMutation.mutate();
                     }}
-                    className="w-full max-w-sm border border-[var(--border)] bg-[var(--bg-card)] px-6 py-10 text-center shadow-2xl"
+                    className="box-border h-[330px] w-full max-w-sm border border-[var(--border)] bg-[var(--bg-card)] px-6 py-10 text-center shadow-2xl"
                 >
                     <div className="mb-6 flex justify-center">
                         <OrbitLogo theme={theme} />
                     </div>
 
                     <p className="label-xs text-[var(--accent)]">PRIVATE CLIENT GALLERY</p>
-                    <h1 className="mt-3 font-display text-2xl font-medium text-[var(--text-primary)]">{isClosed ? 'Gallery Locked' : isRateLimited ? 'Access Locked' : 'Enter PIN'}</h1>
+                    <h1 className="mt-3 font-display text-2xl font-medium text-[var(--text-primary)]">{isExpired ? 'Selection Closed' : isClosed ? 'Gallery Locked' : isRateLimited ? 'Access Locked' : 'Enter PIN'}</h1>
                     
-                    {!isClosed && !isRateLimited && <input value={pin} onChange={(event) => setPin(event.target.value)} autoFocus placeholder="Gallery PIN" className="mt-7 h-11 rounded-lg bg-[var(--bg-deep)] px-4 text-center text-base tracking-[0.2em]" />}
-                    {error && !isClosed && !isRateLimited && <p className="mt-4 text-xs leading-5 text-rose-400">{error}</p>}
-                    {contactUrl && <a href={contactUrl} target="_blank" rel="noreferrer" className="mt-4 inline-flex h-10 w-full items-center justify-center rounded-lg border border-[var(--border)] text-xs font-bold text-[var(--text-primary)] hover:border-[var(--accent)]">Contact admin on WhatsApp</a>}
+                    {!isClosed && !isRateLimited && (
+                        <div className="relative mt-7">
+                            <input
+                                value={pin}
+                                onChange={(event) => {
+                                    setPin(event.target.value.slice(0, 64));
+                                    if (error) setError('');
+                                }}
+                                autoFocus
+                                placeholder="Gallery PIN"
+                                className="h-11 w-full rounded-lg border border-[var(--border)] bg-[var(--bg-deep)] px-4 text-center text-base tracking-[0.2em] text-[var(--text-primary)] outline-none transition-colors placeholder:tracking-[0.2em] placeholder:text-[var(--text-muted)] focus:border-[var(--accent)]"
+                            />
+                            <p aria-live="polite" className={clsx('absolute left-0 right-0 top-full mt-1 text-xs leading-5 text-rose-400 transition-opacity duration-200', error ? 'opacity-100' : 'opacity-0')}>
+                                {error || ' '}
+                            </p>
+                        </div>
+                    )}
+                    {contactUrl && <a href={contactUrl} target="_blank" rel="noreferrer" className="mt-4 inline-flex h-10 w-full items-center justify-center rounded-lg border border-[var(--border)] bg-[var(--bg-card)] text-xs font-bold text-[var(--text-primary)] transition-colors hover:border-[var(--accent)]">Contact admin on WhatsApp</a>}
+                    {(isClosed || isRateLimited) && (
+                        <p className="mx-auto mt-6 max-w-xs text-xs leading-5 text-[var(--text-muted)]">{lockedMessage}</p>
+                    )}
                     
-                    {(isClosed || isRateLimited) ? (
-                        <p className="mt-6 text-xs leading-5 text-[var(--text-muted)]">{isClosed ? 'This gallery is currently locked. Please contact the admin to unlock access.' : 'Too many PIN attempts. Please contact the admin to unlock access.'}</p>
-                    ) : (
+                    {!isClosed && !isRateLimited && (
                         <button type="submit" disabled={verifyMutation.isPending || pin.length < 4} className="mt-6 flex h-10 w-full items-center justify-center gap-2 rounded-lg bg-[var(--accent)] text-[10px] font-black uppercase tracking-[0.14em] text-[var(--bg-deep)] transition-opacity disabled:opacity-45">
                             {verifyMutation.isPending ? <Loader2 size={14} className="animate-spin" /> : <Lock size={14} />}
                             Unlock gallery
                         </button>
                     )}
                 </form>
+            </section>
+        </main>
+    );
+}
+
+function GalleryLockedScreen({
+    expired,
+    contactUrl,
+    theme,
+    onToggleTheme,
+}: {
+    expired: boolean;
+    contactUrl: string | null;
+    theme: GalleryTheme;
+    onToggleTheme: () => void;
+}) {
+    return (
+        <main style={theme === 'black' ? BLACK_THEME : WHITE_THEME} className="min-h-screen bg-[var(--bg-deep)] font-sans text-[var(--text-primary)]">
+            <div className="absolute right-5 top-5"><ThemeToggle theme={theme} onToggle={onToggleTheme} /></div>
+            <section className="flex min-h-screen items-center justify-center px-5 py-12 text-center">
+                <div className="box-border h-[330px] w-full max-w-sm border border-[var(--border)] bg-[var(--bg-card)] px-6 py-10 shadow-2xl">
+                    <div className="mb-6 flex justify-center"><OrbitLogo theme={theme} /></div>
+                    <p className="label-xs text-[var(--accent)]">PRIVATE CLIENT GALLERY</p>
+                    <h1 className="mt-3 font-display text-2xl font-medium">{expired ? 'Selection Closed' : 'Gallery Locked'}</h1>
+                    {contactUrl && <a href={contactUrl} target="_blank" rel="noreferrer" className="mt-4 inline-flex h-10 w-full items-center justify-center gap-2 rounded-lg border border-[var(--border)] bg-[var(--bg-card)] text-xs font-bold text-[var(--text-primary)] transition-colors hover:border-[var(--accent)]"><MessageCircle size={14} /> Contact admin on WhatsApp</a>}
+                    <p className="mx-auto mt-6 max-w-xs text-xs leading-5 text-[var(--text-muted)]">{expired ? 'The selection deadline has ended. Please contact the admin if you need more time.' : 'This gallery is currently locked. Please contact the admin to unlock access.'}</p>
+                </div>
             </section>
         </main>
     );
@@ -394,7 +612,7 @@ function TutorialModal({ onClose }: { onClose: () => void }) {
     const steps = [
         { icon: <Check size={15} />, title: 'Choose favorites', text: 'Tap the check button on any photo. A framed photo is currently selected.' },
         { icon: <X size={15} />, title: 'Changed your mind?', text: 'Tap the X on a selected photo to remove it before submitting.' },
-        { icon: <CheckSquare size={15} />, title: 'Revise a submission', text: 'Open Submitted, remove or add photos, then submit again to update Orbit.' },
+        { icon: <CheckSquare size={15} />, title: 'Review picked photos', text: 'Open Picked to check your current choices, then submit again when you are ready.' },
         { icon: <Send size={15} />, title: 'Send when ready', text: 'Review the final count and confirm. Notes added in preview are included.' },
     ];
 
@@ -433,7 +651,7 @@ const Lightbox = memo(function Lightbox({
     galleryId,
     token,
     photos,
-    currentIndex,
+    currentPhotoId,
     selectedIds,
     onClose,
     onMove,
@@ -444,26 +662,94 @@ const Lightbox = memo(function Lightbox({
     galleryId: string;
     token: string;
     photos: GalleryPhoto[];
-    currentIndex: number | null;
+    currentPhotoId: string | null;
     selectedIds: Set<string>;
     onClose: () => void;
-    onMove: (index: number) => void;
+    onMove: (driveFileId: string) => void;
     onToggle: (driveFileId: string) => void;
     note: string;
     onNote: (note: string) => void;
 }) {
-    const photo = currentIndex == null ? null : photos[currentIndex];
+    const currentIndex = currentPhotoId ? photos.findIndex((item) => item.driveFileId === currentPhotoId) : -1;
+    const photo = currentIndex >= 0 ? photos[currentIndex] : null;
     const selected = photo ? selectedIds.has(photo.driveFileId) : false;
+    const currentUrl = photo ? galleryPreviewUrl(galleryId, photo.driveFileId, token, photo.photoToken) : '';
+    const [loadedUrl, setLoadedUrl] = useState('');
+    const [failedUrl, setFailedUrl] = useState('');
+    const [pendingIndex, setPendingIndex] = useState<number | null>(null);
+    const moveRequestRef = useRef(0);
+    const swipeStartXRef = useRef<number | null>(null);
+    const currentImageReady = Boolean(currentUrl) && (loadedUrl === currentUrl || isPreviewImageReady(currentUrl));
+
+    const closeLightbox = useCallback(() => {
+        moveRequestRef.current += 1;
+        setPendingIndex(null);
+        onClose();
+    }, [onClose, setPendingIndex]);
+
+    const requestMove = useCallback((nextIndex: number) => {
+        if (currentIndex < 0 || pendingIndex != null || nextIndex < 0 || nextIndex >= photos.length || nextIndex === currentIndex) return;
+
+        const nextPhoto = photos[nextIndex];
+        if (!nextPhoto) return;
+        const nextUrl = galleryPreviewUrl(galleryId, nextPhoto.driveFileId, token, nextPhoto.photoToken);
+        const requestId = ++moveRequestRef.current;
+        setPendingIndex(nextIndex);
+
+        void preloadPreviewImage(nextUrl, 'high')
+            .catch(() => undefined)
+            .then(() => {
+                if (moveRequestRef.current !== requestId) return;
+                setPendingIndex(null);
+                onMove(nextPhoto.driveFileId);
+            });
+    }, [currentIndex, galleryId, onMove, pendingIndex, photos, setPendingIndex, token]);
 
     useEffect(() => {
-        if (!photo || currentIndex == null) return;
+        if (!currentUrl || isPreviewImageReady(currentUrl)) return;
+
+        let active = true;
+        void preloadPreviewImage(currentUrl, 'high')
+            .then(() => {
+                if (active) setLoadedUrl(currentUrl);
+            })
+            .catch(() => {
+                if (active) setFailedUrl(currentUrl);
+            });
+
+        return () => {
+            active = false;
+        };
+    }, [currentUrl]);
+
+    useEffect(() => {
+        if (!currentImageReady || currentIndex < 0) return;
+
+        const neighborIndexes = [currentIndex + 1, currentIndex - 1];
+        neighborIndexes.forEach((neighborIndex) => {
+            const neighbor = photos[neighborIndex];
+            if (!neighbor) return;
+            const neighborUrl = galleryPreviewUrl(galleryId, neighbor.driveFileId, token, neighbor.photoToken);
+            void preloadPreviewImage(neighborUrl).catch(() => undefined);
+        });
+    }, [currentImageReady, currentIndex, galleryId, photos, token]);
+
+    useEffect(() => {
+        if (!photo || currentIndex < 0) return;
         const previousOverflow = document.body.style.overflow;
         document.body.style.overflow = 'hidden';
         
         const handleKey = (event: KeyboardEvent) => {
-            if (event.key === 'Escape') onClose();
-            if (event.key === 'ArrowLeft') onMove(Math.max(0, currentIndex - 1));
-            if (event.key === 'ArrowRight') onMove(Math.min(photos.length - 1, currentIndex + 1));
+            if (event.key === 'Escape') {
+                closeLightbox();
+                return;
+            }
+
+            const target = event.target;
+            if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || (target instanceof HTMLElement && target.isContentEditable)) return;
+
+            if (event.key === 'ArrowLeft') requestMove(currentIndex - 1);
+            if (event.key === 'ArrowRight') requestMove(currentIndex + 1);
             if (event.key === ' ') {
                 event.preventDefault();
                 onToggle(photo.driveFileId);
@@ -475,53 +761,69 @@ const Lightbox = memo(function Lightbox({
             document.body.style.overflow = previousOverflow;
             document.removeEventListener('keydown', handleKey);
         };
-    }, [currentIndex, onClose, onMove, onToggle, photo, photos.length]);
+    }, [closeLightbox, currentIndex, onToggle, photo, requestMove]);
 
-    if (!photo || currentIndex == null) return null;
+    if (!photo || currentIndex < 0) return null;
 
     return (
         <div className="fixed inset-0 z-[120] bg-black/95 text-white">
-            <button type="button" aria-label="Close photo preview" onClick={onClose} className="absolute right-4 top-4 z-30 flex h-10 w-10 items-center justify-center rounded-full border border-white/20 bg-black/40 text-white backdrop-blur hover:border-[var(--accent)] transition-colors">
+            <button type="button" aria-label="Close photo preview" onClick={closeLightbox} className="absolute right-3 top-3 z-30 flex h-9 w-9 items-center justify-center rounded-full border border-white/20 bg-black/40 text-white backdrop-blur transition-colors hover:border-[var(--accent)] sm:right-4 sm:top-4 sm:h-10 sm:w-10">
                 <X size={16} />
             </button>
-            <button type="button" disabled={currentIndex === 0} aria-label="Previous photo" onClick={() => onMove(Math.max(0, currentIndex - 1))} className="absolute left-4 top-1/2 z-30 flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full border border-white/20 bg-black/40 text-white backdrop-blur disabled:opacity-25 transition-opacity">
-                <ChevronLeft size={18} />
-            </button>
-            <button type="button" disabled={currentIndex === photos.length - 1} aria-label="Next photo" onClick={() => onMove(Math.min(photos.length - 1, currentIndex + 1))} className="absolute right-4 top-1/2 z-30 flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full border border-white/20 bg-black/40 text-white backdrop-blur disabled:opacity-25 transition-opacity">
-                <ChevronRight size={18} />
-            </button>
 
-            <div className="flex h-full flex-col relative">
-                <div className="flex min-h-0 flex-1 items-center justify-center px-4 py-20 relative">
-                    {currentIndex > 0 && (
-                        <img 
-                            src={galleryPreviewUrl(galleryId, photos[currentIndex - 1].driveFileId, token, photos[currentIndex - 1].photoToken)}
-                            alt="Preload Previous"
-                            className="absolute opacity-0 pointer-events-none"
-                        />
+            <div className="grid h-dvh grid-rows-[minmax(0,1fr)_auto] overflow-hidden">
+                <div
+                    data-testid="gallery-lightbox-stage"
+                    className="relative flex min-h-0 touch-pan-y items-center justify-center px-10 py-2 sm:px-16 sm:py-5"
+                    onPointerDown={(event) => {
+                        if (event.pointerType === 'touch') swipeStartXRef.current = event.clientX;
+                    }}
+                    onPointerCancel={() => { swipeStartXRef.current = null; }}
+                    onPointerUp={(event) => {
+                        if (event.pointerType !== 'touch' || swipeStartXRef.current == null) return;
+                        const distance = event.clientX - swipeStartXRef.current;
+                        swipeStartXRef.current = null;
+                        if (Math.abs(distance) < 48) return;
+                        requestMove(distance < 0 ? currentIndex + 1 : currentIndex - 1);
+                    }}
+                >
+                    <button type="button" disabled={currentIndex === 0 || pendingIndex != null} aria-label="Previous photo" onClick={() => requestMove(currentIndex - 1)} className="absolute left-1.5 top-1/2 z-30 flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-full border border-white/20 bg-black/40 text-white backdrop-blur transition-opacity disabled:opacity-25 sm:left-4 sm:h-10 sm:w-10">
+                        {pendingIndex != null && pendingIndex < currentIndex ? <Loader2 size={16} className="animate-spin" /> : <ChevronLeft size={18} />}
+                    </button>
+                    <button type="button" disabled={currentIndex === photos.length - 1 || pendingIndex != null} aria-label="Next photo" onClick={() => requestMove(currentIndex + 1)} className="absolute right-1.5 top-1/2 z-30 flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-full border border-white/20 bg-black/40 text-white backdrop-blur transition-opacity disabled:opacity-25 sm:right-4 sm:h-10 sm:w-10">
+                        {pendingIndex != null && pendingIndex > currentIndex ? <Loader2 size={16} className="animate-spin" /> : <ChevronRight size={18} />}
+                    </button>
+                    {!currentImageReady && failedUrl !== currentUrl && <Loader2 size={24} className="absolute animate-spin text-white/65" />}
+                    {failedUrl === currentUrl && (
+                        <div className="absolute flex flex-col items-center text-white/60">
+                            <ImageOff size={26} />
+                            <span className="mt-2 text-[10px] font-bold uppercase tracking-[0.14em]">Failed to load preview</span>
+                        </div>
                     )}
                     <img 
-                        src={galleryPreviewUrl(galleryId, photo.driveFileId, token, photo.photoToken)}
+                        data-testid="gallery-lightbox-image"
+                        key={currentUrl}
+                        src={currentUrl}
                         alt={photo.filename}
-                        className="z-10 max-h-full max-w-full object-contain transition-opacity duration-200"
+                        decoding="async"
+                        fetchPriority="high"
+                        className={clsx('z-10 block h-auto max-h-full w-auto max-w-full object-contain transition-opacity duration-150', currentImageReady && failedUrl !== currentUrl ? 'opacity-100' : 'opacity-0')}
+                        onLoad={() => {
+                            setFailedUrl('');
+                            setLoadedUrl(currentUrl);
+                        }}
+                        onError={() => setFailedUrl(currentUrl)}
                     />
-                    {currentIndex < photos.length - 1 && (
-                        <img 
-                            src={galleryPreviewUrl(galleryId, photos[currentIndex + 1].driveFileId, token, photos[currentIndex + 1].photoToken)}
-                            alt="Preload Next"
-                            className="absolute opacity-0 pointer-events-none"
-                        />
-                    )}
                 </div>
                 
-                <footer className="absolute z-20 inset-x-0 bottom-0 flex flex-col gap-3 border-t border-white/10 bg-black/70 px-5 py-4 backdrop-blur sm:flex-row sm:items-center sm:justify-between">
+                <footer data-testid="gallery-lightbox-footer" className="relative z-20 flex shrink-0 flex-col gap-2 border-t border-white/10 bg-black/80 px-3 py-3 backdrop-blur sm:flex-row sm:items-center sm:justify-between sm:gap-3 sm:px-5 sm:py-4">
                     <div className="min-w-0">
-                        <p className="truncate text-sm font-semibold">{photo.filename}</p>
-                        <p className="mt-1 text-[10px] uppercase tracking-[0.16em] text-white/50">{currentIndex + 1} / {photos.length}</p>
+                        <p className="truncate text-xs font-semibold sm:text-sm">{photo.filename}</p>
+                        <p className="mt-0.5 text-[9px] uppercase tracking-[0.14em] text-white/50 sm:mt-1 sm:text-[10px]">{currentIndex + 1} / {photos.length}</p>
                     </div>
                     <div className="flex w-full flex-col gap-2 sm:w-auto sm:min-w-[300px]">
-                        <textarea value={note} maxLength={500} onChange={(event) => onNote(event.target.value)} placeholder="Add a note for this photo..." className="min-h-16 w-full resize-y rounded-lg border border-white/20 bg-black/40 px-3 py-2 text-xs text-white outline-none placeholder:text-white/45 focus:border-[var(--accent)] transition-colors" />
-                        <button type="button" onClick={() => onToggle(photo.driveFileId)} className={clsx('flex h-10 items-center justify-center gap-2 rounded-lg px-5 text-[10px] font-black uppercase tracking-[0.14em] transition-colors', selected ? 'bg-white text-black' : 'border border-white/30 bg-black/30 text-white hover:border-white/60 hover:bg-white/10')}>
+                        <textarea value={note} maxLength={500} onChange={(event) => onNote(event.target.value)} placeholder="Add a note for this photo..." className="min-h-11 w-full resize-y rounded-lg border border-white/20 bg-black/40 px-3 py-2 text-xs text-white outline-none transition-colors placeholder:text-white/45 focus:border-[var(--accent)] sm:min-h-16" />
+                        <button type="button" onClick={() => onToggle(photo.driveFileId)} className={clsx('flex h-9 items-center justify-center gap-2 rounded-lg px-4 text-[10px] font-black uppercase tracking-[0.12em] transition-colors sm:h-10 sm:px-5 sm:tracking-[0.14em]', selected ? 'bg-white text-black' : 'border border-white/30 bg-black/30 text-white hover:border-white/60 hover:bg-white/10')}>
                             {selected ? <X size={14} /> : <Check size={14} />}
                             {selected ? 'Remove selection' : 'Select photo'}
                         </button>
@@ -543,7 +845,7 @@ export default function ClientCullingGallery() {
     const [page, setPage] = useState(1);
     const [showSelected, setShowSelected] = useState(false);
     const [selectionTouched, setSelectionTouched] = useState(() => readSelectionDraft(galleryId).length > 0);
-    const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
+    const [lightboxPhotoId, setLightboxPhotoId] = useState<string | null>(null);
     const [submittedCount, setSubmittedCount] = useState<number | null>(null);
     const [showTutorial, setShowTutorial] = useState(() => Boolean(token) && !localStorage.getItem(tutorialKey(galleryId)));
     const [limitMessage, setLimitMessage] = useState('');
@@ -551,27 +853,39 @@ export default function ClientCullingGallery() {
     const [showRequestMore, setShowRequestMore] = useState(false);
     const [requestedCount, setRequestedCount] = useState(10);
     const [showSubmitConfirm, setShowSubmitConfirm] = useState(false);
+    const [knownPhotosById, setKnownPhotosById] = useState<Record<string, GalleryPhoto>>({});
+    const shouldIncludeSelections = !showSelected && !selectionTouched && selectedIds.size === 0 && page === 1;
     
     const photosQuery = useQuery({
-        queryKey: ['public-gallery-photos', galleryId, token, page, showSelected],
-        queryFn: () => getPublicGalleryPhotos(galleryId, token, page, 60, showSelected),
+        queryKey: ['public-gallery-photos', galleryId, token, page, GALLERY_PAGE_SIZE, showSelected],
+        queryFn: () => getPublicGalleryPhotos(galleryId, token, page, GALLERY_PAGE_SIZE, showSelected, shouldIncludeSelections),
         enabled: !!token,
         retry: false,
         placeholderData: keepPreviousData,
         staleTime: 5 * 60 * 1000,
     });
-    
-    const photos = photosQuery.data?.photos || [];
-    const submittedPhotos = photosQuery.data?.selectedPhotos || [];
-    const visiblePhotos = showSelected ? submittedPhotos : photos;
+    const photos = useMemo(() => photosQuery.data?.photos || [], [photosQuery.data?.photos]);
+    const submittedPhotos = useMemo(() => photosQuery.data?.selectedPhotos || [], [photosQuery.data?.selectedPhotos]);
+    const selectedDriveFileIds = useMemo(() => photosQuery.data?.selectedDriveFileIds || [], [photosQuery.data?.selectedDriveFileIds]);
     
     const effectiveSelectedIds = useMemo(() => {
         if (selectionTouched || selectedIds.size > 0) return selectedIds;
-        return new Set(photosQuery.data?.selectedDriveFileIds || []);
-    }, [photosQuery.data?.selectedDriveFileIds, selectedIds, selectionTouched]);
+        if (showSelected && submittedPhotos.length > 0) return new Set(submittedPhotos.map((photo) => photo.driveFileId));
+        return new Set(selectedDriveFileIds);
+    }, [selectedDriveFileIds, selectedIds, selectionTouched, showSelected, submittedPhotos]);
     
     const selectionList = useMemo(() => Array.from(effectiveSelectedIds), [effectiveSelectedIds]);
+    const pickedPhotos = useMemo(() => {
+        const submittedById = new Map(submittedPhotos.map((photo) => [photo.driveFileId, photo]));
+        return selectionList
+            .map((driveFileId) => knownPhotosById[driveFileId] ?? submittedById.get(driveFileId))
+            .filter((photo): photo is GalleryPhoto => Boolean(photo));
+    }, [knownPhotosById, selectionList, submittedPhotos]);
+    const visiblePhotos = showSelected ? pickedPhotos : photos;
     const displayGallery = photosQuery.data?.gallery || unlockedGallery;
+    const countdown = useSelectionCountdown(displayGallery?.selectionDeadlineAt, displayGallery?.serverTime);
+    const galleryError = photosQuery.error as (Error & { code?: string; contactUrl?: string | null }) | null;
+    const galleryLockCode = galleryError?.code === 'GALLERY_EXPIRED' || galleryError?.code === 'GALLERY_CLOSED' ? galleryError.code : null;
     const masterLimit = Number(displayGallery?.maxSelections || 0);
     const additionalLimit = Number(displayGallery?.additionalLimit || 0);
     const isAddonActive = Boolean(displayGallery?.addon?.enabled && additionalLimit > 0);
@@ -582,7 +896,10 @@ export default function ClientCullingGallery() {
     const overLimitCount = selectionLimit ? Math.max(0, selectedCount - selectionLimit) : 0;
     const isOverLimit = overLimitCount > 0;
     const addonUnitPrice = Math.max(0, Number(displayGallery?.addon?.unitPrice ?? 10_000));
-    const addonQuote = useMemo(() => calculateAddonQuote(requestedCount, addonUnitPrice), [addonUnitPrice, requestedCount]);
+    const discountRules = displayGallery?.addon?.discountRules;
+    const addonQuote = useMemo(() => {
+        return calculateAddonQuote(requestedCount, addonUnitPrice, discountRules);
+    }, [addonUnitPrice, requestedCount, discountRules]);
     const requestMoreUrl = useMemo(() => {
         if (!requestSettings?.contactWhatsappUrl) return null;
         let template = requestSettings.requestMoreMessage || 'Halo Kak Admin Orbit\nSaya ingin meminta tambahan edited photos.\n\nIni URL saya: {{gallery_url}}\nSaya client dari: {{gallery_title}}\nPilihan saat ini: {{selected_count}} foto\nSaya ingin menambah: {{requested_count}} foto\nPromo: {{promo_label}}\nEstimasi biaya: {{estimated_price}}';
@@ -596,18 +913,28 @@ export default function ClientCullingGallery() {
             .replaceAll('{{promo_label}}', addonQuote.discountPercent ? `Hemat ${addonQuote.discountPercent}%` : 'Harga normal')
             .replaceAll('{{normal_price}}', idrFormat.format(addonQuote.normalTotal))
             .replaceAll('{{estimated_price}}', idrFormat.format(addonQuote.total));
-        const phone = requestSettings.contactWhatsappUrl.replace(/\D/g, '').replace(/^0/, '62');
+        let phone = requestSettings.contactWhatsappUrl.replace(/\D/g, '');
+        if (phone.startsWith('0')) phone = '62' + phone.slice(1);
         return `https://wa.me/${phone}?text=${encodeURIComponent(text)}`;
     }, [addonQuote, displayGallery?.title, galleryId, requestSettings, requestedCount, selectedCount]);
+    const fallbackContactUrl = useMemo(() => {
+        if (!requestSettings?.contactWhatsappUrl) return null;
+        const text = (requestSettings.message || 'Halo Kak Admin Orbit\nSaya ingin meminta bantuan untuk membuka client gallery saya yaa.')
+            .replaceAll('{{gallery_url}}', window.location.href)
+            .replaceAll('{{gallery_title}}', displayGallery?.title || galleryId);
+        let phone = requestSettings.contactWhatsappUrl.replace(/\D/g, '');
+        if (phone.startsWith('0')) phone = `62${phone.slice(1)}`;
+        return `https://wa.me/${phone}?text=${encodeURIComponent(text)}`;
+    }, [displayGallery?.title, galleryId, requestSettings]);
     const hasUnsavedChanges = useMemo(() => {
         if (!selectionTouched) return false;
-        const submittedSet = new Set(submittedPhotos.map(p => p.driveFileId));
+        const submittedSet = new Set(selectedDriveFileIds.length ? selectedDriveFileIds : submittedPhotos.map((photo) => photo.driveFileId));
         if (selectedCount !== submittedSet.size) return true;
         for (const id of effectiveSelectedIds) {
             if (!submittedSet.has(id)) return true;
         }
         return false;
-    }, [effectiveSelectedIds, selectedCount, selectionTouched, submittedPhotos]);
+    }, [effectiveSelectedIds, selectedCount, selectedDriveFileIds, selectionTouched, submittedPhotos]);
 
     useEffect(() => {
         if (!token) return;
@@ -616,6 +943,29 @@ export default function ClientCullingGallery() {
             .then((settings: GalleryContactSettings | null) => setRequestSettings(settings))
             .catch(() => setRequestSettings(null));
     }, [galleryId, token]);
+
+    useEffect(() => {
+        const incomingPhotos = [...photos, ...submittedPhotos];
+        if (!incomingPhotos.length) return;
+
+        setKnownPhotosById((current) => {
+            let changed = false;
+            const next = { ...current };
+            for (const photo of incomingPhotos) {
+                if (next[photo.driveFileId] === photo) continue;
+                next[photo.driveFileId] = photo;
+                changed = true;
+            }
+            return changed ? next : current;
+        });
+    }, [photos, submittedPhotos]);
+
+    useEffect(() => {
+        const selectedFromServer = photosQuery.data?.selectedDriveFileIds;
+        if (selectionTouched || selectedIds.size > 0 || !selectedFromServer?.length) return;
+        // eslint-disable-next-line react-hooks/set-state-in-effect -- Seed the editable selection draft from page-one server data.
+        setSelectedIds(new Set(selectedFromServer));
+    }, [photosQuery.data?.selectedDriveFileIds, selectedIds.size, selectionTouched]);
 
     const submitMutation = useMutation({
         mutationFn: () => {
@@ -642,26 +992,18 @@ export default function ClientCullingGallery() {
 
     useEffect(() => {
         const totalPages = photosQuery.data?.totalPages || 0;
-        if (!token || !photosQuery.data || page >= totalPages) return;
-        let cancelled = false;
-        const warmNextPage = async () => {
-            const nextPage = await queryClient.fetchQuery({
-                queryKey: ['public-gallery-photos', galleryId, token, page + 1, false],
-                queryFn: () => getPublicGalleryPhotos(galleryId, token, page + 1, 60, false),
+        if (showSelected || !token || !photosQuery.data || page >= totalPages) return;
+
+        const idle = window.setTimeout(() => {
+            void queryClient.prefetchQuery({
+                queryKey: ['public-gallery-photos', galleryId, token, page + 1, GALLERY_PAGE_SIZE, false],
+                queryFn: () => getPublicGalleryPhotos(galleryId, token, page + 1, GALLERY_PAGE_SIZE, false, false),
                 staleTime: 5 * 60 * 1000,
             });
-            if (cancelled) return;
-            nextPage.photos.forEach((photo) => {
-                const image = new Image();
-                image.src = galleryThumbnailUrl(galleryId, photo.driveFileId, token, photo.photoToken);
-            });
-        };
-        const idle = window.setTimeout(() => void warmNextPage(), 250);
-        return () => {
-            cancelled = true;
-            if (typeof idle === 'number') window.clearTimeout(idle);
-        };
-    }, [galleryId, page, photosQuery.data, queryClient, token]);
+        }, 800);
+
+        return () => window.clearTimeout(idle);
+    }, [galleryId, page, photosQuery.data, queryClient, showSelected, token]);
 
     const handleToggleSelection = useCallback((driveFileId: string) => {
         setSubmittedCount(null);
@@ -682,9 +1024,14 @@ export default function ClientCullingGallery() {
         });
     }, [effectiveSelectedIds, requestMoreUrl, selectionLimit]);
 
-    const handleOpenLightbox = useCallback((index: number) => {
-        setLightboxIndex(index);
+    const handleOpenLightbox = useCallback((driveFileId: string) => {
+        setLightboxPhotoId(driveFileId);
     }, []);
+
+    const handlePrefetchLightbox = useCallback((photo: GalleryPhoto) => {
+        const previewUrl = galleryPreviewUrl(galleryId, photo.driveFileId, token, photo.photoToken);
+        void preloadPreviewImage(previewUrl).catch(() => undefined);
+    }, [galleryId, token]);
 
     const updateNote = (driveFileId: string, note: string) => {
         setNotes((current) => ({ ...current, [driveFileId]: note.slice(0, 500) }));
@@ -717,12 +1064,15 @@ export default function ClientCullingGallery() {
         return <PinGate galleryId={galleryId} theme={theme} onToggleTheme={toggleTheme} onUnlocked={(nextToken, nextGallery) => { setToken(nextToken); setUnlockedGallery(nextGallery); if (!localStorage.getItem(tutorialKey(galleryId))) setShowTutorial(true); }} />;
     }
 
+    if (countdown.isExpired || displayGallery?.isExpired || galleryLockCode) {
+        return <GalleryLockedScreen expired={countdown.isExpired || Boolean(displayGallery?.isExpired) || galleryLockCode === 'GALLERY_EXPIRED'} contactUrl={galleryError?.contactUrl || fallbackContactUrl} theme={theme} onToggleTheme={toggleTheme} />;
+    }
+
     return (
         <main style={theme === 'black' ? BLACK_THEME : WHITE_THEME} className="min-h-screen bg-[var(--bg-deep)] font-sans text-[var(--text-primary)]">
             
-            {/* --- LAYER 1: STICKY NAVBAR (Responsive Mobile Header) --- */}
-            <header className="sticky top-0 z-40 h-13 border-b border-[var(--border)] bg-[var(--bg-deep)]/90 px-3 backdrop-blur sm:h-14 sm:px-8">
-                <div className="mx-auto flex h-full max-w-[1600px] items-center justify-between gap-2">
+            <header data-testid="gallery-header" className="sticky top-0 z-40 h-11 border-b border-[var(--border)] bg-[var(--bg-deep)]/90 px-2.5 backdrop-blur sm:h-14 sm:px-8">
+                <div className="mx-auto flex h-full max-w-[1600px] items-center justify-between gap-1.5 sm:gap-2">
                     
                     <OrbitLogo theme={theme} />
 
@@ -731,17 +1081,18 @@ export default function ClientCullingGallery() {
                             <button
                                 type="button"
                                 onClick={() => setShowRequestMore(true)}
-                                className="flex h-7.5 items-center justify-center rounded-md border border-[var(--border)] bg-[var(--bg-card)] px-2 sm:h-8 sm:px-2.5 text-[9px] sm:text-[10px] font-bold uppercase tracking-[0.12em] text-[var(--text-primary)] transition-colors hover:border-[var(--accent)]"
+                                className="flex h-7 items-center justify-center rounded-md border border-[var(--border)] bg-[var(--bg-card)] px-1.5 text-[9px] font-bold uppercase tracking-[0.1em] text-[var(--text-primary)] transition-colors hover:border-[var(--accent)] sm:h-8 sm:px-2.5 sm:text-[10px] sm:tracking-[0.12em]"
                             >
                                 <span className="hidden sm:inline">Request More</span>
                                 <span className="sm:hidden">Request</span>
                             </button>
                         )}
+                        <CountdownLabel countdown={countdown} />
                         <button
                             type="button"
                             onClick={() => setShowTutorial(true)}
                             title="How to submit"
-                            className="flex h-7.5 items-center justify-center gap-1 rounded-md border border-[var(--border)] bg-[var(--bg-card)] px-2 sm:h-8 sm:px-2.5 text-[9px] sm:text-[10px] font-bold uppercase tracking-[0.12em] text-[var(--text-secondary)] transition-colors hover:border-[var(--accent)] hover:text-[var(--text-primary)]"
+                            className="flex h-7 w-7 items-center justify-center rounded-md border border-[var(--border)] bg-[var(--bg-card)] text-[var(--text-secondary)] transition-colors hover:border-[var(--accent)] hover:text-[var(--text-primary)] sm:h-8 sm:w-auto sm:gap-1 sm:px-2.5 sm:text-[10px] sm:font-bold sm:uppercase sm:tracking-[0.12em]"
                         >
                             <HelpCircle size={13} />
                             <span className="hidden sm:inline">How to submit</span>
@@ -751,40 +1102,35 @@ export default function ClientCullingGallery() {
                 </div>
             </header>
 
-            {/* --- LAYER 2: FLOATING TOOLBAR (Seamless Toggle & Sisa Kuota) --- */}
-            <div className="sticky top-[52px] sm:top-[56px] z-30 border-b border-[var(--border)] bg-[var(--bg-deep)]/95 px-3 py-2 backdrop-blur sm:px-8">
-                <div className="mx-auto flex max-w-[1600px] items-center justify-between gap-2 overflow-x-auto no-scrollbar">
+            <div data-testid="gallery-toolbar" className="sticky top-11 z-30 border-b border-[var(--border)] bg-[var(--bg-deep)]/95 px-2.5 py-1.5 backdrop-blur sm:top-[56px] sm:px-8 sm:py-2">
+                <div className="no-scrollbar mx-auto flex max-w-[1600px] items-center justify-between gap-1.5 overflow-x-auto sm:gap-2">
                     
-                    {/* --- SISI KIRI: SEAMLESS TOGGLE BUTTON + COUNTER & SISA KUOTA --- */}
-                    <div className="flex shrink-0 items-center gap-2">
+                    <div className="flex shrink-0 items-center gap-1.5 sm:gap-2">
                         
-                        {/* Seamless Single Toggle Button (Zero Layout Shift) */}
                         <button
                             type="button"
                             onClick={() => {
                                 setShowSelected((current) => !current);
                                 setPage(1);
-                                setLightboxIndex(null);
+                                setLightboxPhotoId(null);
                             }}
                             className={clsx(
-                                'relative inline-grid grid-cols-1 grid-rows-1 items-center justify-center rounded-md border px-2.5 py-1 text-[9px] sm:text-[10px] font-bold uppercase tracking-[0.12em] transition-colors whitespace-nowrap',
+                                'relative inline-grid h-7 grid-cols-1 grid-rows-1 items-center justify-center whitespace-nowrap rounded-md border px-2 text-[9px] font-bold uppercase tracking-[0.1em] transition-colors sm:h-8 sm:px-2.5 sm:text-[10px] sm:tracking-[0.12em]',
                                 showSelected
                                     ? 'border-[var(--accent)] bg-[var(--accent)] text-[var(--bg-deep)]'
                                     : 'border-[var(--border)] bg-[var(--bg-card)] text-[var(--text-secondary)] hover:border-[var(--accent)]'
                             )}
                         >
-                            {/* 1. Ghost Layer: Mengunci lebar tombol berdasarkan teks terpanjang */}
                             <span className="col-start-1 row-start-1 flex items-center justify-center gap-1.5 opacity-0 pointer-events-none select-none aria-hidden">
                                 <CheckSquare size={12} />
-                                Submitted ({submittedCount ?? submittedPhotos.length})
+                                Picked ({selectedCount})
                             </span>
 
-                            {/* 2. Active Layer: Teks dinamis sesuai status */}
                             <span className="col-start-1 row-start-1 flex items-center justify-center gap-1.5">
                                 {showSelected ? (
                                     <>
                                         <CheckSquare size={12} />
-                                        Submitted ({submittedCount ?? submittedPhotos.length})
+                                        Picked ({selectedCount})
                                     </>
                                 ) : (
                                     <>
@@ -795,30 +1141,27 @@ export default function ClientCullingGallery() {
                             </span>
                         </button>
 
-                        {/* Counter Foto Terpilih & Sisa Kuota */}
                         <span
                             className={clsx(
-                                'shrink-0 rounded-md border bg-[var(--bg-card)] px-2.5 py-1 text-[9px] sm:text-[10px] font-bold uppercase tracking-[0.12em] whitespace-nowrap',
+                                'flex h-7 shrink-0 items-center whitespace-nowrap rounded-md border bg-[var(--bg-card)] px-2 text-[9px] font-bold uppercase tracking-[0.1em] sm:h-8 sm:px-2.5 sm:text-[10px] sm:tracking-[0.12em]',
                                 isOverLimit ? 'border-rose-500/45 text-rose-400' : 'border-[var(--border)] text-[var(--text-secondary)]'
                             )}
                         >
                             Picked {selectedCount}{selectionLimit ? ` / ${selectionLimit}` : ''}
                             
-                            {/* Menampilkan sisa kuota jika master limit diatur */}
                             {selectionLimit ? (
-                                <span className={clsx('ml-1.5 border-l border-[var(--border)] pl-1.5 font-normal', isOverLimit ? 'text-rose-400' : 'text-[var(--text-muted)]')}>
+                                <span className={clsx('ml-1 border-l border-[var(--border)] pl-1 font-normal sm:ml-1.5 sm:pl-1.5', isOverLimit ? 'text-rose-400' : 'text-[var(--text-muted)]')}>
                                     {isOverLimit ? `${overLimitCount} Over` : `${remainingSelections} Left`}
                                 </span>
                             ) : (
-                                <span className="ml-1.5 border-l border-[var(--border)] pl-1.5 font-normal text-[var(--text-muted)]">
+                                <span className="ml-1 border-l border-[var(--border)] pl-1 font-normal text-[var(--text-muted)] sm:ml-1.5 sm:pl-1.5">
                                     Unlimited
                                 </span>
                             )}
                         </span>
                     </div>
 
-                    {/* --- SISI KANAN: UNSAVED BADGE + SUBMIT BUTTON --- */}
-                    <div className="flex shrink-0 items-center gap-2">
+                    <div className="flex shrink-0 items-center gap-1.5 sm:gap-2">
                         {hasUnsavedChanges && (
                             <span title="Your latest selection changes have not been submitted yet." className="hidden md:inline-flex items-center gap-1 rounded-full border border-[var(--border)] bg-[var(--bg-card)] px-2 py-0.5 text-[9px] font-semibold text-[var(--text-secondary)] whitespace-nowrap">
                                 <span className="h-1.5 w-1.5 rounded-full bg-[var(--accent)] animate-pulse" /> Not submitted
@@ -830,7 +1173,7 @@ export default function ClientCullingGallery() {
                             disabled={submitMutation.isPending || photosQuery.isLoading} 
                             onClick={handleSubmitSelections} 
                             className={clsx(
-                                "flex h-7.5 sm:h-8 items-center justify-center gap-1 rounded-md px-3 text-[9px] sm:text-[10px] font-bold uppercase tracking-[0.12em] transition-all disabled:opacity-45 whitespace-nowrap",
+                                "flex h-7 items-center justify-center gap-1 whitespace-nowrap rounded-md px-2.5 text-[9px] font-bold uppercase tracking-[0.1em] transition-all disabled:opacity-45 sm:h-8 sm:px-3 sm:text-[10px] sm:tracking-[0.12em]",
                                 isOverLimit ? 'border border-rose-500/45 bg-rose-500/10 text-rose-400 hover:bg-rose-500/15' : 'bg-[var(--accent)] text-[var(--bg-deep)] hover:opacity-90',
                                 hasUnsavedChanges && "ring-1 ring-[var(--accent)] ring-offset-1 ring-offset-[var(--bg-deep)]"
                             )}
@@ -842,8 +1185,7 @@ export default function ClientCullingGallery() {
                 </div>
             </div>
 
-            {/* AREA UTAMA / GRID FOTO */}
-            <section className="mx-auto max-w-[1600px] px-4 pt-6 pb-12 md:px-8">
+            <section className="mx-auto max-w-[1600px] px-2.5 pt-3 pb-10 sm:px-4 sm:pt-5 sm:pb-12 md:px-8 md:pt-6">
                 {limitMessage && (
                     <div className="mb-4 text-xs text-[var(--text-muted)] border border-[var(--border)] p-3 rounded-lg bg-[var(--bg-card)]">
                         {limitMessage} {requestMoreUrl && <button type="button" onClick={() => setShowRequestMore(true)} className="ml-1 font-semibold underline text-[var(--text-primary)]">Request more</button>}
@@ -866,21 +1208,21 @@ export default function ClientCullingGallery() {
                     <div className="flex min-h-[60vh] items-center justify-center text-[var(--text-muted)]">
                         <Loader2 size={24} className="animate-spin text-[var(--accent)]" />
                     </div>
-                ) : photosQuery.isError ? (
+                ) : photosQuery.isError && !visiblePhotos.length ? (
                     <div className="flex min-h-[60vh] flex-col items-center justify-center text-center">
                         <AlertCircle size={30} className="mb-4 text-[var(--text-muted)]" />
-                        <p className="font-display text-2xl text-[var(--text-primary)]">Gallery session expired</p>
+                        <p className="font-display text-2xl text-[var(--text-primary)]">Gallery Session Expired</p>
                         <p className="mt-2 max-w-sm text-sm leading-6 text-[var(--text-muted)]">The gallery was reopened or your session expired. Enter the PIN again to continue.</p>
                         <button type="button" onClick={() => { localStorage.removeItem(tokenKey(galleryId)); setToken(''); }} className="mt-6 flex h-10 items-center justify-center gap-2 rounded-lg bg-[var(--accent)] px-5 text-[10px] font-black uppercase tracking-[0.14em] text-[var(--bg-deep)] transition-opacity hover:opacity-85"><Lock size={14} /> Enter PIN again</button>
                     </div>
                 ) : !visiblePhotos.length ? (
                     <div className="flex min-h-[60vh] flex-col items-center justify-center text-center">
                         {showSelected ? <CheckSquare size={30} className="mb-4 text-[var(--text-muted)]" /> : <ImageIcon size={30} className="mb-4 text-[var(--text-muted)]" />}
-                        <p className="font-display text-2xl text-[var(--text-primary)]">{showSelected ? 'No submitted selections' : 'No photos synced yet'}</p>
-                        <p className="mt-2 max-w-sm text-sm leading-6 text-[var(--text-muted)]">{showSelected ? 'Select photos from the gallery to see them here.' : 'The studio needs to sync this Drive folder before selection opens.'}</p>
+                        <p className="font-display text-2xl text-[var(--text-primary)]">{showSelected ? 'No picked photos' : 'No photos synced yet'}</p>
+                        <p className="mt-2 max-w-sm text-sm leading-6 text-[var(--text-muted)]">{showSelected ? 'Select photos from the gallery to see them here before submitting.' : 'The studio needs to sync this Drive folder before selection opens.'}</p>
                     </div>
                 ) : (
-                    <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 md:grid-cols-4 md:gap-3 xl:grid-cols-5 2xl:grid-cols-6">
+                    <div data-testid="gallery-grid" className="grid grid-cols-2 gap-1.5 sm:grid-cols-3 sm:gap-2 md:grid-cols-4 md:gap-3 xl:grid-cols-5 2xl:grid-cols-6">
                         {visiblePhotos.map((photo, index) => (
                             <PhotoTile
                                 key={photo.driveFileId}
@@ -888,8 +1230,9 @@ export default function ClientCullingGallery() {
                                 selected={effectiveSelectedIds.has(photo.driveFileId)}
                                 token={token}
                                 galleryId={galleryId}
-                                index={(page - 1) * 60 + index}
+                                displayIndex={showSelected ? index : (page - 1) * GALLERY_PAGE_SIZE + index}
                                 onOpen={handleOpenLightbox}
+                                onPrefetch={handlePrefetchLightbox}
                                 onToggle={handleToggleSelection}
                             />
                         ))}
@@ -898,9 +1241,9 @@ export default function ClientCullingGallery() {
                 
                 {!showSelected && !photosQuery.isLoading && !photosQuery.isError && photosQuery.data && photosQuery.data.totalPages > 1 && (
                     <nav className="mt-8 flex items-center justify-center gap-4" aria-label="Gallery pages">
-                        <button type="button" disabled={page === 1} onClick={() => { setPage((current) => current - 1); window.scrollTo({ top: 0, behavior: 'smooth' }); }} className="flex h-9 items-center gap-2 rounded-lg border border-[var(--border)] px-4 text-[10px] font-bold uppercase tracking-wider text-[var(--text-secondary)] disabled:opacity-35"><ChevronLeft size={14} /> Previous</button>
+                        <button type="button" disabled={page === 1} onClick={() => { setPage((current) => current - 1); setLightboxPhotoId(null); window.scrollTo({ top: 0, behavior: 'smooth' }); }} className="flex h-9 items-center gap-2 rounded-lg border border-[var(--border)] px-4 text-[10px] font-bold uppercase tracking-wider text-[var(--text-secondary)] disabled:opacity-35"><ChevronLeft size={14} /> Previous</button>
                         <span className="text-xs text-[var(--text-muted)]">Page {page} of {photosQuery.data.totalPages}</span>
-                        <button type="button" disabled={page === photosQuery.data.totalPages} onClick={() => { setPage((current) => current + 1); window.scrollTo({ top: 0, behavior: 'smooth' }); }} className="flex h-9 items-center gap-2 rounded-lg border border-[var(--border)] px-4 text-[10px] font-bold uppercase tracking-wider text-[var(--text-secondary)] disabled:opacity-35">Next <ChevronRight size={14} /></button>
+                        <button type="button" disabled={page === photosQuery.data.totalPages} onClick={() => { setPage((current) => current + 1); setLightboxPhotoId(null); window.scrollTo({ top: 0, behavior: 'smooth' }); }} className="flex h-9 items-center gap-2 rounded-lg border border-[var(--border)] px-4 text-[10px] font-bold uppercase tracking-wider text-[var(--text-secondary)] disabled:opacity-35">Next <ChevronRight size={14} /></button>
                     </nav>
                 )}
             </section>
@@ -918,13 +1261,13 @@ export default function ClientCullingGallery() {
                 galleryId={galleryId}
                 token={token}
                 photos={visiblePhotos}
-                currentIndex={lightboxIndex}
+                currentPhotoId={lightboxPhotoId}
                 selectedIds={effectiveSelectedIds}
-                onClose={() => setLightboxIndex(null)}
-                onMove={setLightboxIndex}
+                onClose={() => setLightboxPhotoId(null)}
+                onMove={setLightboxPhotoId}
                 onToggle={handleToggleSelection}
-                note={lightboxIndex == null || !visiblePhotos[lightboxIndex] ? '' : notes[visiblePhotos[lightboxIndex].driveFileId] ?? submittedPhotos.find((photo) => photo.driveFileId === visiblePhotos[lightboxIndex].driveFileId)?.note ?? ''}
-                onNote={(note) => { if (lightboxIndex != null && visiblePhotos[lightboxIndex]) updateNote(visiblePhotos[lightboxIndex].driveFileId, note); }}
+                note={lightboxPhotoId == null ? '' : notes[lightboxPhotoId] ?? submittedPhotos.find((photo) => photo.driveFileId === lightboxPhotoId)?.note ?? ''}
+                onNote={(note) => { if (lightboxPhotoId) updateNote(lightboxPhotoId, note); }}
             />
 
             {showRequestMore && requestMoreUrl && (

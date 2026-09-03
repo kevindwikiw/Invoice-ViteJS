@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import { keepPreviousData, useQuery, useQueryClient, useMutation } from '@tanstack/react-query'
 import { useNavigate, Link } from '@tanstack/react-router'
 import { useAuth } from '../context/auth'
-import { fetchWithAuth, resolveProofDataUrls } from '../lib/api'
+import { fetchWithAuth, parsePaymentProofs, resolveProofDataUrls } from '../lib/api'
 import { useToast } from '../context/ToastContext'
 import {
     Search, FileClock, Eye, Pencil, Trash2, Loader2, Plus, Filter, MoreHorizontal, Archive, RotateCcw, Check,
@@ -37,6 +37,7 @@ const rupiah = (val: number) => RUPIAH_FORMATTER.format(val)
 const errorMessage = (error: unknown, fallback: string) => error instanceof Error ? error.message : fallback
 
 type PaymentTerm = { id?: string; label?: string; amount: number }
+type InvoicePaymentStatus = 'LUNAS' | 'DP' | 'DP+TERMIN' | 'UNPAID'
 
 type InvoiceMetadata = {
     venue: string
@@ -54,6 +55,14 @@ type InvoiceListItem = {
     date?: string | null
     totalAmount?: number | null
     total_amount?: number | null
+    venue?: string | null
+    eventDate?: string | null
+    event_date?: string | null
+    notes?: string | null
+    paymentStatus?: InvoicePaymentStatus | string | null
+    payment_status?: InvoicePaymentStatus | string | null
+    proofCount?: number | null
+    proof_count?: number | null
     invoiceData?: string | null
     invoice_data?: string | null
     paymentProofs?: unknown
@@ -87,19 +96,12 @@ type InvoiceDetailData = InvoiceListItem & {
 
 const EMPTY_INVOICES: InvoiceListItem[] = []
 
-function parsePaymentProofs(paymentProofs: unknown): string[] {
-    if (Array.isArray(paymentProofs)) return paymentProofs.filter((proof): proof is string => typeof proof === 'string')
-    if (typeof paymentProofs !== 'string' || !paymentProofs.trim()) return []
-    try {
-        const parsed = JSON.parse(paymentProofs)
-        return Array.isArray(parsed) ? parsed.filter((proof): proof is string => typeof proof === 'string') : []
-    } catch {
-        return []
-    }
-}
-
 function asRecord(value: unknown): Record<string, unknown> {
     return typeof value === 'object' && value !== null ? value as Record<string, unknown> : {}
+}
+
+function textValue(value: unknown): string {
+    return value == null ? '' : String(value).trim()
 }
 
 function extractInvoiceMetadata(invoiceData: unknown, fallbackDate = ''): InvoiceMetadata {
@@ -146,7 +148,7 @@ function extractInvoiceMetadata(invoiceData: unknown, fallbackDate = ''): Invoic
     }
 }
 
-function deriveStatus(invoiceData: unknown, totalAmount: number): 'LUNAS' | 'DP' | 'DP+TERMIN' | 'UNPAID' {
+function deriveStatus(invoiceData: unknown, totalAmount: number): InvoicePaymentStatus {
     const allocatedTerms = extractInvoiceMetadata(invoiceData).paymentTerms
         .filter((term) => Number.isFinite(term.amount) && term.amount > 0);
     const allocatedTotal = allocatedTerms.reduce((sum, term) => sum + term.amount, 0);
@@ -154,6 +156,29 @@ function deriveStatus(invoiceData: unknown, totalAmount: number): 'LUNAS' | 'DP'
     if (!allocatedTerms.length) return 'UNPAID';
     if (totalAmount > 0 && allocatedTotal >= totalAmount) return 'LUNAS';
     return allocatedTerms.length > 1 ? 'DP+TERMIN' : 'DP';
+}
+
+function normalizeStatus(value: unknown): InvoicePaymentStatus | null {
+    return value === 'LUNAS' || value === 'DP' || value === 'DP+TERMIN' || value === 'UNPAID' ? value : null
+}
+
+function invoiceMetadataForList(invoice: InvoiceListItem): InvoiceMetadata {
+    const venue = textValue(invoice.venue)
+    const eventDate = textValue(invoice.eventDate ?? invoice.event_date)
+    const notes = textValue(invoice.notes)
+    if (venue || eventDate || notes) return { venue, eventDate: eventDate || invoice.date || '', notes, paymentTerms: [] }
+    return extractInvoiceMetadata(invoice.invoiceData ?? invoice.invoice_data, invoice.date ?? '')
+}
+
+function invoiceStatusForList(invoice: InvoiceListItem, totalAmount: number): InvoicePaymentStatus {
+    return normalizeStatus(invoice.paymentStatus ?? invoice.payment_status)
+        ?? deriveStatus(invoice.invoiceData ?? invoice.invoice_data, totalAmount)
+}
+
+function invoiceProofCountForList(invoice: InvoiceListItem): number {
+    const summaryCount = Number(invoice.proofCount ?? invoice.proof_count)
+    if (Number.isFinite(summaryCount) && summaryCount >= 0) return summaryCount
+    return parsePaymentProofs(invoice.paymentProofs ?? invoice.payment_proofs).length
 }
 
 const statusConfig = {
@@ -383,11 +408,10 @@ export default function InvoiceHistory() {
 
     const visibleInvoices = (() => {
         let rows = invoices.filter(inv => {
-            const rawInvoiceData = inv.invoiceData || inv.invoice_data
             const isArchived = Boolean(inv.isArchived ?? inv.is_archived)
             const totalAmount = Number(inv.totalAmount ?? inv.total_amount ?? 0)
-            const status = deriveStatus(rawInvoiceData, totalAmount).toLowerCase() as 'lunas' | 'dp' | 'dp+termin' | 'unpaid'
-            const metadata = extractInvoiceMetadata(rawInvoiceData, inv.date ?? '')
+            const status = invoiceStatusForList(inv, totalAmount).toLowerCase() as 'lunas' | 'dp' | 'dp+termin' | 'unpaid'
+            const metadata = invoiceMetadataForList(inv)
             const notesText = metadata.notes
             const hasNotes = notesText.length > 0
 
@@ -417,8 +441,8 @@ export default function InvoiceHistory() {
 
         if (headerDateSort !== 'none') {
             rows = [...rows].sort((a, b) => {
-                const aDate = new Date(extractInvoiceMetadata(a.invoiceData ?? a.invoice_data, a.date ?? '').eventDate || 0).getTime()
-                const bDate = new Date(extractInvoiceMetadata(b.invoiceData ?? b.invoice_data, b.date ?? '').eventDate || 0).getTime()
+                const aDate = new Date(invoiceMetadataForList(a).eventDate || 0).getTime()
+                const bDate = new Date(invoiceMetadataForList(b).eventDate || 0).getTime()
                 return headerDateSort === 'desc' ? bDate - aDate : aDate - bDate
             })
         } else if (headerAmountSort !== 'none') {
@@ -916,16 +940,15 @@ export default function InvoiceHistory() {
                     ) : (
                         <div className="divide-y divide-[var(--border)]/60 md:col-span-full md:grid md:grid-cols-subgrid">
                             {visibleInvoices.map((inv, idx) => {
-                                const rawInvoiceData = inv.invoiceData || inv.invoice_data
                                 const totalAmount = inv.totalAmount ?? inv.total_amount ?? 0
-                                const status = deriveStatus(rawInvoiceData, Number(totalAmount))
+                                const status = invoiceStatusForList(inv, Number(totalAmount))
                                 const sc = statusConfig[status]
                                 const invoiceNo = (inv.invoiceNo ?? inv.invoice_no ?? '-').toUpperCase()
                                 const clientName = (inv.clientName ?? inv.client_name ?? '-')
                                     .split(' ')
                                     .map((w: string) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
                                     .join(' ')
-                                const metadata = extractInvoiceMetadata(rawInvoiceData, inv.date ?? '')
+                                const metadata = invoiceMetadataForList(inv)
                                 const venue = metadata.venue || '-'
                                 const eventDate = metadata.eventDate || '-'
                                 const id = inv.id
@@ -934,7 +957,7 @@ export default function InvoiceHistory() {
                                 const canArchive = status === 'LUNAS'
                                 const notesText = metadata.notes
                                 const notesExists = notesText.length > 0
-                                const proofCount = parsePaymentProofs(inv.paymentProofs ?? inv.payment_proofs).length
+                                const proofCount = invoiceProofCountForList(inv)
 
                                 return (
                                     <div

@@ -1,15 +1,33 @@
-import { Hono } from "hono";
+import { Hono, type Context } from "hono";
 import { Buffer } from "node:buffer";
 import { createHmac, randomUUID } from "node:crypto";
 import writeExcelFile from "write-excel-file/node";
 import { galleryAll, galleryBatch, galleryInsertReturningId, galleryOne, galleryRun } from "../db/galleries";
 import { fetchDriveFile, getDrivePhotoMetadata, listDrivePhotos } from "../lib/google-drive";
+import {
+    DEFAULT_SELECTION_DURATION_HOURS,
+    isSelectionDeadlineExpired,
+    parseSelectionDurationHours,
+    resolveGalleryDeadlineUpdate,
+    selectionDeadlineEpochSeconds,
+    selectionDeadlineFromNow,
+} from "../lib/gallery-deadline";
+import { getGallerySettings, invalidateGallerySettingsCache } from "../lib/gallery-settings-cache";
 import { resetGalleryPinAttempts } from "../middleware/rate-limit";
 
-const adminGalleriesRouter = new Hono();
-const publicGalleriesRouter = new Hono();
+type Env = {
+    Variables: {
+        user?: AuthUser;
+        jwtPayload?: AuthUser;
+    };
+};
+
+const adminGalleriesRouter = new Hono<Env>();
+const publicGalleriesRouter = new Hono<Env>();
+
 const GALLERY_TOKEN_TTL_SECONDS = 24 * 60 * 60;
 const PHOTO_TOKEN_TTL_SECONDS = 60 * 60;
+const GALLERY_IMAGE_CACHE_CONTROL = `private, max-age=${GALLERY_TOKEN_TTL_SECONDS}, immutable`;
 const DEFAULT_ADDON_UNIT_PRICE = 10_000;
 const DEFAULT_CONTACT_MESSAGE = "Halo Kak Admin Orbit\nSaya ingin meminta bantuan untuk membuka client gallery saya yaa.\n\nIni URL saya: {{gallery_url}}\nSaya client dari: {{gallery_title}}\n\nTerima kasih, Kak!";
 const DEFAULT_REQUEST_MORE_MESSAGE = "Halo Kak Admin Orbit\nSaya ingin meminta tambahan edited photos.\n\nIni URL saya: {{gallery_url}}\nSaya client dari: {{gallery_title}}\nPilihan saat ini: {{selected_count}} foto\nSaya ingin menambah: {{requested_count}} foto\nPromo: {{promo_label}}\nEstimasi biaya: {{estimated_price}}";
@@ -30,6 +48,11 @@ type GalleryRow = {
     driveFolderId: string;
     pinHash: string;
     accessVersion: number;
+    photoCount?: number;
+    selectionCount?: number;
+    selectionDurationDays?: number;
+    selectionDurationHours?: number;
+    selectionDeadlineAt?: string | null;
     status: GalleryStatus;
     createdAt: string;
     updatedAt: string;
@@ -85,7 +108,7 @@ function photoShape(row: PhotoRow & Record<string, unknown>) {
     };
 }
 
-function publicPhotoShape(row: PhotoRow & Record<string, unknown>, accessVersion: number) {
+function publicPhotoShape(row: PhotoRow & Record<string, unknown>, accessVersion: number, expiresAt?: number) {
     const photo = photoShape(row);
     return {
         ...photo,
@@ -95,7 +118,7 @@ function publicPhotoShape(row: PhotoRow & Record<string, unknown>, accessVersion
             fid: photo.driveFileId,
             thumb: typeof photo.thumbnailUrl === "string" ? photo.thumbnailUrl : "",
             mime: photo.mimeType,
-            exp: Math.floor(Date.now() / 1000) + PHOTO_TOKEN_TTL_SECONDS,
+            exp: expiresAt ?? Math.floor(Date.now() / 1000) + PHOTO_TOKEN_TTL_SECONDS,
         }),
     };
 }
@@ -104,14 +127,14 @@ function selectionDriveFileId(row: Record<string, unknown>): string {
     return String(row.selectedDriveFileId ?? row.selected_drive_file_id ?? "");
 }
 
-function getUser(c: any): AuthUser | undefined {
+function getUser(c: Context<Env>): AuthUser | undefined {
     return c.get("user") || c.get("jwtPayload");
 }
 
-function requireGalleryAdmin(c: any): Response | null {
+function requireGalleryAdmin(c: Context<Env>): Response | null {
     const user = getUser(c);
-    if (!user) return c.json({ error: "Not authenticated" }, 401);
-    if (user.role !== "admin" && user.role !== "superadmin") return c.json({ error: "Permission denied" }, 403);
+    if (!user) return c.json({ error: "Not Authenticated" }, 401);
+    if (user.role !== "admin" && user.role !== "superadmin") return c.json({ error: "Permission Denied" }, 403);
     return null;
 }
 
@@ -157,14 +180,33 @@ function galleryContactMessage(template: string, gallery: GalleryRow, requestUrl
     return template.replaceAll("{{gallery_url}}", `${request.origin}/culling/${gallery.publicKey || gallery.id}`).replaceAll("{{gallery_title}}", gallery.title);
 }
 
+function selectionDurationHoursFromRow(row: Pick<GalleryRow, "selectionDurationHours" | "selectionDurationDays">): number {
+    if (row.selectionDurationHours !== undefined && row.selectionDurationHours !== null) {
+        return Number(row.selectionDurationHours);
+    }
+    if (row.selectionDurationDays !== undefined && row.selectionDurationDays !== null) {
+        return Number(row.selectionDurationDays) * 24;
+    }
+    return DEFAULT_SELECTION_DURATION_HOURS;
+}
+
 function galleryPublicShape(row: GalleryRow) {
     const addonStatus = normalizeAddonStatus(row.editAddonStatus);
     const addonActive = addonStatus === "paid";
+    const isExpired = isSelectionDeadlineExpired(row.selectionDeadlineAt);
+    const selectionDurationHours = selectionDurationHoursFromRow(row);
     return {
         id: row.id,
         title: row.title,
-        status: row.status,
+        status: isExpired ? "closed" : row.status,
         syncedAt: row.syncedAt || null,
+        selectionDurationHours,
+        selectionDurationDays: Math.ceil(selectionDurationHours / 24),
+        selectionDeadlineAt: row.selectionDeadlineAt || null,
+        isExpired,
+        serverTime: new Date().toISOString(),
+        photoCount: Number(row.photoCount || 0),
+        selectionCount: Number(row.selectionCount || 0),
         maxSelections: Number(row.maxSelections || 0),
         additionalLimit: Number(row.additionalSelectionLimit || 0),
         addonStatus,
@@ -182,17 +224,24 @@ function galleryLookup(param: string): { sql: string; params: unknown[] } {
 
 function galleryAdminShape(row: GalleryRow, counts?: { photoCount?: number; selectionCount?: number }) {
     const addonStatus = normalizeAddonStatus(row.editAddonStatus);
+    const isExpired = isSelectionDeadlineExpired(row.selectionDeadlineAt);
+    const selectionDurationHours = selectionDurationHoursFromRow(row);
     return {
         id: row.id,
         title: row.title,
         driveFolderId: row.driveFolderId,
         publicKey: row.publicKey || String(row.id),
-        status: row.status,
+        status: isExpired ? "closed" : row.status,
+        selectionDurationHours,
+        selectionDurationDays: Math.ceil(selectionDurationHours / 24),
+        selectionDeadlineAt: row.selectionDeadlineAt || null,
+        isExpired,
+        serverTime: new Date().toISOString(),
         createdAt: row.createdAt,
         updatedAt: row.updatedAt,
         syncedAt: row.syncedAt || null,
-        photoCount: Number(counts?.photoCount || 0),
-        selectionCount: Number(counts?.selectionCount || 0),
+        photoCount: Number(counts?.photoCount ?? row.photoCount ?? 0),
+        selectionCount: Number(counts?.selectionCount ?? row.selectionCount ?? 0),
         maxSelections: Number(row.maxSelections || 0),
         additionalLimit: Number(row.additionalSelectionLimit || 0),
         addonStatus,
@@ -286,21 +335,45 @@ async function verifyGalleryToken(token: string, galleryId: number, accessVersio
     }
 }
 
-async function requirePublicGallery(c: any): Promise<{ gallery: GalleryRow; token: string } | Response> {
+function galleryTokenExpiration(token: string): number | null {
+    const [payload] = token.split(".");
+    if (!payload) return null;
+    try {
+        const parsed = JSON.parse(fromBase64Url(payload)) as { exp?: number };
+        const expiresAt = Number(parsed.exp || 0);
+        return expiresAt > Math.floor(Date.now() / 1000) ? expiresAt : null;
+    } catch {
+        return null;
+    }
+}
+
+async function requirePublicGallery(c: Context<Env>): Promise<{ gallery: GalleryRow; token: string } | Response> {
     const identifier = c.req.param("id");
+    if (!identifier) return c.json({ error: "Gallery ID is required." }, 400);
     const lookup = galleryLookup(identifier);
 
     const token = c.req.query("token") || c.req.header("x-gallery-token") || "";
     const gallery = await galleryOne<GalleryRow>(`
-        SELECT id, title, contact_whatsapp_url as "contactWhatsappUrl", drive_folder_id as "driveFolderId", pin_hash as "pinHash", status,
+        SELECT id, title, public_key as "publicKey", contact_whatsapp_url as "contactWhatsappUrl", drive_folder_id as "driveFolderId", pin_hash as "pinHash", status,
                max_selections as "maxSelections", additional_selection_limit as "additionalSelectionLimit",
                edit_addon_status as "editAddonStatus", edit_addon_pricing_mode as "editAddonPricingMode", edit_addon_price as "editAddonPrice",
+               photo_count as "photoCount", selection_count as "selectionCount",
+               selection_duration_days as "selectionDurationDays", selection_duration_hours as "selectionDurationHours", selection_deadline_at as "selectionDeadlineAt",
                created_at as "createdAt", updated_at as "updatedAt", synced_at as "syncedAt", access_version as "accessVersion"
         FROM galleries WHERE ${lookup.sql}
     `, lookup.params);
-    if (!gallery) return c.json({ error: "Gallery not found" }, 404);
+    if (!gallery) return c.json({ error: "Gallery Not Found" }, 404);
     if (!token || !await verifyGalleryToken(token, gallery.id, gallery.accessVersion)) return c.json({ error: "Gallery access expired. Enter the PIN again." }, 401);
-    if (gallery.status !== "open") return c.json({ error: "Gallery is not open for selection." }, 403);
+    if (isSelectionDeadlineExpired(gallery.selectionDeadlineAt) || gallery.status !== "open") {
+        const expired = isSelectionDeadlineExpired(gallery.selectionDeadlineAt);
+        const settings = await getGallerySettings();
+        const text = galleryContactMessage(settings.contact_whatsapp_message || DEFAULT_CONTACT_MESSAGE, gallery, c.req.url);
+        return c.json({
+            error: expired ? "The selection deadline has ended." : "Gallery is not open for selection.",
+            code: expired ? "GALLERY_EXPIRED" : "GALLERY_CLOSED",
+            contactUrl: settings.contact_whatsapp_url ? `https://wa.me/${settings.contact_whatsapp_url}?text=${encodeURIComponent(text)}` : null,
+        }, 403);
+    }
     return { gallery, token };
 }
 
@@ -309,7 +382,7 @@ function csvEscape(value: string | number | null | undefined): string {
     return /[",\n\r]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
 }
 
-async function photoForImageRequest(c: any, gallery: GalleryRow, fileId: string): Promise<PhotoRow | null> {
+async function photoForImageRequest(c: Context<Env>, gallery: GalleryRow, fileId: string): Promise<PhotoRow | null> {
     const tokenPayload = verifyPhotoToken(c.req.query("pt") || "", gallery.id, gallery.accessVersion, fileId);
     if (tokenPayload) {
         return {
@@ -334,7 +407,7 @@ async function photoForImageRequest(c: any, gallery: GalleryRow, fileId: string)
     `, [gallery.id, fileId]);
 }
 
-function photoFromImageToken(c: any, fileId: string): PhotoRow | null {
+function photoFromImageToken(c: Context<Env>, fileId: string): PhotoRow | null {
     const tokenPayload = verifyStandalonePhotoToken(c.req.query("pt") || "", fileId);
     if (!tokenPayload) return null;
     return {
@@ -364,8 +437,13 @@ adminGalleriesRouter.get("/", async (c) => {
     const conditions: string[] = [];
     const params: unknown[] = [];
     if (hasStatusFilter) {
-        conditions.push("g.status = ?");
-        params.push(status);
+        const expired = "(g.selection_deadline_at IS NOT NULL AND datetime(g.selection_deadline_at) <= datetime('now'))";
+        if (status === "closed") {
+            conditions.push(`(g.status = 'closed' OR ${expired})`);
+        } else {
+            conditions.push(`(g.status = ? AND NOT ${expired})`);
+            params.push(status);
+        }
     }
     if (search) {
         conditions.push("(LOWER(g.title) LIKE LOWER(?) OR LOWER(g.drive_folder_id) LIKE LOWER(?))");
@@ -380,9 +458,9 @@ adminGalleriesRouter.get("/", async (c) => {
                g.public_key as "publicKey", g.contact_whatsapp_url as "contactWhatsappUrl",
                g.max_selections as "maxSelections", g.additional_selection_limit as "additionalSelectionLimit",
                g.edit_addon_status as "editAddonStatus", g.edit_addon_pricing_mode as "editAddonPricingMode", g.edit_addon_price as "editAddonPrice",
-               g.created_at as "createdAt", g.updated_at as "updatedAt", g.synced_at as "syncedAt",
-               (SELECT COUNT(*) FROM gallery_photos p WHERE p.gallery_id = g.id) as "photoCount",
-               (SELECT COUNT(*) FROM gallery_selections s WHERE s.gallery_id = g.id) as "selectionCount"
+               g.photo_count as "photoCount", g.selection_count as "selectionCount",
+               g.selection_duration_days as "selectionDurationDays", g.selection_duration_hours as "selectionDurationHours", g.selection_deadline_at as "selectionDeadlineAt",
+               g.created_at as "createdAt", g.updated_at as "updatedAt", g.synced_at as "syncedAt"
         FROM galleries g
         ${where}
         ORDER BY g.id DESC
@@ -400,11 +478,9 @@ adminGalleriesRouter.get("/", async (c) => {
 adminGalleriesRouter.get("/settings/contact", async (c) => {
     const denied = requireGalleryAdmin(c);
     if (denied) return denied;
-    const setting = await galleryOne<{ value: string }>("SELECT value FROM gallery_settings WHERE key = ?", ["contact_whatsapp_url"]);
-    const value = setting?.value || "";
-    const message = await galleryOne<{ value: string }>("SELECT value FROM gallery_settings WHERE key = ?", ["contact_whatsapp_message"]);
-    const requestMoreMessage = await galleryOne<{ value: string }>("SELECT value FROM gallery_settings WHERE key = ?", ["request_more_whatsapp_message"]);
-    return c.json({ contactWhatsappUrl: normalizeWhatsappNumber(value) ? (value.startsWith("https://wa.me/") ? `+${value.slice("https://wa.me/".length)}` : value) : "", message: message?.value || DEFAULT_CONTACT_MESSAGE, requestMoreMessage: requestMoreMessage?.value || DEFAULT_REQUEST_MORE_MESSAGE });
+    const settings = await getGallerySettings();
+    const value = settings.contact_whatsapp_url || "";
+    return c.json({ contactWhatsappUrl: normalizeWhatsappNumber(value) ? (value.startsWith("https://wa.me/") ? `+${value.slice("https://wa.me/".length)}` : value) : "", message: settings.contact_whatsapp_message || DEFAULT_CONTACT_MESSAGE, requestMoreMessage: settings.request_more_whatsapp_message || DEFAULT_REQUEST_MORE_MESSAGE });
 });
 
 adminGalleriesRouter.patch("/settings/contact", async (c) => {
@@ -415,9 +491,12 @@ adminGalleriesRouter.patch("/settings/contact", async (c) => {
     const message = String(body.message || "").trim().slice(0, 500);
     const requestMoreMessage = String(body.requestMoreMessage || "").trim().slice(0, 800);
     if (!phone) return c.json({ error: "Enter a valid Indonesian WhatsApp number, for example 081234567890 or +6281234567890" }, 400);
-    await galleryRun("INSERT INTO gallery_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", ["contact_whatsapp_url", phone]);
-    await galleryRun("INSERT INTO gallery_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", ["contact_whatsapp_message", message]);
-    await galleryRun("INSERT INTO gallery_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", ["request_more_whatsapp_message", requestMoreMessage]);
+    await galleryBatch([
+        { sql: "INSERT INTO gallery_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", params: ["contact_whatsapp_url", phone] },
+        { sql: "INSERT INTO gallery_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", params: ["contact_whatsapp_message", message] },
+        { sql: "INSERT INTO gallery_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", params: ["request_more_whatsapp_message", requestMoreMessage] },
+    ]);
+    invalidateGallerySettingsCache();
     return c.json({ contactWhatsappUrl: phone, message, requestMoreMessage });
 });
 
@@ -530,20 +609,24 @@ adminGalleriesRouter.post("/", async (c) => {
     const pin = String(body.pin || "").trim();
     const status = normalizeStatus(body.status, "draft");
     const maxSelections = Math.min(500, Math.max(0, Number(body.maxSelections ?? 50) || 50));
+    const requestedDurationHours = body.selectionDurationHours ?? (body.selectionDurationDays === undefined ? DEFAULT_SELECTION_DURATION_HOURS : Number(body.selectionDurationDays) * 24);
+    const selectionDurationHours = parseSelectionDurationHours(requestedDurationHours);
+    const selectionDurationDays = selectionDurationHours === null ? null : Math.ceil(selectionDurationHours / 24);
 
-    if (!title || !driveFolderId || pin.length < 4) {
-        return c.json({ error: "Title, Drive folder ID, and a PIN of at least 4 characters are required." }, 400);
+    if (!title || !driveFolderId || pin.length < 4 || selectionDurationHours === null || selectionDurationDays === null) {
+        return c.json({ error: "Title, Drive folder ID, a PIN of at least 4 characters, and a selection duration from 1 to 8760 hours are required." }, 400);
     }
 
     const pinHash = await Bun.password.hash(pin, { algorithm: "bcrypt", cost: 10 });
     const publicKey = randomUUID().replaceAll("-", "");
+    const selectionDeadlineAt = selectionDeadlineFromNow(selectionDurationHours);
     const id = await galleryInsertReturningId(
-        "INSERT INTO galleries (title, public_key, max_selections, edit_addon_pricing_mode, edit_addon_price, drive_folder_id, pin_hash, status) VALUES (?, ?, ?, 'per_photo', ?, ?, ?, ?)",
-        [title, publicKey, maxSelections, DEFAULT_ADDON_UNIT_PRICE, driveFolderId, pinHash, status],
+        "INSERT INTO galleries (title, public_key, max_selections, edit_addon_pricing_mode, edit_addon_price, drive_folder_id, pin_hash, selection_duration_days, selection_duration_hours, selection_deadline_at, status) VALUES (?, ?, ?, 'per_photo', ?, ?, ?, ?, ?, ?, ?)",
+        [title, publicKey, maxSelections, DEFAULT_ADDON_UNIT_PRICE, driveFolderId, pinHash, selectionDurationDays, selectionDurationHours, selectionDeadlineAt, status],
     );
     const row = await galleryOne<GalleryRow>(`
         SELECT id, title, public_key as "publicKey", contact_whatsapp_url as "contactWhatsappUrl", drive_folder_id as "driveFolderId", pin_hash as "pinHash", status, max_selections as "maxSelections", additional_selection_limit as "additionalSelectionLimit", edit_addon_status as "editAddonStatus", edit_addon_pricing_mode as "editAddonPricingMode", edit_addon_price as "editAddonPrice",
-               created_at as "createdAt", updated_at as "updatedAt", synced_at as "syncedAt"
+               photo_count as "photoCount", selection_count as "selectionCount", selection_duration_days as "selectionDurationDays", selection_duration_hours as "selectionDurationHours", selection_deadline_at as "selectionDeadlineAt", created_at as "createdAt", updated_at as "updatedAt", synced_at as "syncedAt"
         FROM galleries WHERE id = ?
     `, [id]);
     return c.json(galleryAdminShape(row!));
@@ -557,7 +640,7 @@ adminGalleriesRouter.get("/:id", async (c) => {
     if (!Number.isInteger(id)) return c.json({ error: "Invalid gallery ID" }, 400);
     const gallery = await galleryOne<GalleryRow>(`
         SELECT id, title, public_key as "publicKey", contact_whatsapp_url as "contactWhatsappUrl", drive_folder_id as "driveFolderId", pin_hash as "pinHash", status, max_selections as "maxSelections", additional_selection_limit as "additionalSelectionLimit", edit_addon_status as "editAddonStatus", edit_addon_pricing_mode as "editAddonPricingMode", edit_addon_price as "editAddonPrice",
-               created_at as "createdAt", updated_at as "updatedAt", synced_at as "syncedAt"
+               photo_count as "photoCount", selection_count as "selectionCount", selection_duration_days as "selectionDurationDays", selection_duration_hours as "selectionDurationHours", selection_deadline_at as "selectionDeadlineAt", created_at as "createdAt", updated_at as "updatedAt", synced_at as "syncedAt"
         FROM galleries WHERE id = ?
     `, [id]);
     if (!gallery) return c.json({ error: "Gallery not found" }, 404);
@@ -598,7 +681,7 @@ adminGalleriesRouter.patch("/:id", async (c) => {
     if (!Number.isInteger(id)) return c.json({ error: "Invalid gallery ID" }, 400);
     const existing = await galleryOne<GalleryRow>(`
         SELECT id, title, drive_folder_id as "driveFolderId", pin_hash as "pinHash", status, max_selections as "maxSelections", additional_selection_limit as "additionalSelectionLimit", edit_addon_status as "editAddonStatus", edit_addon_pricing_mode as "editAddonPricingMode", edit_addon_price as "editAddonPrice",
-               created_at as "createdAt", updated_at as "updatedAt", synced_at as "syncedAt"
+               selection_count as "selectionCount", selection_duration_days as "selectionDurationDays", selection_duration_hours as "selectionDurationHours", selection_deadline_at as "selectionDeadlineAt", created_at as "createdAt", updated_at as "updatedAt", synced_at as "syncedAt"
         FROM galleries WHERE id = ?
     `, [id]);
     if (!existing) return c.json({ error: "Gallery not found" }, 404);
@@ -608,7 +691,23 @@ adminGalleriesRouter.patch("/:id", async (c) => {
     const driveFolderId = body.driveFolderId === undefined && body.driveFolderUrl === undefined
         ? existing.driveFolderId
         : normalizeDriveFolderId(body.driveFolderUrl ?? body.driveFolderId);
-    const status = normalizeStatus(body.status, existing.status);
+    const durationWasProvided = body.selectionDurationHours !== undefined || body.selectionDurationDays !== undefined;
+    const requestedDurationHours = body.selectionDurationHours ?? (body.selectionDurationDays === undefined ? undefined : Number(body.selectionDurationDays) * 24);
+    let deadlineUpdate;
+    try {
+        deadlineUpdate = resolveGalleryDeadlineUpdate({
+            existingDurationHours: selectionDurationHoursFromRow(existing),
+            existingDeadlineAt: existing.selectionDeadlineAt,
+            nextStatus: normalizeStatus(body.status, existing.status),
+            requestedStatus: body.status,
+            durationWasProvided,
+            requestedDurationHours,
+        });
+    } catch (error) {
+        return c.json({ error: error instanceof Error ? error.message : "Invalid selection deadline." }, 400);
+    }
+    const { selectionDurationHours, selectionDeadlineAt, status } = deadlineUpdate;
+    const selectionDurationDays = Math.ceil(selectionDurationHours / 24);
     const contactWhatsappUrl = body.contactWhatsappUrl === undefined ? existing.contactWhatsappUrl || null : String(body.contactWhatsappUrl || "").trim() || null;
     const maxSelections = body.maxSelections === undefined ? Number(existing.maxSelections || 0) : Math.min(500, Math.max(0, Number(body.maxSelections) || 0));
     const additionalSelectionLimit = body.additionalSelectionLimit === undefined ? Number(existing.additionalSelectionLimit || 0) : Math.min(500, Math.max(0, Number(body.additionalSelectionLimit) || 0));
@@ -618,17 +717,17 @@ adminGalleriesRouter.patch("/:id", async (c) => {
     const pin = body.pin === undefined ? "" : String(body.pin || "").trim();
     const pinHash = pin ? await Bun.password.hash(pin, { algorithm: "bcrypt", cost: 10 }) : existing.pinHash;
     const activeSelectionLimit = maxSelections ? maxSelections + (editAddonStatus === "paid" ? additionalSelectionLimit : 0) : 0;
-    const selectionCount = await galleryOne<{ count: number }>("SELECT COUNT(*) as count FROM gallery_selections WHERE gallery_id = ?", [id]);
+    const selectionCount = Number(existing.selectionCount || 0);
 
     if (!title || !driveFolderId) return c.json({ error: "Title and Drive folder ID are required." }, 400);
     if (body.pin !== undefined && pin.length > 0 && pin.length < 4) return c.json({ error: "PIN must be at least 4 characters." }, 400);
-    if (activeSelectionLimit && Number(selectionCount?.count || 0) > activeSelectionLimit) {
-        return c.json({ error: `Active limit cannot be lower than ${selectionCount?.count || 0} submitted selections.` }, 400);
+    if (activeSelectionLimit && selectionCount > activeSelectionLimit) {
+        return c.json({ error: `Active limit cannot be lower than ${selectionCount} submitted selections.` }, 400);
     }
 
     await galleryRun(
-        "UPDATE galleries SET title = ?, drive_folder_id = ?, pin_hash = ?, contact_whatsapp_url = ?, max_selections = ?, additional_selection_limit = ?, edit_addon_status = ?, edit_addon_pricing_mode = ?, edit_addon_price = ?, status = ?, access_version = access_version + 1, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-        [title, driveFolderId, pinHash, contactWhatsappUrl, maxSelections, additionalSelectionLimit, editAddonStatus, editAddonPricingMode, editAddonPrice, status, id],
+        "UPDATE galleries SET title = ?, drive_folder_id = ?, pin_hash = ?, contact_whatsapp_url = ?, max_selections = ?, additional_selection_limit = ?, edit_addon_status = ?, edit_addon_pricing_mode = ?, edit_addon_price = ?, selection_duration_days = ?, selection_duration_hours = ?, selection_deadline_at = ?, status = ?, access_version = access_version + 1, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+        [title, driveFolderId, pinHash, contactWhatsappUrl, maxSelections, additionalSelectionLimit, editAddonStatus, editAddonPricingMode, editAddonPrice, selectionDurationDays, selectionDurationHours, selectionDeadlineAt, status, id],
     );
     return c.json({ status: "updated" });
 });
@@ -674,10 +773,13 @@ adminGalleriesRouter.post("/:id/sync", async (c) => {
     const existingByDriveId = new Map(normalizedExistingPhotos.map((photo) => [photo.driveFileId, photo]));
     const driveIds = new Set(photos.map((photo) => photo.id));
     const syncStatements: Array<{ sql: string; params: unknown[] }> = [];
+    let photoChanges = 0;
 
     for (const existingPhoto of normalizedExistingPhotos) {
         if (!driveIds.has(existingPhoto.driveFileId)) {
             syncStatements.push({ sql: "DELETE FROM gallery_photos WHERE gallery_id = ? AND drive_file_id = ?", params: [id, existingPhoto.driveFileId] });
+            syncStatements.push({ sql: "DELETE FROM gallery_selections WHERE gallery_id = ? AND selected_drive_file_id = ?", params: [id, existingPhoto.driveFileId] });
+            photoChanges += 1;
         }
     }
 
@@ -704,6 +806,7 @@ adminGalleriesRouter.post("/:id/sync", async (c) => {
                 nextHeight,
                 index,
             ] });
+            photoChanges += 1;
             continue;
         }
 
@@ -731,11 +834,22 @@ adminGalleriesRouter.post("/:id/sync", async (c) => {
                 id,
                 photo.id,
             ] });
+            photoChanges += 1;
         }
     }
-    syncStatements.push({ sql: "UPDATE galleries SET synced_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = ?", params: [id] });
+    syncStatements.push({
+        sql: `
+            UPDATE galleries
+            SET photo_count = ?,
+                selection_count = (SELECT COUNT(*) FROM gallery_selections WHERE gallery_id = ?),
+                synced_at = CURRENT_TIMESTAMP,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+        `,
+        params: [photos.length, id, id],
+    });
     await galleryBatch(syncStatements);
-    return c.json({ status: "synced", photoCount: photos.length, changes: Math.max(0, syncStatements.length - 1) });
+    return c.json({ status: "synced", photoCount: photos.length, changes: photoChanges });
 });
 
 adminGalleriesRouter.get("/:id/export.csv", async (c) => {
@@ -797,29 +911,33 @@ adminGalleriesRouter.get("/:id/export.xlsx", async (c) => {
 });
 
 publicGalleriesRouter.get("/:id/contact", async (c) => {
-    const setting = await galleryOne<{ value: string }>("SELECT value FROM gallery_settings WHERE key = ?", ["contact_whatsapp_url"]);
-    const message = await galleryOne<{ value: string }>("SELECT value FROM gallery_settings WHERE key = ?", ["contact_whatsapp_message"]);
-    const requestMoreMessage = await galleryOne<{ value: string }>("SELECT value FROM gallery_settings WHERE key = ?", ["request_more_whatsapp_message"]);
-    return c.json({ contactWhatsappUrl: setting?.value || null, message: message?.value || DEFAULT_CONTACT_MESSAGE, requestMoreMessage: requestMoreMessage?.value || DEFAULT_REQUEST_MORE_MESSAGE });
+    const settings = await getGallerySettings();
+    return c.json({ contactWhatsappUrl: settings.contact_whatsapp_url || null, message: settings.contact_whatsapp_message || DEFAULT_CONTACT_MESSAGE, requestMoreMessage: settings.request_more_whatsapp_message || DEFAULT_REQUEST_MORE_MESSAGE });
 });
 
 publicGalleriesRouter.post("/:id/verify", async (c) => {
     const identifier = c.req.param("id");
+    if (!identifier) return c.json({ error: "Gallery ID is required." }, 400);
     const lookup = galleryLookup(identifier);
     const body = await c.req.json().catch(() => ({}));
     const pin = String(body.pin || "").trim();
     const gallery = await galleryOne<GalleryRow>(`
         SELECT id, title, drive_folder_id as "driveFolderId", pin_hash as "pinHash", status,
-               created_at as "createdAt", updated_at as "updatedAt", synced_at as "syncedAt", access_version as "accessVersion", contact_whatsapp_url as "contactWhatsappUrl", max_selections as "maxSelections", additional_selection_limit as "additionalSelectionLimit", edit_addon_status as "editAddonStatus", edit_addon_pricing_mode as "editAddonPricingMode", edit_addon_price as "editAddonPrice"
+               created_at as "createdAt", updated_at as "updatedAt", synced_at as "syncedAt", access_version as "accessVersion", contact_whatsapp_url as "contactWhatsappUrl", max_selections as "maxSelections", additional_selection_limit as "additionalSelectionLimit", edit_addon_status as "editAddonStatus", edit_addon_pricing_mode as "editAddonPricingMode", edit_addon_price as "editAddonPrice",
+               photo_count as "photoCount", selection_count as "selectionCount", selection_duration_days as "selectionDurationDays", selection_duration_hours as "selectionDurationHours", selection_deadline_at as "selectionDeadlineAt"
         FROM galleries WHERE ${lookup.sql}
     `, lookup.params);
     if (!gallery) return c.json({ error: "Gallery not found" }, 404);
-    const contact = await galleryOne<{ value: string }>("SELECT value FROM gallery_settings WHERE key = ?", ["contact_whatsapp_url"]);
-    const message = await galleryOne<{ value: string }>("SELECT value FROM gallery_settings WHERE key = ?", ["contact_whatsapp_message"]);
-    if (gallery.status !== "open") {
-        const template = message?.value || DEFAULT_CONTACT_MESSAGE;
+    const galleryExpired = isSelectionDeadlineExpired(gallery.selectionDeadlineAt);
+    if (galleryExpired || gallery.status !== "open") {
+        const settings = await getGallerySettings();
+        const template = settings.contact_whatsapp_message || DEFAULT_CONTACT_MESSAGE;
         const text = galleryContactMessage(template, gallery, c.req.url);
-        return c.json({ error: "Gallery is locked. Please contact the admin to unlock it.", code: "GALLERY_CLOSED", contactUrl: contact?.value ? `https://wa.me/${contact.value}?text=${encodeURIComponent(text)}` : null }, 403);
+        return c.json({
+            error: galleryExpired ? "The selection deadline has ended." : "Gallery is locked. Please contact the admin to unlock it.",
+            code: galleryExpired ? "GALLERY_EXPIRED" : "GALLERY_CLOSED",
+            contactUrl: settings.contact_whatsapp_url ? `https://wa.me/${settings.contact_whatsapp_url}?text=${encodeURIComponent(text)}` : null,
+        }, 403);
     }
     if (!pin || !await Bun.password.verify(pin, gallery.pinHash)) return c.json({ error: "Invalid PIN." }, 401);
     const token = await createGalleryToken(gallery.id, gallery.accessVersion);
@@ -829,37 +947,46 @@ publicGalleriesRouter.post("/:id/verify", async (c) => {
 publicGalleriesRouter.get("/:id/photos", async (c) => {
     const result = await requirePublicGallery(c);
     if (result instanceof Response) return result;
+    const sessionExpiresAt = galleryTokenExpiration(result.token) ?? Math.floor(Date.now() / 1000) + PHOTO_TOKEN_TTL_SECONDS;
+    const deadlineExpiresAt = selectionDeadlineEpochSeconds(result.gallery.selectionDeadlineAt);
+    const photoTokenExpiresAt = deadlineExpiresAt === null ? sessionExpiresAt : Math.min(sessionExpiresAt, deadlineExpiresAt);
     const includeSelectedPhotos = c.req.query("includeSelectedPhotos") === "1";
-    const total = Number((await galleryOne<{ total: number }>("SELECT COUNT(*) as total FROM gallery_photos WHERE gallery_id = ?", [result.gallery.id]))?.total || 0);
-    const pageSize = Math.min(100, Math.max(1, Number(c.req.query("pageSize") || 60) || 60));
-    const totalPages = Math.max(1, Math.ceil(total / pageSize));
-    const page = Math.min(totalPages, Math.max(1, Number(c.req.query("page") || 1) || 1));
+    const includeSelections = c.req.query("includeSelections") === "1";
+    const total = Number(result.gallery.photoCount || 0);
+    const pageSize = Math.min(50, Math.max(1, Number(c.req.query("pageSize") || 50) || 50));
+    const totalPages = total > 0 ? Math.ceil(total / pageSize) : 0;
+    const page = totalPages > 0 ? Math.min(totalPages, Math.max(1, Number(c.req.query("page") || 1) || 1)) : 1;
     const offset = (page - 1) * pageSize;
-    const photos = await galleryAll<PhotoRow>(`
+    const photosPromise = includeSelectedPhotos ? Promise.resolve<PhotoRow[]>([]) : galleryAll<PhotoRow>(`
         SELECT id, gallery_id as "galleryId", drive_file_id as "driveFileId", filename, mime_type as "mimeType",
                thumbnail_url as "thumbnailUrl", web_view_url as "webViewUrl", width, height, display_order as "displayOrder", created_at as "createdAt"
         FROM gallery_photos WHERE gallery_id = ? ORDER BY display_order, filename LIMIT ? OFFSET ?
     `, [result.gallery.id, pageSize, offset]);
-    const selections = await galleryAll<{ selectedDriveFileId: string }>(`
+    const selectionsPromise = includeSelections ? galleryAll<{ selectedDriveFileId: string }>(`
         SELECT selected_drive_file_id as "selectedDriveFileId" FROM gallery_selections WHERE gallery_id = ?
-    `, [result.gallery.id]);
-    const selectedPhotos = includeSelectedPhotos ? await galleryAll<PhotoRow & { note?: string | null }>(`
+    `, [result.gallery.id]) : Promise.resolve<Array<{ selectedDriveFileId: string }>>([]);
+    const selectedPhotosPromise = includeSelectedPhotos ? galleryAll<PhotoRow & { note?: string | null }>(`
         SELECT p.id, p.gallery_id as "galleryId", p.drive_file_id as "driveFileId", p.filename,
                p.mime_type as "mimeType", p.thumbnail_url as "thumbnailUrl", p.web_view_url as "webViewUrl", p.width, p.height, p.display_order as "displayOrder",
                p.created_at as "createdAt", s.note
         FROM gallery_photos p
         INNER JOIN gallery_selections s ON s.gallery_id = p.gallery_id AND s.selected_drive_file_id = p.drive_file_id
         WHERE p.gallery_id = ? ORDER BY p.display_order, p.filename
-    `, [result.gallery.id]) : [];
+    `, [result.gallery.id]) : Promise.resolve<Array<PhotoRow & { note?: string | null }>>([]);
+    const [photos, selections, selectedPhotos] = await Promise.all([
+        photosPromise,
+        selectionsPromise,
+        selectedPhotosPromise,
+    ]);
     return c.json({
         gallery: galleryPublicShape(result.gallery),
-        photos: photos.map((photo) => publicPhotoShape(photo as PhotoRow & Record<string, unknown>, result.gallery.accessVersion)),
+        photos: photos.map((photo) => publicPhotoShape(photo as PhotoRow & Record<string, unknown>, result.gallery.accessVersion, photoTokenExpiresAt)),
         page,
         pageSize,
         total,
         totalPages,
-        selectedDriveFileIds: selections.map((row) => selectionDriveFileId(row as Record<string, unknown>)).filter(Boolean),
-        selectedPhotos: selectedPhotos.map((photo) => publicPhotoShape(photo as PhotoRow & Record<string, unknown>, result.gallery.accessVersion)),
+        ...(includeSelections ? { selectedDriveFileIds: selections.map((row) => selectionDriveFileId(row as Record<string, unknown>)).filter(Boolean) } : {}),
+        selectedPhotos: selectedPhotos.map((photo) => publicPhotoShape(photo as PhotoRow & Record<string, unknown>, result.gallery.accessVersion, photoTokenExpiresAt)),
     });
 });
 
@@ -887,7 +1014,7 @@ publicGalleriesRouter.get("/:id/photos/:fileId/thumbnail", async (c) => {
     return new Response(driveResponse.body, {
         headers: {
             "Content-Type": driveResponse.headers.get("Content-Type") || "image/jpeg",
-            "Cache-Control": "private, max-age=3600, stale-while-revalidate=300",
+            "Cache-Control": GALLERY_IMAGE_CACHE_CONTROL,
         },
     });
 });
@@ -907,7 +1034,7 @@ publicGalleriesRouter.get("/:id/photos/:fileId/preview", async (c) => {
 
     let driveResponse: Response;
     try {
-        driveResponse = await fetchDriveFile(photo.driveFileId, photo.thumbnailUrl || undefined, 1600);
+        driveResponse = await fetchDriveFile(photo.driveFileId, photo.thumbnailUrl || undefined, 1600, true);
     } catch {
         let refreshedThumbnail: string | undefined;
         try {
@@ -918,7 +1045,7 @@ publicGalleriesRouter.get("/:id/photos/:fileId/preview", async (c) => {
             refreshedThumbnail = undefined;
         }
         try {
-            driveResponse = await fetchDriveFile(photo.driveFileId, refreshedThumbnail, 1600);
+            driveResponse = await fetchDriveFile(photo.driveFileId, refreshedThumbnail, 1600, true);
         } catch {
             driveResponse = await fetchDriveFile(photo.driveFileId);
         }
@@ -926,7 +1053,7 @@ publicGalleriesRouter.get("/:id/photos/:fileId/preview", async (c) => {
     return new Response(driveResponse.body, {
         headers: {
             "Content-Type": driveResponse.headers.get("Content-Type") || "image/jpeg",
-            "Cache-Control": "private, max-age=3600, stale-while-revalidate=300",
+            "Cache-Control": GALLERY_IMAGE_CACHE_CONTROL,
         },
     });
 });
@@ -984,6 +1111,7 @@ publicGalleriesRouter.post("/:id/selections", async (c) => {
             sql: "INSERT INTO gallery_selections (gallery_id, selected_drive_file_id, selected_filename, note) VALUES (?, ?, ?, ?)",
             params: [result.gallery.id, photo.driveFileId, photo.filename, note || null],
         })),
+        { sql: "UPDATE galleries SET selection_count = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?", params: [selectedPhotos.length, result.gallery.id] },
     ]);
     return c.json({
         status: "submitted",

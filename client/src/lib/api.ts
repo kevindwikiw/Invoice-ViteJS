@@ -117,11 +117,23 @@ export async function fetchProofObjectUrl(filename: string): Promise<string> {
     return URL.createObjectURL(await response.blob());
 }
 
-export async function fetchProofDataUrl(filename: string): Promise<string> {
-    const response = await fetchAuthenticated(proofUrl(filename));
+function proofSourceUrl(source: string): string {
+    if (/^https?:\/\//i.test(source) || source.startsWith('/uploads/')) return source;
+    return proofUrl(source);
+}
+
+async function fetchProofBlob(source: string): Promise<Blob> {
+    const response = await fetchAuthenticated(proofSourceUrl(source));
     if (!response.ok) throw new Error(`Failed to load proof (${response.status})`);
-    const blob = await response.blob();
-    return await new Promise<string>((resolve, reject) => {
+    return await response.blob();
+}
+
+export async function fetchProofDataUrl(filename: string): Promise<string> {
+    return await blobToDataUrl(await fetchProofBlob(filename));
+}
+
+function blobToDataUrl(blob: Blob): Promise<string> {
+    return new Promise<string>((resolve, reject) => {
         const reader = new FileReader();
         reader.onload = () => resolve(String(reader.result));
         reader.onerror = () => reject(reader.error ?? new Error('Failed to read proof'));
@@ -129,9 +141,92 @@ export async function fetchProofDataUrl(filename: string): Promise<string> {
     });
 }
 
+function unsupportedProofSource(contentType = 'unknown'): string {
+    return `unsupported:${contentType || 'unknown'}`;
+}
+
+function isPdfCompatibleImage(contentType: string): boolean {
+    return contentType === 'image/jpeg' || contentType === 'image/jpg' || contentType === 'image/png';
+}
+
+function loadBrowserImage(url: string): Promise<HTMLImageElement> {
+    return new Promise((resolve, reject) => {
+        const image = new Image();
+        image.onload = () => resolve(image);
+        image.onerror = () => reject(new Error('Failed to decode payment proof image'));
+        image.src = url;
+    });
+}
+
+async function convertImageBlobForPdf(blob: Blob): Promise<string> {
+    if (isPdfCompatibleImage(blob.type)) return await blobToDataUrl(blob);
+    if (!blob.type.startsWith('image/')) return unsupportedProofSource(blob.type);
+
+    const objectUrl = URL.createObjectURL(blob);
+    try {
+        const image = await loadBrowserImage(objectUrl);
+        const maxDimension = 2400;
+        const scale = Math.min(1, maxDimension / Math.max(image.naturalWidth, image.naturalHeight));
+        const width = Math.max(1, Math.round(image.naturalWidth * scale));
+        const height = Math.max(1, Math.round(image.naturalHeight * scale));
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        const context = canvas.getContext('2d');
+        if (!context) throw new Error('Canvas is unavailable');
+        context.fillStyle = '#ffffff';
+        context.fillRect(0, 0, width, height);
+        context.drawImage(image, 0, 0, width, height);
+        return canvas.toDataURL('image/jpeg', 0.92);
+    } finally {
+        URL.revokeObjectURL(objectUrl);
+    }
+}
+
+async function normalizeProofForPdf(proof: string): Promise<string> {
+    if (proof.startsWith('unsupported:')) return proof;
+    if (proof.startsWith('data:') || proof.startsWith('blob:')) {
+        return await convertImageBlobForPdf(await fetch(proof).then((response) => response.blob()));
+    }
+    return await convertImageBlobForPdf(await fetchProofBlob(proof));
+}
+
+export function parsePaymentProofs(value: unknown): string[] {
+    if (Array.isArray(value)) {
+        return value.flatMap((proof) => parsePaymentProofs(proof));
+    }
+    if (value && typeof value === 'object') {
+        const proof = value as Record<string, unknown>;
+        const dataUrl = proof.dataUrl ?? proof.data_url;
+        if (typeof dataUrl === 'string') return parsePaymentProofs(dataUrl);
+
+        const base64 = proof.base64 ?? proof.b64;
+        if (typeof base64 !== 'string' || !base64.trim()) return [];
+        const encoded = base64.trim();
+        return [encoded.startsWith('data:') ? encoded : `data:image/jpeg;base64,${encoded}`];
+    }
+    if (typeof value !== 'string') return [];
+
+    const proof = value.trim();
+    if (!proof) return [];
+    if (proof.startsWith('[') || proof.startsWith('{') || (proof.startsWith('"') && proof.endsWith('"'))) {
+        try {
+            return parsePaymentProofs(JSON.parse(proof));
+        } catch {
+            return [];
+        }
+    }
+    return [proof];
+}
+
 export async function resolveProofDataUrls(proofs: string[]): Promise<string[]> {
-    return Promise.all(proofs.map((proof) => {
-        if (proof.startsWith('data:') || proof.startsWith('blob:')) return proof;
-        return fetchProofDataUrl(proof);
+    const resolved = await Promise.all(proofs.map(async (proof) => {
+        try {
+            return await normalizeProofForPdf(proof);
+        } catch {
+            const contentType = proof.match(/^data:([^;,]+)/)?.[1] || 'unavailable';
+            return unsupportedProofSource(contentType);
+        }
     }));
+    return resolved;
 }

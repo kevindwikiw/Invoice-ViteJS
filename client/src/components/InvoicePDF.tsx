@@ -337,8 +337,9 @@ const normalizePaymentTerms = (data: InvoiceData): PaymentTerm[] => {
 // Styles
 // ======================
 const INVOICE_TOP = mm(10.5);
-const INVOICE_UNDERLINE_TOP = mm(19);
-const INVOICE_UNDERLINE_W = 95; // points (± 35mm)
+const TITLE_UNDERLINE_TOP = mm(19.5);
+const INVOICE_UNDERLINE_W = 95;
+const PROOF_UNDERLINE_W = 188;
 const RIBBON_BR_Y = RIBBON_H * 0.01;
 
 const styles = StyleSheet.create({
@@ -351,6 +352,10 @@ const styles = StyleSheet.create({
         fontSize: 10,
         color: COLORS.BLACK,
         lineHeight: 1.2,
+    },
+    proofPage: {
+        height: mm(297),
+        minHeight: mm(297),
     },
 
     headerBar: {
@@ -406,8 +411,7 @@ const styles = StyleSheet.create({
     titleUnderline: {
         position: "absolute",
         right: MARGIN,
-        top: INVOICE_UNDERLINE_TOP,
-        width: INVOICE_UNDERLINE_W,
+        top: TITLE_UNDERLINE_TOP,
         height: 1,
         backgroundColor: COLORS.WHITE,
     },
@@ -594,20 +598,86 @@ const styles = StyleSheet.create({
         bottom: FOOTER_H + mm(4),
         left: MARGIN,
         right: MARGIN,
+    },
+    proofMetaRow: {
+        minHeight: mm(14),
+        flexDirection: "row",
+        alignItems: "center",
+        borderBottomWidth: 0.75,
+        borderBottomColor: COLORS.BLACK,
+        paddingBottom: mm(3),
+        marginBottom: mm(4),
+    },
+    proofMetaCell: {
+        flexGrow: 1,
+        paddingRight: mm(4),
+    },
+    proofMetaCellLast: {
+        width: mm(35),
+        flexGrow: 0,
+        paddingRight: 0,
+        alignItems: "flex-end",
+    },
+    proofMetaLabel: {
+        fontSize: 6.5,
+        fontFamily: "Helvetica-Bold",
+        color: COLORS.DARK_GRAY,
+        marginBottom: 2,
+    },
+    proofMetaValue: {
+        fontSize: 9,
+        fontFamily: "Helvetica-Bold",
+        color: COLORS.BLACK,
+    },
+    proofFrame: {
+        flexGrow: 1,
+        minHeight: 0,
         alignItems: "center",
         justifyContent: "center",
+        borderWidth: 0.75,
+        borderColor: "#d4d4d4",
+        backgroundColor: "#f7f7f7",
+        padding: mm(5),
     },
     proofImage: {
         width: "100%",
         height: "100%",
         objectFit: "contain",
     },
+    proofCaptionRow: {
+        height: mm(8),
+        flexDirection: "row",
+        alignItems: "flex-end",
+        justifyContent: "space-between",
+    },
+    proofCaption: {
+        fontSize: 6.5,
+        fontFamily: "Helvetica-Bold",
+        color: COLORS.DARK_GRAY,
+    },
+    proofFallbackTitle: {
+        fontSize: 16,
+        fontWeight: 700,
+        color: COLORS.BLACK,
+        marginBottom: mm(3),
+        textAlign: "center",
+    },
+    proofFallbackText: {
+        fontSize: 9,
+        color: COLORS.DARK_GRAY,
+        lineHeight: 1.4,
+        textAlign: "center",
+    },
 });
 
 // ======================
 // Subcomponents
 // ======================
-function Header({ title = "INVOICE" }: { title?: string }) {
+function isRenderableProofImage(source: string): boolean {
+    return /^data:image\/(?:png|jpe?g);/i.test(source);
+}
+
+function Header({ title = "INVOICE", underlineWidth = INVOICE_UNDERLINE_W }: { title?: string; underlineWidth?: number }) {
     return (
         <>
             <View fixed style={styles.headerBar} />
@@ -660,7 +730,7 @@ function Header({ title = "INVOICE" }: { title?: string }) {
             <Text fixed style={styles.invoiceTitle}>
                 {title}
             </Text>
-            <View fixed style={styles.titleUnderline} />
+            <View fixed style={[styles.titleUnderline, { width: underlineWidth }]} />
         </>
     );
 }
@@ -1060,13 +1130,47 @@ export const InvoicePDF = ({ invoice, proofs = [] }: { invoice: Invoice; proofs?
                     // the caller before PDF rendering. Never request an
                     // anonymous upload URL from inside react-pdf.
                     const imageSrc = proof;
+                    const canRenderImage = isRenderableProofImage(imageSrc);
+                    const attachmentNumber = String(idx + 1).padStart(2, "0");
+                    const attachmentTotal = String(proofs.length).padStart(2, "0");
 
                     return (
-                        <Page key={`proof-${idx}`} size="A4" style={styles.page} wrap={false}>
-                            <Header title={`PAYMENT PROOF ${idx + 1}`} />
+                        <Page key={`proof-${idx}`} size="A4" style={[styles.page, styles.proofPage]} wrap={false}>
+                            <Header title="PAYMENT PROOF" underlineWidth={PROOF_UNDERLINE_W} />
 
                             <View style={styles.proofContent}>
-                                <Image src={imageSrc} style={styles.proofImage} />
+                                <View style={styles.proofMetaRow}>
+                                    <View style={styles.proofMetaCell}>
+                                        <Text style={styles.proofMetaLabel}>INVOICE</Text>
+                                        <Text style={styles.proofMetaValue}>{invoiceNo || "-"}</Text>
+                                    </View>
+                                    <View style={styles.proofMetaCell}>
+                                        <Text style={styles.proofMetaLabel}>CLIENT</Text>
+                                        <Text style={styles.proofMetaValue}>{clientName || "-"}</Text>
+                                    </View>
+                                    <View style={[styles.proofMetaCell, styles.proofMetaCellLast]}>
+                                        <Text style={styles.proofMetaLabel}>ATTACHMENT</Text>
+                                        <Text style={styles.proofMetaValue}>{attachmentNumber} / {attachmentTotal}</Text>
+                                    </View>
+                                </View>
+
+                                <View style={styles.proofFrame}>
+                                    {canRenderImage ? (
+                                        <Image src={imageSrc} style={styles.proofImage} />
+                                    ) : (
+                                        <View>
+                                            <Text style={styles.proofFallbackTitle}>PREVIEW UNAVAILABLE</Text>
+                                            <Text style={styles.proofFallbackText}>
+                                                This payment proof is attached to the invoice, but its file format cannot be embedded in the PDF preview.
+                                            </Text>
+                                        </View>
+                                    )}
+                                </View>
+
+                                <View style={styles.proofCaptionRow}>
+                                    <Text style={styles.proofCaption}>PAYMENT EVIDENCE</Text>
+                                    <Text style={styles.proofCaption}>THE ORBIT PHOTO</Text>
+                                </View>
                             </View>
 
                             <Footer

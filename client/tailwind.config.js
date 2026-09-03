@@ -37,8 +37,9 @@ export default {
                 }
             },
             fontFamily: {
-                sans: ['Montserrat', 'Inter', 'system-ui', 'sans-serif'],
-                display: ['Playfair Display', 'Georgia', 'serif'],
+                serif: ['Fraunces', 'Georgia', 'serif'],
+                sans: ['Inter', 'system-ui', 'sans-serif'],
+                display: ['Fraunces', 'Georgia', 'serif'],
                 mono: ['JetBrains Mono', 'Fira Code', 'monospace'],
             }
         },
