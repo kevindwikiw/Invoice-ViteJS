@@ -11,7 +11,20 @@ import {
 
 // ============ TYPES ============
 export type UserRole = 'superadmin' | 'admin' | 'employee';
-export type FeaturePermission = 'view_market_insights' | 'view_billing_history' | 'edit_billing_history' | 'view_audit_logs' | 'view_feedback_inbox' | 'manage_client_galleries';
+export type FeaturePermission =
+    | 'manage_users'
+    | 'manage_packages'
+    | 'delete_packages'
+    | 'create_invoices'
+    | 'edit_invoices'
+    | 'download_invoices'
+    | 'delete_history'
+    | 'view_market_insights'
+    | 'view_billing_history'
+    | 'edit_billing_history'
+    | 'view_audit_logs'
+    | 'view_feedback_inbox'
+    | 'manage_client_galleries';
 export type PermissionEffect = 'grant' | 'deny';
 export type PermissionOverrideMode = PermissionEffect | 'inherit';
 
@@ -38,53 +51,33 @@ export interface UserPermissionResponse {
 interface AuthContextType {
     user: User | null;
     isAuthenticated: boolean;
-    login: (email: string, password: string) => Promise<{ success: boolean; error?: string }>;
+    login: (email: string, password: string) => Promise<{ success: boolean; error?: string; user?: User }>;
     logout: () => Promise<void>;
     hasPermission: (action: Permission) => boolean;
 }
 
 // ============ PERMISSIONS ============
-type Permission =
-    | 'manage_users'
-    | 'manage_packages'
-    | 'delete_packages'
-    | 'create_invoices'
-    | 'edit_invoices'
-    | 'download_invoices'
-    | 'delete_history'
-    | FeaturePermission;
+type Permission = FeaturePermission;
+
+const FEATURE_PERMISSIONS: FeaturePermission[] = [
+    'manage_users',
+    'manage_packages',
+    'delete_packages',
+    'create_invoices',
+    'edit_invoices',
+    'download_invoices',
+    'delete_history',
+    'view_market_insights',
+    'view_billing_history',
+    'edit_billing_history',
+    'view_audit_logs',
+    'view_feedback_inbox',
+    'manage_client_galleries',
+];
 
 const ROLE_PERMISSIONS: Record<UserRole, Permission[]> = {
-    superadmin: [
-        'manage_users',
-        'manage_packages',
-        'delete_packages',
-        'create_invoices',
-        'edit_invoices',
-        'download_invoices',
-        'delete_history',
-        'view_market_insights',
-        'view_billing_history',
-        'edit_billing_history',
-        'view_audit_logs',
-        'view_feedback_inbox',
-        'manage_client_galleries',
-    ],
-    admin: [
-        'manage_users',
-        'manage_packages',
-        'delete_packages',
-        'create_invoices',
-        'edit_invoices',
-        'download_invoices',
-        'delete_history',
-        'view_market_insights',
-        'view_billing_history',
-        'edit_billing_history',
-        'view_audit_logs',
-        'view_feedback_inbox',
-        'manage_client_galleries',
-    ],
+    superadmin: [...FEATURE_PERMISSIONS],
+    admin: [...FEATURE_PERMISSIONS],
     employee: [
         'create_invoices',
         'edit_invoices',
@@ -92,10 +85,42 @@ const ROLE_PERMISSIONS: Record<UserRole, Permission[]> = {
         'view_billing_history',
     ]
 };
-
-const FEATURE_PERMISSIONS: FeaturePermission[] = ['view_market_insights', 'view_billing_history', 'edit_billing_history', 'view_audit_logs', 'view_feedback_inbox', 'manage_client_galleries'];
+export type AppHomeRoute = '/' | '/create' | '/history' | '/analytics' | '/users' | '/activity' | '/feedback-inbox' | '/galleries';
+const HOME_ROUTE_CANDIDATES: Array<{ to: AppHomeRoute; permission: FeaturePermission }> = [
+    { to: '/create', permission: 'create_invoices' },
+    { to: '/', permission: 'manage_packages' },
+    { to: '/history', permission: 'view_billing_history' },
+    { to: '/analytics', permission: 'view_market_insights' },
+    { to: '/users', permission: 'manage_users' },
+    { to: '/activity', permission: 'view_audit_logs' },
+    { to: '/feedback-inbox', permission: 'view_feedback_inbox' },
+    { to: '/galleries', permission: 'manage_client_galleries' },
+];
 const IDLE_TIMEOUT_MS = 30 * 60 * 1000;
 const LAST_ACTIVITY_KEY = 'orbit_last_activity';
+
+export function userHasPermission(user: User | null, action: Permission): boolean {
+    if (!user) return false;
+
+    if (FEATURE_PERMISSIONS.includes(action as FeaturePermission)) {
+        const key = action as FeaturePermission;
+        const override = user.permissionOverrides?.[key];
+        if (override === 'deny') return false;
+        if (override === 'grant') return true;
+        if ((key === 'create_invoices' || key === 'edit_invoices') && user.permissionOverrides?.edit_billing_history) {
+            return user.permissionOverrides.edit_billing_history === 'grant';
+        }
+        if (user.featurePermissions && typeof user.featurePermissions[key] === 'boolean') {
+            return !!user.featurePermissions[key];
+        }
+    }
+
+    return ROLE_PERMISSIONS[user.role].includes(action);
+}
+
+export function resolveWorkspaceHome(user: User | null): AppHomeRoute {
+    return HOME_ROUTE_CANDIDATES.find((item) => userHasPermission(user, item.permission))?.to ?? '/history';
+}
 
 // ============ CONTEXT ============
 const AuthContext = createContext<AuthContextType | null>(null);
@@ -112,12 +137,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         };
     }, []);
 
-    const syncUserPermissionProfile = useCallback(async (targetUser: User | null) => {
-        if (!targetUser) return;
+    const syncUserPermissionProfile = useCallback(async (targetUser: User | null): Promise<User | null> => {
+        if (!targetUser) return null;
         try {
             const res = await fetchWithAuth(`/users/${targetUser.id}/permissions`);
-            if (!res.ok) return;
+            if (!res.ok) return null;
             const data = await res.json() as UserPermissionResponse;
+            const syncedUser = mergeUserPermissionState(targetUser, {
+                featurePermissions: data.featurePermissions,
+                permissionOverrides: data.permissionOverrides,
+            });
             setUser(prev => {
                 const seed = prev && prev.id === targetUser.id ? prev : targetUser;
                 const merged = mergeUserPermissionState(seed, {
@@ -127,8 +156,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
                 localStorage.setItem('orbit_user', JSON.stringify(merged));
                 return merged;
             });
+            return syncedUser;
         } catch (e) {
             console.error('Failed to sync permission profile:', e);
+            return null;
         }
     }, [mergeUserPermissionState]);
 
@@ -201,7 +232,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         return () => window.clearTimeout(timer);
     }, [isReady, user, syncUserPermissionProfile]);
 
-    const login = async (email: string, password: string): Promise<{ success: boolean; error?: string }> => {
+    const login = async (email: string, password: string): Promise<{ success: boolean; error?: string; user?: User }> => {
         try {
             const res = await apiFetch('/auth/login', {
                 method: 'POST',
@@ -218,13 +249,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             // Credentials are stored in HttpOnly cookies by the server.
             saveAuthTokens();
 
-            // Store user
-            setUser(data.user);
-            localStorage.setItem('orbit_user', JSON.stringify(data.user));
+            const authenticatedUser = data.user as User;
+            setUser(authenticatedUser);
+            localStorage.setItem('orbit_user', JSON.stringify(authenticatedUser));
             localStorage.setItem('isAuthenticated', 'true');
-            await syncUserPermissionProfile(data.user as User);
+            const syncedUser = await syncUserPermissionProfile(authenticatedUser);
 
-            return { success: true };
+            return { success: true, user: syncedUser ?? authenticatedUser };
         } catch {
             return { success: false, error: 'Network error' };
         }
@@ -296,21 +327,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         };
     }, [logout, user]);
 
-    const hasPermission = useCallback((action: Permission): boolean => {
-        if (!user) return false;
-
-        if (FEATURE_PERMISSIONS.includes(action as FeaturePermission)) {
-            const key = action as FeaturePermission;
-            const override = user.permissionOverrides?.[key];
-            if (override === 'deny') return false;
-            if (override === 'grant') return true;
-            if (user.featurePermissions && typeof user.featurePermissions[key] === 'boolean') {
-                return !!user.featurePermissions[key];
-            }
-        }
-
-        return ROLE_PERMISSIONS[user.role].includes(action);
-    }, [user]);
+    const hasPermission = useCallback((action: Permission): boolean => userHasPermission(user, action), [user]);
 
     return (
         <AuthContext.Provider value={{

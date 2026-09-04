@@ -1,11 +1,14 @@
 import { Hono } from "hono";
 import { all, insertReturningId, run } from "../db/runtime";
+import { hasFeaturePermission } from "../permissions";
 
 const packagesRouter = new Hono();
 
 packagesRouter.get("/", async (c) => {
     try {
-        const where = c.req.query("all") === "true" ? "" : " WHERE is_active = 1";
+        const includeAll = c.req.query("all") === "true";
+        if (includeAll && !await canManagePackages(c)) return c.json({ error: "Permission denied" }, 403);
+        const where = includeAll ? "" : " WHERE is_active = 1";
         const result = await all(`
             SELECT id, name, price, category, description, is_active as "isActive"
             FROM packages${where}
@@ -17,13 +20,18 @@ packagesRouter.get("/", async (c) => {
     }
 });
 
-function canManagePackages(c: any): boolean {
-    const user = c.get("user") as { role: string } | undefined;
-    return Boolean(user && (user.role === "admin" || user.role === "superadmin"));
+async function canManagePackages(c: any): Promise<boolean> {
+    const user = c.get("user") as { sub: number; role: string } | undefined;
+    return Boolean(user && await hasFeaturePermission(user, "manage_packages"));
+}
+
+async function canDeletePackages(c: any): Promise<boolean> {
+    const user = c.get("user") as { sub: number; role: string } | undefined;
+    return Boolean(user && await hasFeaturePermission(user, "delete_packages"));
 }
 
 packagesRouter.post("/", async (c) => {
-    if (!canManagePackages(c)) return c.json({ error: "Permission denied" }, 403);
+    if (!await canManagePackages(c)) return c.json({ error: "Permission denied" }, 403);
     try {
         const body = await c.req.json();
         const { name, price, category, description } = body;
@@ -39,7 +47,7 @@ packagesRouter.post("/", async (c) => {
 });
 
 packagesRouter.put("/:id", async (c) => {
-    if (!canManagePackages(c)) return c.json({ error: "Permission denied" }, 403);
+    if (!await canManagePackages(c)) return c.json({ error: "Permission denied" }, 403);
     try {
         const body = await c.req.json();
         const { name, price, category, description } = body;
@@ -55,7 +63,7 @@ packagesRouter.put("/:id", async (c) => {
 });
 
 packagesRouter.patch("/:id/status", async (c) => {
-    if (!canManagePackages(c)) return c.json({ error: "Permission denied" }, 403);
+    if (!await canManagePackages(c)) return c.json({ error: "Permission denied" }, 403);
     try {
         const body = await c.req.json();
         const isActive = body.isActive ? 1 : 0;
@@ -68,7 +76,7 @@ packagesRouter.patch("/:id/status", async (c) => {
 });
 
 packagesRouter.delete("/:id", async (c) => {
-    if (!canManagePackages(c)) return c.json({ error: "Permission denied" }, 403);
+    if (!await canDeletePackages(c)) return c.json({ error: "Permission denied" }, 403);
     try {
         await run("DELETE FROM packages WHERE id = ?", [Number(c.req.param("id"))]);
         return c.json({ status: "deleted" });

@@ -299,7 +299,7 @@ invoicesRouter.get("/:id", async (c) => {
 
 invoicesRouter.patch("/:id/archive", async (c) => {
     const user = invoicePermission(c);
-    if (!user || (user.role !== "admin" && user.role !== "superadmin")) return c.json({ error: "Permission denied" }, 403);
+    if (!user || !await hasFeaturePermission(user, "delete_history")) return c.json({ error: "Permission denied" }, 403);
     try {
         const id = Number(c.req.param("id"));
         if (!Number.isInteger(id)) return c.json({ error: "Invalid ID" }, 400);
@@ -312,7 +312,7 @@ invoicesRouter.patch("/:id/archive", async (c) => {
 
 invoicesRouter.post("/batch-delete", async (c) => {
     const user = invoicePermission(c);
-    if (!user || (user.role !== "admin" && user.role !== "superadmin")) return c.json({ error: "Permission denied" }, 403);
+    if (!user || !await hasFeaturePermission(user, "delete_history")) return c.json({ error: "Permission denied" }, 403);
     try {
         const { ids } = await c.req.json();
         if (!Array.isArray(ids) || !ids.length) return c.json({ error: "No IDs provided" }, 400);
@@ -329,7 +329,7 @@ invoicesRouter.post("/batch-delete", async (c) => {
 
 invoicesRouter.delete("/:id", async (c) => {
     const user = invoicePermission(c);
-    if (!user || (user.role !== "admin" && user.role !== "superadmin")) return c.json({ error: "Permission denied" }, 403);
+    if (!user || !await hasFeaturePermission(user, "delete_history")) return c.json({ error: "Permission denied" }, 403);
     try {
         const id = Number(c.req.param("id"));
         const inv = await one<{ invoiceNo: string | null }>("SELECT invoice_no as \"invoiceNo\" FROM invoices WHERE id = ?", [id]);
@@ -348,7 +348,7 @@ function buildInvoiceData(body: any): string {
 
 invoicesRouter.put("/:id", async (c) => {
     const user = invoicePermission(c);
-    if (!user || !await hasFeaturePermission(user, "edit_billing_history")) return c.json({ error: "Permission denied" }, 403);
+    if (!user || !await hasFeaturePermission(user, "edit_invoices")) return c.json({ error: "Permission denied" }, 403);
     try {
         const id = Number(c.req.param("id"));
         if (!Number.isInteger(id)) return c.json({ error: "Invalid ID" }, 400);
@@ -366,7 +366,7 @@ invoicesRouter.put("/:id", async (c) => {
 
 invoicesRouter.post("/", async (c) => {
     const user = invoicePermission(c);
-    if (!user || !await hasFeaturePermission(user, "edit_billing_history")) return c.json({ error: "Permission denied" }, 403);
+    if (!user || !await hasFeaturePermission(user, "create_invoices")) return c.json({ error: "Permission denied" }, 403);
     try {
         const body = await c.req.json();
         const seq = await one<{ prefix: string; padding: number; last_value: number }>("SELECT prefix, padding, last_value FROM sequences WHERE name = 'invoice'");
@@ -384,7 +384,7 @@ invoicesRouter.post("/", async (c) => {
 
 invoicesRouter.post("/:id/proofs", async (c) => {
     const user = invoicePermission(c);
-    if (!user || !await hasFeaturePermission(user, "edit_billing_history")) return c.json({ error: "Permission denied" }, 403);
+    if (!user || !await hasFeaturePermission(user, "edit_invoices")) return c.json({ error: "Permission denied" }, 403);
     try {
         const id = Number(c.req.param("id"));
         if (!Number.isInteger(id)) return c.json({ error: "Invalid ID" }, 400);
@@ -406,7 +406,7 @@ invoicesRouter.post("/:id/proofs", async (c) => {
 
 invoicesRouter.delete("/:id/proofs", async (c) => {
     const user = invoicePermission(c);
-    if (!user || (user.role !== "admin" && user.role !== "superadmin")) return c.json({ error: "Permission denied" }, 403);
+    if (!user || !await hasFeaturePermission(user, "edit_invoices")) return c.json({ error: "Permission denied" }, 403);
     try {
         const id = Number(c.req.param("id"));
         const body = await c.req.json().catch(() => ({}));
@@ -425,7 +425,7 @@ invoicesRouter.delete("/:id/proofs", async (c) => {
 // Kept for clients from older builds that sent the proof in the URL.
 invoicesRouter.delete("/:id/proofs/:filename", async (c) => {
     const user = invoicePermission(c);
-    if (!user || (user.role !== "admin" && user.role !== "superadmin")) return c.json({ error: "Permission denied" }, 403);
+    if (!user || !await hasFeaturePermission(user, "edit_invoices")) return c.json({ error: "Permission denied" }, 403);
     try {
         const id = Number(c.req.param("id"));
         const filename = c.req.param("filename");

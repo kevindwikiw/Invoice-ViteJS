@@ -65,6 +65,9 @@ const PAGE_SIZE = 10;
 const dateFormat = new Intl.DateTimeFormat('en-GB', { dateStyle: 'medium', timeStyle: 'short' });
 const idrFormat = new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 });
 const inputClass = 'h-11 w-full rounded-md border border-[var(--border)] bg-[var(--bg-deep)] px-3.5 text-sm text-[var(--text-primary)] outline-none transition-colors placeholder:text-[var(--text-muted)]/60 hover:border-[var(--text-muted)] focus:border-[var(--accent)] focus:ring-1 focus:ring-[var(--accent)]';
+const unitInputShellClass = 'grid h-11 grid-cols-[minmax(0,1fr)_4.5rem] overflow-hidden rounded-md border border-[var(--border)] bg-[var(--bg-deep)] transition-colors hover:border-[var(--text-muted)] focus-within:border-[var(--accent)] focus-within:ring-1 focus-within:ring-[var(--accent)]';
+const unitInputClass = 'h-full min-w-0 border-0 bg-transparent px-3.5 text-sm tabular-nums text-[var(--text-primary)] outline-none';
+const unitInputSuffixClass = 'flex h-full items-center justify-center border-l border-[var(--border)] px-2 text-[11px] font-medium text-[var(--text-muted)]';
 const publicUrl = (gallery: GallerySummary) => `${window.location.origin}/culling/${gallery.publicKey || gallery.id}`;
 const driveUrl = (gallery: GallerySummary) => (gallery.driveFolderId.startsWith('http') ? gallery.driveFolderId : `https://drive.google.com/drive/folders/${gallery.driveFolderId}`);
 const parseIdr = (value: FormDataEntryValue | null) => Number(String(value || '').replace(/\D/g, '')) || 0;
@@ -230,16 +233,16 @@ function CreateGalleryModal({
             <input name="pin" required minLength={4} inputMode="numeric" autoComplete="off" placeholder="4821" className={inputClass} />
           </Field>
           <Field label="Selection window">
-            <div className="relative">
-              <input name="duration" required type="number" min="1" max="8760" defaultValue="72" className={clsx(inputClass, 'pr-16 tabular-nums')} />
-              <span className="pointer-events-none absolute inset-y-0 right-3.5 flex items-center text-[11px] font-medium text-[var(--text-muted)]">hours</span>
+            <div className={unitInputShellClass}>
+              <input name="duration" required type="number" min="1" max="8760" defaultValue="72" className={unitInputClass} />
+              <span className={unitInputSuffixClass}>hours</span>
             </div>
           </Field>
         </div>
         <Field label="Selection limit">
-          <div className="relative">
-            <input name="limit" required type="number" min="0" max="500" defaultValue="50" className={clsx(inputClass, 'pr-16 tabular-nums')} />
-            <span className="pointer-events-none absolute inset-y-0 right-3.5 flex items-center text-[11px] font-medium text-[var(--text-muted)]">photos</span>
+          <div className={unitInputShellClass}>
+            <input name="limit" required type="number" min="0" max="500" defaultValue="50" className={unitInputClass} />
+            <span className={unitInputSuffixClass}>photos</span>
           </div>
           <span className="block text-[10px] leading-4 text-[var(--text-muted)]">Use 0 for unlimited selections.</span>
         </Field>
@@ -810,9 +813,9 @@ function GalleryDetail({ gallery, close }: { gallery: GallerySummary; close: () 
                   <input name="master-limit" type="number" min="0" max="500" defaultValue={masterLimit || ''} placeholder="Unlimited" className={inputClass} />
                 </Field>
                 <Field label="Selection window">
-                  <div className="relative">
-                    <input name="selection-duration" required type="number" min="1" max="8760" defaultValue={data.selectionDurationHours ?? (data.selectionDurationDays || 3) * 24} className={clsx(inputClass, 'pr-16 tabular-nums')} />
-                    <span className="pointer-events-none absolute inset-y-0 right-3.5 flex items-center text-[11px] font-medium text-[var(--text-muted)]">hours</span>
+                  <div className={unitInputShellClass}>
+                    <input name="selection-duration" required type="number" min="1" max="8760" defaultValue={data.selectionDurationHours ?? (data.selectionDurationDays || 3) * 24} className={unitInputClass} />
+                    <span className={unitInputSuffixClass}>hours</span>
                   </div>
                 </Field>
               </div>

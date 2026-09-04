@@ -4,6 +4,7 @@ import {
     FEATURE_PERMISSION_KEYS,
     getEffectivePermissions,
     getPermissionOverrides,
+    hasFeaturePermission,
     type FeaturePermissionKey,
     type PermissionEffect,
 } from "../permissions";
@@ -48,10 +49,14 @@ function currentUser(c: any): any {
     return c.get("user") || c.get("jwtPayload");
 }
 
+async function canManageUsers(user: any): Promise<boolean> {
+    return Boolean(user && await hasFeaturePermission(user, "manage_users"));
+}
+
 users.get("/activity", async (c) => {
     const user = currentUser(c);
     if (!user) return c.json({ error: "Not authenticated" }, 401);
-    if (user.role !== "admin" && user.role !== "superadmin") return c.json({ error: "Permission denied. Admin only." }, 403);
+    if (!await hasFeaturePermission(user, "view_audit_logs")) return c.json({ error: "Permission denied" }, 403);
 
     try {
         const search = (c.req.query("search") || "").trim().toLowerCase();
@@ -108,7 +113,7 @@ users.get("/activity", async (c) => {
 users.get("/", async (c) => {
     const actor = currentUser(c);
     if (!actor) return c.json({ error: "Not authenticated" }, 401);
-    if (actor.role !== "admin" && actor.role !== "superadmin") return c.json({ error: "Permission denied" }, 403);
+    if (!await canManageUsers(actor)) return c.json({ error: "Permission denied" }, 403);
     try {
         const rows = await all<{ id: number; email: string; name: string; role: string; created_at: string }>(
             actor.role === "admin"
@@ -125,7 +130,7 @@ users.get("/", async (c) => {
 users.post("/", async (c) => {
     const actor = currentUser(c);
     if (!actor) return c.json({ error: "Not authenticated" }, 401);
-    if (actor.role !== "admin" && actor.role !== "superadmin") return c.json({ error: "Permission denied" }, 403);
+    if (!await canManageUsers(actor)) return c.json({ error: "Permission denied" }, 403);
     try {
         const { email, name, password, role } = await c.req.json();
         if (!email || !name || !password) return c.json({ error: "Email, name, and password are required" }, 400);
@@ -144,7 +149,7 @@ users.post("/", async (c) => {
 users.delete("/:id", async (c) => {
     const actor = currentUser(c);
     if (!actor) return c.json({ error: "Not authenticated" }, 401);
-    if (actor.role !== "admin" && actor.role !== "superadmin") return c.json({ error: "Permission denied" }, 403);
+    if (!await canManageUsers(actor)) return c.json({ error: "Permission denied" }, 403);
     try {
         const id = Number(c.req.param("id"));
         if (id === actor.sub) return c.json({ error: "Cannot delete yourself" }, 400);
@@ -162,7 +167,7 @@ users.get("/:id/permissions", async (c) => {
     if (!actor) return c.json({ error: "Not authenticated" }, 401);
     const id = Number(c.req.param("id"));
     if (!Number.isInteger(id)) return c.json({ error: "Invalid user ID" }, 400);
-    const canManage = actor.role === "admin" || actor.role === "superadmin";
+    const canManage = await canManageUsers(actor);
     if (id !== actor.sub && !canManage) return c.json({ error: "Permission denied" }, 403);
     const target = await one<{ id: number; role: string }>("SELECT id, role FROM users WHERE id = ?", [id]);
     if (!target) return c.json({ error: "User not found" }, 404);
@@ -175,7 +180,7 @@ users.get("/:id/permissions", async (c) => {
 users.put("/:id/permissions", async (c) => {
     const actor = currentUser(c);
     if (!actor) return c.json({ error: "Not authenticated" }, 401);
-    if (actor.role !== "admin" && actor.role !== "superadmin") return c.json({ error: "Permission denied" }, 403);
+    if (!await canManageUsers(actor)) return c.json({ error: "Permission denied" }, 403);
     const id = Number(c.req.param("id"));
     if (!Number.isInteger(id)) return c.json({ error: "Invalid user ID" }, 400);
     const target = await one<{ id: number; name: string; email: string; role: string }>("SELECT id, name, email, role FROM users WHERE id = ?", [id]);
@@ -201,7 +206,7 @@ users.put("/:id/permissions", async (c) => {
 users.put("/:id/password", async (c) => {
     const actor = currentUser(c);
     if (!actor) return c.json({ error: "Not authenticated" }, 401);
-    if (actor.role !== "admin" && actor.role !== "superadmin") return c.json({ error: "Permission denied. Admin only." }, 403);
+    if (!await canManageUsers(actor)) return c.json({ error: "Permission denied" }, 403);
     const id = Number(c.req.param("id"));
     if (!Number.isInteger(id)) return c.json({ error: "Invalid user ID" }, 400);
     const target = await one<{ id: number; name: string; email: string; role: string }>("SELECT id, name, email, role FROM users WHERE id = ?", [id]);

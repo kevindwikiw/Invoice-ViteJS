@@ -1,7 +1,7 @@
 import { useState, lazy, Suspense, memo } from 'react';
 import { useNavigate } from '@tanstack/react-router';
 import { Loader2, ArrowRight, AlertCircle, Sun, Moon } from 'lucide-react';
-import { useAuth } from '../context/auth';
+import { resolveWorkspaceHome, useAuth } from '../context/auth';
 import orbitLogo from '../assets/pdf/logo.png';
 import { useDarkMode } from '../hooks/useDarkMode';
 
@@ -42,7 +42,7 @@ export default function Login() {
         const result = await login(email, password);
 
         if (result.success) {
-            navigate({ to: '/' });
+            navigate({ to: resolveWorkspaceHome(result.user ?? null) });
         } else {
             setError(result.error || 'Login failed');
         }

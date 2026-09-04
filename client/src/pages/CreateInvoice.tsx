@@ -1,7 +1,7 @@
 import { useState, useMemo, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate, useSearch } from '@tanstack/react-router';
-import { Save, Eye, Loader2, ChevronRight, Settings } from 'lucide-react';
+import { AlertCircle, Save, Eye, Loader2, ChevronRight, Settings } from 'lucide-react';
 import clsx from 'clsx';
 
 import type { InvoiceItem, PaymentTerm, PackageData } from '../types/invoice';
@@ -32,6 +32,7 @@ const safeNumber = (value: unknown, fallback = 0) => {
 };
 const rupiah = (n: number) => `Rp ${safeNumber(n).toLocaleString('id-ID')} `;
 import { fetchWithAuth } from '../lib/api';
+import { useAuth } from '../context/auth';
 import { useToast } from '../context/ToastContext';
 import { useCreateInvoiceState } from '../hooks/useCreateInvoiceState';
 
@@ -166,8 +167,10 @@ const normalizePaymentTerms = (terms: Partial<PaymentTerm>[]): PaymentTerm[] => 
 
 export default function CreateInvoice() {
     const { addToast } = useToast();
+    const { hasPermission } = useAuth();
     const { editId } = useSearch({ from: '/_layout/create' });
     const isEditMode = !!editId;
+    const canAccessInvoiceForm = hasPermission(isEditMode ? 'edit_invoices' : 'create_invoices');
     const editInvoiceKey = editId == null ? '' : String(editId);
     const [previewDraft] = useState<PreviewDraft | null>(restorePreviewDraft);
     const [showPackageCatalog, setShowPackageCatalog] = useState(false);
@@ -198,7 +201,8 @@ export default function CreateInvoice() {
         },
         staleTime: 5 * 60 * 1000,
         gcTime: 30 * 60 * 1000,
-        refetchOnWindowFocus: false
+        refetchOnWindowFocus: false,
+        enabled: canAccessInvoiceForm,
     });
 
     // Update state when config loads
@@ -318,7 +322,8 @@ export default function CreateInvoice() {
         },
         staleTime: 5 * 60 * 1000,
         gcTime: 30 * 60 * 1000,
-        refetchOnWindowFocus: false
+        refetchOnWindowFocus: false,
+        enabled: canAccessInvoiceForm,
     });
     const packages = useMemo(
         () => Array.isArray(packagesData) ? packagesData : [],
@@ -334,7 +339,8 @@ export default function CreateInvoice() {
             return res.json();
         },
         staleTime: 0,
-        refetchOnWindowFocus: false
+        refetchOnWindowFocus: false,
+        enabled: canAccessInvoiceForm,
     });
 
     useEffect(() => {
@@ -592,7 +598,7 @@ export default function CreateInvoice() {
             if (!res.ok) throw new Error('Failed to fetch invoice');
             return res.json();
         },
-        enabled: isEditMode && !editDataLoaded,
+        enabled: canAccessInvoiceForm && isEditMode && !editDataLoaded,
     });
 
     useEffect(() => {
@@ -791,6 +797,18 @@ export default function CreateInvoice() {
 
     const missingFields: string[] = [];
     if (!clientName) missingFields.push('Client Name');
+
+    if (!canAccessInvoiceForm) {
+        return (
+            <div className="flex min-h-screen items-center justify-center bg-[var(--bg-deep)] px-4">
+                <div className="w-full max-w-md border border-[var(--border)] bg-[var(--bg-card)] px-6 py-12 text-center">
+                    <AlertCircle size={30} className="mx-auto mb-4 text-rose-400" />
+                    <h1 className="font-display text-2xl text-[var(--text-primary)]">Access denied</h1>
+                    <p className="mt-2 text-sm text-[var(--text-muted)]">You do not have permission to {isEditMode ? 'edit invoices' : 'generate invoices'}.</p>
+                </div>
+            </div>
+        );
+    }
 
     if (isLoadingPackages) return <div className="h-screen flex items-center justify-center bg-[var(--bg-deep)]"><Loader2 className="animate-spin text-[var(--accent)]" /></div>;
 

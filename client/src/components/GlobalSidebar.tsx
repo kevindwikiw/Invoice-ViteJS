@@ -1,5 +1,5 @@
 import { memo, useCallback, useEffect, useState, type Dispatch, type SetStateAction } from 'react';
-import { Link, Outlet, useNavigate } from '@tanstack/react-router';
+import { Link, Outlet, useLocation, useNavigate } from '@tanstack/react-router';
 import {
     PlusCircle,
     Package,
@@ -20,7 +20,7 @@ import {
     type LucideIcon,
 } from 'lucide-react';
 import clsx from 'clsx';
-import { useAuth, getRoleLabel, getRoleColor, type FeaturePermission, type User } from '../context/auth';
+import { useAuth, getRoleLabel, getRoleColor, resolveWorkspaceHome, type FeaturePermission, type User } from '../context/auth';
 import OrbitLogo from '../assets/pdf/logo.png';
 import { useDarkMode } from '../hooks/useDarkMode';
 
@@ -50,9 +50,9 @@ const SidebarItem = memo(function SidebarItem({ to, icon: Icon, label, onClick }
     );
 });
 
-const WORKSPACE_ITEMS = [
-    { to: '/create', icon: PlusCircle, label: 'Generate Invoice' },
-    { to: '/', icon: Package, label: 'Package Bundles' },
+const WORKSPACE_ITEMS: Array<{ to: string; icon: LucideIcon; label: string; permission: FeaturePermission }> = [
+    { to: '/create', icon: PlusCircle, label: 'Generate Invoice', permission: 'create_invoices' },
+    { to: '/', icon: Package, label: 'Package Bundles', permission: 'manage_packages' },
 ] as const;
 
 const ANALYTICS_ITEMS: Array<{ to: string; icon: LucideIcon; label: string; permission: FeaturePermission }> = [
@@ -152,15 +152,15 @@ const SidebarNavigation = memo(function SidebarNavigation({
 
                     <nav className="no-scrollbar flex-1 overflow-y-auto py-8">
                         <div className="mb-4 px-5"><span className="text-[10px] font-black uppercase tracking-[0.2em] text-[var(--accent)] opacity-50">Workspace</span></div>
-                        {WORKSPACE_ITEMS.map((item) => <SidebarItem key={item.to} {...item} onClick={closeMobileSidebar} />)}
+                        {WORKSPACE_ITEMS.filter((item) => hasPermission(item.permission)).map((item) => <SidebarItem key={item.to} to={item.to} icon={item.icon} label={item.label} onClick={closeMobileSidebar} />)}
 
                         <div className="mb-4 mt-10 px-5"><span className="text-[10px] font-black uppercase tracking-[0.2em] text-[var(--accent)] opacity-50">Analytics</span></div>
                         {ANALYTICS_ITEMS.filter((item) => hasPermission(item.permission)).map((item) => <SidebarItem key={item.to} to={item.to} icon={item.icon} label={item.label} onClick={closeMobileSidebar} />)}
 
-                        {(user.role === 'admin' || user.role === 'superadmin') && (
+                        {(hasPermission('manage_users') || ADMINISTRATION_ITEMS.some((item) => hasPermission(item.permission))) && (
                             <>
                                 <div className="mb-4 mt-10 px-5"><span className="text-[10px] font-black uppercase tracking-[0.2em] text-[var(--accent)] opacity-50">Administration</span></div>
-                                <SidebarItem to="/users" icon={Users} label="Team & Access" onClick={closeMobileSidebar} />
+                                {hasPermission('manage_users') && <SidebarItem to="/users" icon={Users} label="Team & Access" onClick={closeMobileSidebar} />}
                                 {ADMINISTRATION_ITEMS.filter((item) => hasPermission(item.permission)).map((item) => <SidebarItem key={item.to} to={item.to} icon={item.icon} label={item.label} onClick={closeMobileSidebar} />)}
                             </>
                         )}
@@ -187,6 +187,7 @@ const RouteContent = memo(function RouteContent() {
 function AuthenticatedShell() {
     const { user, logout, hasPermission, isAuthenticated } = useAuth();
     const navigate = useNavigate();
+    const location = useLocation();
     const [isCollapsed, setIsCollapsed] = useState(false);
     const [sidebarOpen, setSidebarOpen] = useState(false);
     const [darkMode, setDarkMode] = useDarkMode();
@@ -194,6 +195,11 @@ function AuthenticatedShell() {
     useEffect(() => {
         if (!isAuthenticated) navigate({ to: '/login' });
     }, [isAuthenticated, navigate]);
+
+    useEffect(() => {
+        if (!isAuthenticated || !user || location.pathname !== '/' || hasPermission('manage_packages')) return;
+        navigate({ to: resolveWorkspaceHome(user), replace: true });
+    }, [hasPermission, isAuthenticated, location.pathname, navigate, user]);
 
     const handleLogout = useCallback(() => {
         void logout().then(() => navigate({ to: '/login' }));

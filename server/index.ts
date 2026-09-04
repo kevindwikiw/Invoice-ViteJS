@@ -10,7 +10,7 @@ import analyticsRoutes from "./routes/analytics";
 import sequencesRoutes from "./routes/sequences";
 import { feedbackAdminRoutes, publicFeedbackRoutes } from "./routes/feedback";
 import { adminGalleriesRouter, publicGalleriesRouter } from "./routes/galleries";
-import { authMiddleware, requireRole } from "./middleware/auth";
+import { authMiddleware } from "./middleware/auth";
 import { galleryPinRateLimiter, loginRateLimiter } from "./middleware/rate-limit";
 import { ensureUserPermissionsTable, hasFeaturePermission } from "./permissions";
 import { databaseDriver, sqlite } from "./db/runtime";
@@ -111,6 +111,35 @@ const allowedOrigins = (
     process.env.ALLOWED_ORIGINS || "http://localhost:5173,http://localhost:3000"
 ).split(",");
 
+const contentSecurityPolicy = [
+    "default-src 'self'",
+    "base-uri 'self'",
+    "object-src 'none'",
+    "frame-ancestors 'self'",
+    "script-src 'self'",
+    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+    "font-src 'self' https://fonts.gstatic.com data:",
+    "img-src 'self' data: blob: https://lh3.googleusercontent.com https://*.googleusercontent.com",
+    "connect-src 'self'",
+    "frame-src 'self' blob:",
+    "worker-src 'self' blob:",
+    "form-action 'self'",
+    "upgrade-insecure-requests",
+].join("; ");
+
+app.use("/*", async (c, next) => {
+    c.header("Content-Security-Policy", contentSecurityPolicy);
+    c.header("X-Content-Type-Options", "nosniff");
+    c.header("Referrer-Policy", "strict-origin-when-cross-origin");
+    c.header("Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=(), usb=(), fullscreen=(self)");
+    c.header("X-Frame-Options", "SAMEORIGIN");
+    c.header("X-XSS-Protection", "0");
+    if (process.env.NODE_ENV === "production") {
+        c.header("Strict-Transport-Security", "max-age=31536000; includeSubDomains; preload");
+    }
+    await next();
+});
+
 app.use("/*", cors({
     origin: (origin) => {
         if (!origin) return null;
@@ -154,8 +183,6 @@ app.route("/api/config", configRoutes);
 app.route("/api/analytics", analyticsRoutes);
 app.route("/api/sequences", sequencesRoutes);
 app.route("/api/galleries", adminGalleriesRouter);
-app.use("/api/feedback", requireRole("admin", "superadmin"));
-app.use("/api/feedback/*", requireRole("admin", "superadmin"));
 app.use("/api/feedback", async (c, next) => {
     const user = c.get("user");
     if (!await hasFeaturePermission(user, "view_feedback_inbox")) {

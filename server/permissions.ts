@@ -2,6 +2,13 @@ import type { Database } from "bun:sqlite";
 import { all } from "./db/runtime";
 
 export const FEATURE_PERMISSION_KEYS = [
+    "manage_users",
+    "manage_packages",
+    "delete_packages",
+    "create_invoices",
+    "edit_invoices",
+    "download_invoices",
+    "delete_history",
     "view_market_insights",
     "view_billing_history",
     "edit_billing_history",
@@ -18,7 +25,7 @@ type RoleName = "superadmin" | "admin" | "employee";
 const ROLE_DEFAULT_PERMISSIONS: Record<RoleName, FeaturePermissionKey[]> = {
     superadmin: [...FEATURE_PERMISSION_KEYS],
     admin: [...FEATURE_PERMISSION_KEYS],
-    employee: ["view_billing_history"],
+    employee: ["create_invoices", "edit_invoices", "download_invoices", "view_billing_history"],
 };
 
 export function ensureUserPermissionsTable(sqlite: Database) {
@@ -74,6 +81,9 @@ export function evaluatePermission(
     const override = overrides[key];
     if (override === "deny") return false;
     if (override === "grant") return true;
+    if ((key === "create_invoices" || key === "edit_invoices") && overrides.edit_billing_history) {
+        return overrides.edit_billing_history === "grant";
+    }
     return getRoleDefaultPermissions(role).includes(key);
 }
 

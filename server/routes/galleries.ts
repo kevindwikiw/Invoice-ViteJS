@@ -1,6 +1,6 @@
 import { Hono, type Context } from "hono";
 import { Buffer } from "node:buffer";
-import { createHmac, randomUUID } from "node:crypto";
+import { createHmac } from "node:crypto";
 import writeExcelFile from "write-excel-file/node";
 import { galleryAll, galleryBatch, galleryInsertReturningId, galleryOne, galleryRun } from "../db/galleries";
 import { fetchDriveFile, getDrivePhotoMetadata, listDrivePhotos } from "../lib/google-drive";
@@ -14,6 +14,7 @@ import {
 } from "../lib/gallery-deadline";
 import { getGallerySettings, invalidateGallerySettingsCache } from "../lib/gallery-settings-cache";
 import { resetGalleryPinAttempts } from "../middleware/rate-limit";
+import { hasFeaturePermission } from "../permissions";
 
 type Env = {
     Variables: {
@@ -31,6 +32,7 @@ const GALLERY_IMAGE_CACHE_CONTROL = `private, max-age=${GALLERY_TOKEN_TTL_SECOND
 const DEFAULT_ADDON_UNIT_PRICE = 10_000;
 const DEFAULT_CONTACT_MESSAGE = "Halo Kak Admin Orbit\nSaya ingin meminta bantuan untuk membuka client gallery saya yaa.\n\nIni URL saya: {{gallery_url}}\nSaya client dari: {{gallery_title}}\n\nTerima kasih, Kak!";
 const DEFAULT_REQUEST_MORE_MESSAGE = "Halo Kak Admin Orbit\nSaya ingin meminta tambahan edited photos.\n\nIni URL saya: {{gallery_url}}\nSaya client dari: {{gallery_title}}\nPilihan saat ini: {{selected_count}} foto\nSaya ingin menambah: {{requested_count}} foto\nPromo: {{promo_label}}\nEstimasi biaya: {{estimated_price}}";
+const PUBLIC_KEY_TIME_ZONE = "Asia/Jakarta";
 
 type AuthUser = { sub: number; email: string; name: string; role: string };
 type GalleryStatus = "draft" | "open" | "closed";
@@ -131,15 +133,42 @@ function getUser(c: Context<Env>): AuthUser | undefined {
     return c.get("user") || c.get("jwtPayload");
 }
 
-function requireGalleryAdmin(c: Context<Env>): Response | null {
+async function requireGalleryAdmin(c: Context<Env>): Promise<Response | null> {
     const user = getUser(c);
     if (!user) return c.json({ error: "Not Authenticated" }, 401);
-    if (user.role !== "admin" && user.role !== "superadmin") return c.json({ error: "Permission Denied" }, 403);
+    if (!await hasFeaturePermission(user, "manage_client_galleries")) return c.json({ error: "Permission Denied" }, 403);
     return null;
 }
 
 function normalizeStatus(value: unknown, fallback: GalleryStatus = "draft"): GalleryStatus {
     return value === "open" || value === "closed" || value === "draft" ? value : fallback;
+}
+
+function galleryPublicSlug(title: string): string {
+    const slug = title
+        .normalize("NFKD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/^-+|-+$/g, "")
+        .slice(0, 48)
+        .replace(/-+$/g, "");
+    return slug || "gallery";
+}
+
+function galleryPublicDateStamp(date = new Date()): string {
+    const parts = new Intl.DateTimeFormat("en-US", {
+        timeZone: PUBLIC_KEY_TIME_ZONE,
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+    }).formatToParts(date);
+    const value = (type: string) => parts.find((part) => part.type === type)?.value || "";
+    return `${value("year")}${value("month")}${value("day")}`;
+}
+
+function createGalleryPublicKey(title: string): string {
+    return `${galleryPublicSlug(title)}-${galleryPublicDateStamp()}`;
 }
 
 function normalizeAddonStatus(value: unknown): "unpaid" | "paid" {
@@ -426,7 +455,7 @@ function photoFromImageToken(c: Context<Env>, fileId: string): PhotoRow | null {
 }
 
 adminGalleriesRouter.get("/", async (c) => {
-    const denied = requireGalleryAdmin(c);
+    const denied = await requireGalleryAdmin(c);
     if (denied) return denied;
 
     const pageSize = Math.min(50, Math.max(1, Number(c.req.query("pageSize") || 10) || 10));
@@ -476,7 +505,7 @@ adminGalleriesRouter.get("/", async (c) => {
 });
 
 adminGalleriesRouter.get("/settings/contact", async (c) => {
-    const denied = requireGalleryAdmin(c);
+    const denied = await requireGalleryAdmin(c);
     if (denied) return denied;
     const settings = await getGallerySettings();
     const value = settings.contact_whatsapp_url || "";
@@ -484,7 +513,7 @@ adminGalleriesRouter.get("/settings/contact", async (c) => {
 });
 
 adminGalleriesRouter.patch("/settings/contact", async (c) => {
-    const denied = requireGalleryAdmin(c);
+    const denied = await requireGalleryAdmin(c);
     if (denied) return denied;
     const body = await c.req.json().catch(() => ({}));
     const phone = normalizeWhatsappNumber(body.contactWhatsappUrl);
@@ -501,7 +530,7 @@ adminGalleriesRouter.patch("/settings/contact", async (c) => {
 });
 
 adminGalleriesRouter.get("/packages", async (c) => {
-    const denied = requireGalleryAdmin(c); if (denied) return denied;
+    const denied = await requireGalleryAdmin(c); if (denied) return denied;
     const pageSize = Math.min(10, Math.max(1, Number(c.req.query("pageSize") || 10)));
     const page = Math.max(1, Number(c.req.query("page") || 1));
     const total = Number((await galleryOne<{ total: number }>("SELECT COUNT(*) as total FROM edit_packages"))?.total || 0);
@@ -510,7 +539,7 @@ adminGalleriesRouter.get("/packages", async (c) => {
 });
 
 adminGalleriesRouter.post("/packages", async (c) => {
-    const denied = requireGalleryAdmin(c); if (denied) return denied;
+    const denied = await requireGalleryAdmin(c); if (denied) return denied;
     const body = await c.req.json().catch(() => ({}));
     const name = String(body.name || "").trim(); const count = Number(body.includedPhotoCount); const price = Number(body.price);
     if (!name || !Number.isInteger(count) || count < 1 || count > 500 || !Number.isFinite(price) || price < 0) return c.json({ error: "Invalid package details." }, 400);
@@ -519,7 +548,7 @@ adminGalleriesRouter.post("/packages", async (c) => {
 });
 
 adminGalleriesRouter.patch("/packages/:id", async (c) => {
-    const denied = requireGalleryAdmin(c); if (denied) return denied;
+    const denied = await requireGalleryAdmin(c); if (denied) return denied;
     const id = Number(c.req.param("id"));
     const existing = await galleryOne<{ id: number; name: string; includedPhotoCount: number; price: number; active: number }>("SELECT id, name, included_photo_count as includedPhotoCount, price, active FROM edit_packages WHERE id = ?", [id]);
     if (!existing) return c.json({ error: "Package not found." }, 404);
@@ -534,7 +563,7 @@ adminGalleriesRouter.patch("/packages/:id", async (c) => {
 });
 
 adminGalleriesRouter.delete("/packages/:id", async (c) => {
-    const denied = requireGalleryAdmin(c); if (denied) return denied;
+    const denied = await requireGalleryAdmin(c); if (denied) return denied;
     const id = Number(c.req.param("id"));
     const used = await galleryOne<{ total: number }>("SELECT COUNT(*) as total FROM gallery_edit_requests WHERE package_id = ?", [id]);
     if (Number(used?.total || 0) > 0) return c.json({ error: "Package is already used by an add-on request." }, 409);
@@ -543,14 +572,14 @@ adminGalleriesRouter.delete("/packages/:id", async (c) => {
 });
 
 adminGalleriesRouter.get("/:id/addon", async (c) => {
-    const denied = requireGalleryAdmin(c); if (denied) return denied;
+    const denied = await requireGalleryAdmin(c); if (denied) return denied;
     const id = Number(c.req.param("id"));
     const addon = await galleryOne("SELECT additional_selection_limit as additionalLimit, edit_addon_status as status, edit_addon_pricing_mode as pricingMode, edit_addon_price as price, edit_addon_package_id as packageId FROM galleries WHERE id = ?", [id]);
     if (!addon) return c.json({ error: "Gallery not found" }, 404); return c.json({ addon });
 });
 
 adminGalleriesRouter.get("/addon-requests", async (c) => {
-    const denied = requireGalleryAdmin(c); if (denied) return denied;
+    const denied = await requireGalleryAdmin(c); if (denied) return denied;
     const pageSize = Math.min(10, Math.max(1, Number(c.req.query("pageSize") || 10))); const page = Math.max(1, Number(c.req.query("page") || 1));
     const total = Number((await galleryOne<{ total: number }>("SELECT COUNT(*) as total FROM gallery_edit_requests"))?.total || 0);
     const requests = await galleryAll("SELECT r.id, r.gallery_id as galleryId, g.title as galleryTitle, r.requested_additional_count as requestedAdditionalCount, r.pricing_mode as pricingMode, r.package_id as packageId, r.unit_price as unitPrice, r.quoted_total as quotedTotal, r.status, r.client_note as clientNote, r.admin_note as adminNote, r.created_at as createdAt, r.updated_at as updatedAt FROM gallery_edit_requests r JOIN galleries g ON g.id = r.gallery_id ORDER BY r.id DESC LIMIT ? OFFSET ?", [pageSize, (page - 1) * pageSize]);
@@ -558,7 +587,7 @@ adminGalleriesRouter.get("/addon-requests", async (c) => {
 });
 
 adminGalleriesRouter.post("/:id/addon", async (c) => {
-    const denied = requireGalleryAdmin(c); if (denied) return denied;
+    const denied = await requireGalleryAdmin(c); if (denied) return denied;
     const galleryId = Number(c.req.param("id"));
     const body = await c.req.json().catch(() => ({}));
     const count = Number(body.requestedAdditionalCount ?? body.additionalSelectionLimit);
@@ -573,7 +602,7 @@ adminGalleriesRouter.post("/:id/addon", async (c) => {
 });
 
 adminGalleriesRouter.patch("/addon-requests/:requestId", async (c) => {
-    const denied = requireGalleryAdmin(c); if (denied) return denied;
+    const denied = await requireGalleryAdmin(c); if (denied) return denied;
     const id = Number(c.req.param("requestId"));
     const existing = await galleryOne<any>("SELECT * FROM gallery_edit_requests WHERE id = ?", [id]);
     if (!existing) return c.json({ error: "Add-on request not found." }, 404);
@@ -588,7 +617,7 @@ adminGalleriesRouter.patch("/addon-requests/:requestId", async (c) => {
 });
 
 adminGalleriesRouter.post("/:id/addon/approve", async (c) => {
-    const denied = requireGalleryAdmin(c); if (denied) return denied;
+    const denied = await requireGalleryAdmin(c); if (denied) return denied;
     const galleryId = Number(c.req.param("id"));
     const body = await c.req.json().catch(() => ({}));
     const requestId = Number(body.requestId);
@@ -600,7 +629,7 @@ adminGalleriesRouter.post("/:id/addon/approve", async (c) => {
 });
 
 adminGalleriesRouter.post("/", async (c) => {
-    const denied = requireGalleryAdmin(c);
+    const denied = await requireGalleryAdmin(c);
     if (denied) return denied;
 
     const body = await c.req.json().catch(() => ({}));
@@ -618,7 +647,7 @@ adminGalleriesRouter.post("/", async (c) => {
     }
 
     const pinHash = await Bun.password.hash(pin, { algorithm: "bcrypt", cost: 10 });
-    const publicKey = randomUUID().replaceAll("-", "");
+    const publicKey = createGalleryPublicKey(title);
     const selectionDeadlineAt = selectionDeadlineFromNow(selectionDurationHours);
     const id = await galleryInsertReturningId(
         "INSERT INTO galleries (title, public_key, max_selections, edit_addon_pricing_mode, edit_addon_price, drive_folder_id, pin_hash, selection_duration_days, selection_duration_hours, selection_deadline_at, status) VALUES (?, ?, ?, 'per_photo', ?, ?, ?, ?, ?, ?, ?)",
@@ -633,7 +662,7 @@ adminGalleriesRouter.post("/", async (c) => {
 });
 
 adminGalleriesRouter.get("/:id", async (c) => {
-    const denied = requireGalleryAdmin(c);
+    const denied = await requireGalleryAdmin(c);
     if (denied) return denied;
 
     const id = Number(c.req.param("id"));
@@ -663,7 +692,7 @@ adminGalleriesRouter.get("/:id", async (c) => {
 });
 
 adminGalleriesRouter.post("/:id/reset-pin-lock", async (c) => {
-    const denied = requireGalleryAdmin(c);
+    const denied = await requireGalleryAdmin(c);
     if (denied) return denied;
     const id = Number(c.req.param("id"));
     if (!Number.isInteger(id)) return c.json({ error: "Invalid gallery ID" }, 400);
@@ -674,7 +703,7 @@ adminGalleriesRouter.post("/:id/reset-pin-lock", async (c) => {
 });
 
 adminGalleriesRouter.patch("/:id", async (c) => {
-    const denied = requireGalleryAdmin(c);
+    const denied = await requireGalleryAdmin(c);
     if (denied) return denied;
 
     const id = Number(c.req.param("id"));
@@ -733,7 +762,7 @@ adminGalleriesRouter.patch("/:id", async (c) => {
 });
 
 adminGalleriesRouter.delete("/:id", async (c) => {
-    const denied = requireGalleryAdmin(c);
+    const denied = await requireGalleryAdmin(c);
     if (denied) return denied;
 
     const id = Number(c.req.param("id"));
@@ -750,7 +779,7 @@ adminGalleriesRouter.delete("/:id", async (c) => {
 });
 
 adminGalleriesRouter.post("/:id/sync", async (c) => {
-    const denied = requireGalleryAdmin(c);
+    const denied = await requireGalleryAdmin(c);
     if (denied) return denied;
 
     const id = Number(c.req.param("id"));
@@ -853,7 +882,7 @@ adminGalleriesRouter.post("/:id/sync", async (c) => {
 });
 
 adminGalleriesRouter.get("/:id/export.csv", async (c) => {
-    const denied = requireGalleryAdmin(c);
+    const denied = await requireGalleryAdmin(c);
     if (denied) return denied;
 
     const id = Number(c.req.param("id"));
@@ -878,7 +907,7 @@ adminGalleriesRouter.get("/:id/export.csv", async (c) => {
 });
 
 adminGalleriesRouter.get("/:id/export.xlsx", async (c) => {
-    const denied = requireGalleryAdmin(c);
+    const denied = await requireGalleryAdmin(c);
     if (denied) return denied;
 
     const id = Number(c.req.param("id"));

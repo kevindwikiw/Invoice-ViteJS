@@ -125,7 +125,7 @@ async function fetchJSON<T>(url: string, init?: RequestInit): Promise<T> {
 }
 
 // ============ HOOKS ============
-function usePackages() {
+function usePackages(enabled: boolean) {
     const queryClient = useQueryClient();
     const { addToast } = useToast();
 
@@ -133,6 +133,7 @@ function usePackages() {
         queryKey: ['packages', 'all'],
         queryFn: () => fetchJSON<PackageData[]>('/packages?all=true'),
         staleTime: 60_000,
+        enabled,
     });
     const invalidate = () => queryClient.invalidateQueries({ queryKey: ['packages'] });
 
@@ -195,8 +196,9 @@ export default function PackagesPage() {
     // RBAC
     const { hasPermission } = useAuth();
     const canManagePackages = hasPermission('manage_packages');
+    const canDeletePackages = hasPermission('delete_packages');
 
-    const { query, create, update, remove, toggle } = usePackages();
+    const { query, create, update, remove, toggle } = usePackages(canManagePackages);
     const packages = useMemo(() => Array.isArray(query.data) ? query.data : [], [query.data]);
     const isLoading = query.isLoading;
 
@@ -237,6 +239,18 @@ export default function PackagesPage() {
         document.addEventListener('mousedown', handleClickOutside);
         return () => document.removeEventListener('mousedown', handleClickOutside);
     }, []);
+
+    if (!canManagePackages) {
+        return (
+            <div className={`${PAGE_SHELL_CLASS} flex items-center justify-center text-[var(--text-primary)]`}>
+                <div className="w-full max-w-md border border-[var(--border)] bg-[var(--bg-card)] px-6 py-12 text-center">
+                    <Package size={30} className="mx-auto mb-4 text-[var(--text-muted)]" />
+                    <h1 className="font-display text-2xl text-[var(--text-primary)]">Access denied</h1>
+                    <p className="mt-2 text-sm text-[var(--text-muted)]">You do not have permission to manage package bundles.</p>
+                </div>
+            </div>
+        );
+    }
 
     return (
         <div className={`${PAGE_SHELL_CLASS} text-[var(--text-primary)]`}>
@@ -436,6 +450,7 @@ export default function PackagesPage() {
                             search={search}
                             onClearSearch={() => setSearch('')}
                             onAdd={() => setModal({ mode: 'add', cat: activeTab })}
+                            canAdd={canManagePackages}
                         />
                     ) : (
                         <>
@@ -443,6 +458,7 @@ export default function PackagesPage() {
                                 {paginatedItems.map((pkg) => (
                                     <PricingCard key={pkg.id} pkg={pkg}
                                         canManage={canManagePackages}
+                                        canDelete={canDeletePackages}
                                         onEdit={() => setModal({ mode: 'edit', pkg })}
                                         onDelete={() => setModal({ mode: 'delete', pkg })}
                                         onToggle={() => toggle.mutate({ id: pkg.id, isActive: pkg.isActive === 0 })}
@@ -472,7 +488,7 @@ export default function PackagesPage() {
     );
 }
 
-const PricingCard = memo(function PricingCard({ pkg, canManage, onEdit, onDelete, onToggle }: { pkg: PackageData; canManage?: boolean; onEdit?: () => void; onDelete?: () => void; onToggle?: () => void }) {
+const PricingCard = memo(function PricingCard({ pkg, canManage, canDelete, onEdit, onDelete, onToggle }: { pkg: PackageData; canManage?: boolean; canDelete?: boolean; onEdit?: () => void; onDelete?: () => void; onToggle?: () => void }) {
     const isActive = pkg.isActive === 1;
     const lines = useMemo(() => pkg.description.split('\n').filter(Boolean), [pkg.description]);
     const formattedTitle = useMemo(() => pkg.name.split(' ').map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase()).join(' '), [pkg.name]);
@@ -553,7 +569,7 @@ const PricingCard = memo(function PricingCard({ pkg, canManage, onEdit, onDelete
                             <button onClick={onToggle} className="p-2.5 bg-[var(--bg-elevated)] border border-[var(--border)] hover:bg-[var(--bg-hover)] text-[var(--text-muted)] hover:text-[var(--text-primary)] rounded-lg transition-colors" title={isActive ? 'Archive' : 'Restore'}>
                                 {isActive ? <Archive size={14} /> : <RotateCcw size={14} />}
                             </button>
-                            {!isActive && (
+                            {!isActive && canDelete && (
                                 <button onClick={onDelete} className="p-2.5 bg-red-500/5 border border-red-500/20 text-red-500 hover:bg-red-500 hover:text-white rounded-lg transition-colors" title="Delete Permanent">
                                     <Trash2 size={14} />
                                 </button>

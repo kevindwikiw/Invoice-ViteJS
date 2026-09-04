@@ -216,12 +216,14 @@ export default function InvoiceHistory() {
     const queryClient = useQueryClient()
     const navigate = useNavigate()
     const { addToast } = useToast()
-    const { hasPermission } = useAuth()
+    const { user, hasPermission } = useAuth()
 
     const canDelete = hasPermission('delete_history')
     const canViewHistory = hasPermission('view_billing_history')
-    const canEditHistory = hasPermission('edit_billing_history')
+    const canEditHistory = hasPermission('edit_invoices')
+    const canCreateInvoice = hasPermission('create_invoices')
     const canDownload = hasPermission('download_invoices')
+    const canViewRevenue = user?.role === 'admin' || user?.role === 'superadmin'
 
     useEffect(() => {
         const handleClickOutside = (e: MouseEvent) => {
@@ -523,7 +525,7 @@ export default function InvoiceHistory() {
                             </div>
                         </div>
 
-                        <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 shrink-0">
+                        {canCreateInvoice && <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 shrink-0">
                             <button
                                 onClick={() => navigate({ to: '/create', search: { editId: undefined } })}
                                 className="bg-[var(--accent)] text-[var(--bg-deep)] px-6 py-2.5 rounded-lg label-xs font-bold hover:opacity-90 active:scale-[0.98] transition-colors flex items-center justify-center gap-2"
@@ -531,12 +533,12 @@ export default function InvoiceHistory() {
                                 <Plus size={16} />
                                 Create Invoice
                             </button>
-                        </div>
+                        </div>}
                     </div>
                 </div>
 
                 {/* Billing Summary */}
-                <div className="grid grid-cols-2 gap-y-5 rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)]/30 px-5 py-5 sm:grid-cols-3 xl:grid-cols-[130px_130px_130px_150px_minmax(230px,1fr)]">
+                <div className={clsx('grid grid-cols-2 gap-y-5 rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)]/30 px-5 py-5 sm:grid-cols-4', canViewRevenue && 'xl:grid-cols-[130px_130px_130px_150px_minmax(230px,1fr)]')}>
                     {[
                         { label: 'Total', value: stats?.total ?? 0, valueClass: 'text-[var(--text-primary)]' },
                         { label: 'Lunas', value: stats?.lunas ?? 0, valueClass: 'text-emerald-500' },
@@ -552,14 +554,14 @@ export default function InvoiceHistory() {
                             </div>
                         </div>
                     ))}
-                    <div className="col-span-2 min-w-0 border-l border-[var(--border)] px-5 sm:col-span-2 xl:col-span-1">
+                    {canViewRevenue && <div className="col-span-2 min-w-0 border-l border-[var(--border)] px-5 sm:col-span-2 xl:col-span-1">
                         <div className="label-xs text-[var(--text-muted)]">
                             Est. Revenue
                         </div>
                         <div className="mt-1 truncate font-display text-2xl font-medium tracking-tight tabular-nums text-[var(--accent)]">
                             {statsLoading ? '—' : rupiah(stats?.totalRevenue ?? 0)}
                         </div>
-                    </div>
+                    </div>}
                 </div>
 
                 {/* Selection Actions Bar */}
