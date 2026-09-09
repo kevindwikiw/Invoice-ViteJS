@@ -26,6 +26,12 @@ export interface GallerySummary {
     selectionDeadlineAt?: string | null;
     isExpired?: boolean;
     serverTime?: string;
+    tutorialBeforeDriveFileId?: string | null;
+    tutorialAfterDriveFileId?: string | null;
+    tutorialBefore2DriveFileId?: string | null;
+    tutorialAfter2DriveFileId?: string | null;
+    tutorialBefore3DriveFileId?: string | null;
+    tutorialAfter3DriveFileId?: string | null;
     contactWhatsappUrl?: string | null;
     maxSelections?: number;
     additionalLimit?: number;
@@ -104,6 +110,7 @@ export interface PublicGallery {
         status?: string;
         discountRules?: DiscountRule[]; // <-- Aturan diskon dinamis dari backend
     };
+    tutorialSampleSlots?: number[];
 }
 
 export interface PublicGalleryPhotos {

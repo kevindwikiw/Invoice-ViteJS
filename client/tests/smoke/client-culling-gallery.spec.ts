@@ -35,6 +35,7 @@ function gallery(deadline: string, serverTime = '2026-09-02T03:00:00.000Z') {
         maxSelections: 30,
         additionalLimit: 0,
         addon: { enabled: false, additionalLimit: 0, unitPrice: 10000, status: 'none' },
+        tutorialSampleSlots: [1, 2, 3],
     };
 }
 
@@ -117,10 +118,10 @@ test('opens photo 101 on page 2 by driveFileId and keeps the full frame above th
             json: {
                 gallery: gallery('2026-09-05T03:00:00.000Z'),
                 photos: requestedPage === 1
-                    ? Array.from({ length: 50 }, (_, index) => photo(index + 1))
-                    : Array.from({ length: 51 }, (_, index) => photo(index + 51)),
+                    ? Array.from({ length: 54 }, (_, index) => photo(index + 1))
+                    : Array.from({ length: 47 }, (_, index) => photo(index + 55)),
                 page: requestedPage,
-                pageSize: 50,
+                pageSize: 54,
                 total: 101,
                 totalPages: 2,
                 selectedDriveFileIds: [],
@@ -137,7 +138,7 @@ test('opens photo 101 on page 2 by driveFileId and keeps the full frame above th
     });
 
     await page.goto(`/culling/${galleryId}`);
-    await expect(page.getByRole('button', { name: /^Open Full Frame Test Gallery/ })).toHaveCount(50);
+    await expect(page.getByRole('button', { name: /^Open Full Frame Test Gallery/ })).toHaveCount(54);
     await expectMobileGalleryViewport(page, 375, 667);
     await expectMobileGalleryViewport(page, 390, 844);
     await expectMobileGalleryViewport(page, 414, 896);
@@ -147,7 +148,7 @@ test('opens photo 101 on page 2 by driveFileId and keeps the full frame above th
     await nextPage.click();
     await expect.poll(() => secondPageRequests).toBeGreaterThan(0);
     await expect(page.getByText('Page 2 of 2')).toBeVisible();
-    await expect(page.getByRole('button', { name: /^Open Full Frame Test Gallery/ })).toHaveCount(51);
+    await expect(page.getByRole('button', { name: /^Open Full Frame Test Gallery/ })).toHaveCount(47);
 
     const lastPhoto = page.getByRole('button', { name: 'Open Full Frame Test Gallery 101' });
     await lastPhoto.scrollIntoViewIfNeeded();
@@ -173,6 +174,52 @@ test('opens photo 101 on page 2 by driveFileId and keeps the full frame above th
     await expectLightboxFrame(page, 1);
     await page.setViewportSize({ width: 1440, height: 900 });
     await expectLightboxFrame(page, 1);
+});
+
+test('continues the lightbox across page boundaries', async ({ page }) => {
+    const id = 'cross-page-lightbox-gallery';
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await installSession(page, id);
+
+    const requestedPageSizes: string[] = [];
+    await page.route(`**/api/public/galleries/${id}/contact`, (route) => route.fulfill({ json: {} }));
+    await page.route(`**/api/public/galleries/${id}/photos?*`, async (route) => {
+        const requestUrl = new URL(route.request().url());
+        const requestedPage = Number(requestUrl.searchParams.get('page') || 1);
+        requestedPageSizes.push(requestUrl.searchParams.get('pageSize') || '');
+        await route.fulfill({
+            json: {
+                gallery: gallery('2026-09-05T03:00:00.000Z'),
+                photos: requestedPage === 1
+                    ? Array.from({ length: 54 }, (_, index) => photo(index + 1))
+                    : Array.from({ length: 47 }, (_, index) => photo(index + 55)),
+                page: requestedPage,
+                pageSize: 54,
+                total: 101,
+                totalPages: 2,
+                selectedDriveFileIds: [],
+                selectedPhotos: [],
+            },
+        });
+    });
+    await page.route(`**/api/public/galleries/${id}/photos/*/thumbnail?*`, (route) => fulfillImage(route, 320, 320));
+    await page.route(`**/api/public/galleries/${id}/photos/*/preview?*`, (route) => fulfillImage(route, 1600, 1067));
+
+    await page.goto(`/culling/${id}`);
+    await expect.poll(() => requestedPageSizes[0]).toBe('54');
+    await page.getByRole('button', { name: 'Open Full Frame Test Gallery 54' }).click();
+    await expect(page.getByTestId('gallery-lightbox-footer').getByText('Full Frame Test Gallery 54', { exact: true })).toBeVisible();
+
+    await page.getByRole('button', { name: 'Next photo' }).click();
+    await expect(page.getByTestId('gallery-lightbox-footer').getByText('Full Frame Test Gallery 55', { exact: true })).toBeVisible();
+    await expect(page.getByTestId('gallery-lightbox-footer').getByText('55 / 101')).toBeVisible();
+
+    await page.keyboard.press('ArrowLeft');
+    await expect(page.getByTestId('gallery-lightbox-footer').getByText('Full Frame Test Gallery 54', { exact: true })).toBeVisible();
+    await expect(page.getByTestId('gallery-lightbox-footer').getByText('54 / 101')).toBeVisible();
+
+    await page.keyboard.press('ArrowRight');
+    await expect(page.getByTestId('gallery-lightbox-footer').getByText('Full Frame Test Gallery 55', { exact: true })).toBeVisible();
 });
 
 test('locks an open gallery when its countdown reaches zero', async ({ page }) => {
@@ -214,7 +261,7 @@ test('keeps long Google Drive filenames below the image and uses a short client 
             gallery: galleryWithTitle('Kevin Prewedding'),
             photos: [{ ...photo(1), filename: longName }],
             page: 1,
-            pageSize: 50,
+            pageSize: 54,
             total: 1,
             totalPages: 1,
             selectedDriveFileIds: [],
@@ -256,7 +303,7 @@ test('keeps draft selections through reload and clears the unsaved status after 
             gallery: gallery('2026-09-05T03:00:00.000Z'),
             photos: [photo(1), photo(2)],
             page: 1,
-            pageSize: 50,
+            pageSize: 54,
             total: 2,
             totalPages: 1,
             selectedDriveFileIds: [],
@@ -280,4 +327,134 @@ test('keeps draft selections through reload and clears the unsaved status after 
     await page.getByRole('button', { name: 'Submit 1' }).click();
     await expect(page.getByText('Selection saved. 1 filenames submitted.')).toBeVisible();
     await expect(page.getByText('Not submitted')).toHaveCount(0);
+});
+
+test('returns to the PIN gate when an admin save invalidates the public token', async ({ page }) => {
+    const id = 'stale-token-gallery';
+    await installSession(page, id);
+
+    await page.route(`**/api/public/galleries/${id}/photos?*`, (route) => route.fulfill({
+        status: 401,
+        contentType: 'application/json',
+        body: JSON.stringify({ error: 'Gallery access expired. Enter the PIN again.' }),
+    }));
+
+    await page.goto(`/culling/${id}`);
+    await expect(page.getByRole('heading', { name: 'Enter PIN' })).toBeVisible();
+    await expect(page.evaluate((galleryKey) => localStorage.getItem(`orbit_culling_token_${galleryKey}`), id)).resolves.toBeNull();
+});
+
+test('shows the before and edited tutorial slider with pointer and keyboard controls', async ({ page }) => {
+    const id = 'tutorial-slider-gallery';
+    await page.setViewportSize({ width: 390, height: 844 });
+    await installSession(page, id);
+
+    await page.route(`**/api/public/galleries/${id}/contact`, (route) => route.fulfill({ json: {} }));
+    await page.route(`**/api/public/galleries/${id}/photos?*`, (route) => route.fulfill({
+        json: {
+            gallery: gallery('2026-09-05T03:00:00.000Z'),
+            photos: [photo(1)],
+            page: 1,
+            pageSize: 54,
+            total: 1,
+            totalPages: 1,
+            selectedDriveFileIds: [],
+            selectedPhotos: [],
+        },
+    }));
+    await page.route(`**/api/public/galleries/${id}/photos/*/thumbnail?*`, (route) => fulfillImage(route, 320, 320));
+    await page.route(`**/api/public/galleries/${id}/tutorial/*/before?*`, (route) => fulfillImage(route, 1600, 1067));
+    await page.route(`**/api/public/galleries/${id}/tutorial/*/after?*`, (route) => fulfillImage(route, 1600, 1067));
+
+    await page.goto(`/culling/${id}`);
+    await page.getByRole('button', { name: 'How to submit' }).click();
+    await expect(page.getByTestId('tutorial-confidence-step')).toBeVisible();
+    await expect(page.getByText('Sample 01 / 03')).toBeVisible();
+    await expect(page.getByAltText('Before editing sample')).toBeVisible();
+    await expect(page.getByAltText('Edited result sample')).toBeVisible();
+
+    const handle = page.getByTestId('tutorial-slider-handle');
+    await expect(handle).toHaveAttribute('aria-valuenow', '50');
+    const slider = page.getByTestId('tutorial-before-after-slider');
+    const sliderBox = await slider.boundingBox();
+    expect(sliderBox).not.toBeNull();
+    await page.mouse.move((sliderBox?.x ?? 0) + (sliderBox?.width ?? 0) * 0.25, (sliderBox?.y ?? 0) + (sliderBox?.height ?? 0) / 2);
+    await page.mouse.down();
+    await page.mouse.move((sliderBox?.x ?? 0) + (sliderBox?.width ?? 0) * 0.75, (sliderBox?.y ?? 0) + (sliderBox?.height ?? 0) / 2);
+    await page.mouse.up();
+    await expect(handle).toHaveAttribute('aria-valuenow', '75');
+
+    await handle.focus();
+    await page.keyboard.press('ArrowLeft');
+    await expect(handle).toHaveAttribute('aria-valuenow', '70');
+
+    await page.getByRole('button', { name: 'Next sample' }).click();
+    await expect(page.getByText('Sample 02 / 03')).toBeVisible();
+    await page.getByRole('button', { name: 'Next sample' }).click();
+    await expect(page.getByText('Sample 03 / 03')).toBeVisible();
+    await page.getByRole('button', { name: 'How to submit', exact: true }).last().click();
+    await expect(page.getByTestId('tutorial-submit-step')).toBeVisible();
+    await page.getByRole('button', { name: 'Ready to choose' }).click();
+    await expect(page.getByTestId('tutorial-ready-step')).toBeVisible();
+
+    const dialog = page.getByRole('dialog', { name: 'How photo selection works' });
+    const dialogBox = await dialog.boundingBox();
+    expect(dialogBox).not.toBeNull();
+    expect((dialogBox?.y ?? 0) + (dialogBox?.height ?? 0)).toBeLessThanOrEqual(844);
+
+    await page.getByRole('button', { name: 'Start selecting' }).click();
+    await expect(dialog).toHaveCount(0);
+});
+
+test('shows only complete tutorial sample slots', async ({ page }) => {
+    const id = 'partial-tutorial-gallery';
+    await installSession(page, id);
+
+    await page.route(`**/api/public/galleries/${id}/contact`, (route) => route.fulfill({ json: {} }));
+    await page.route(`**/api/public/galleries/${id}/photos?*`, (route) => route.fulfill({
+        json: {
+            gallery: { ...gallery('2026-09-05T03:00:00.000Z'), tutorialSampleSlots: [1, 3] },
+            photos: [photo(1)],
+            page: 1,
+            pageSize: 54,
+            total: 1,
+            totalPages: 1,
+            selectedDriveFileIds: [],
+            selectedPhotos: [],
+        },
+    }));
+    await page.route(`**/api/public/galleries/${id}/photos/*/thumbnail?*`, (route) => fulfillImage(route, 320, 320));
+    await page.route(`**/api/public/galleries/${id}/tutorial/*/before?*`, (route) => fulfillImage(route, 1600, 1067));
+    await page.route(`**/api/public/galleries/${id}/tutorial/*/after?*`, (route) => fulfillImage(route, 1600, 1067));
+
+    await page.goto(`/culling/${id}`);
+    await page.getByRole('button', { name: 'How to submit' }).click();
+    await expect(page.getByText('Sample 01 / 02')).toBeVisible();
+    await page.getByRole('button', { name: 'Next sample' }).click();
+    await expect(page.getByText('Sample 02 / 02')).toBeVisible();
+});
+
+test('skips the awareness step when no tutorial samples are configured', async ({ page }) => {
+    const id = 'no-tutorial-gallery';
+    await installSession(page, id);
+
+    await page.route(`**/api/public/galleries/${id}/contact`, (route) => route.fulfill({ json: {} }));
+    await page.route(`**/api/public/galleries/${id}/photos?*`, (route) => route.fulfill({
+        json: {
+            gallery: { ...gallery('2026-09-05T03:00:00.000Z'), tutorialSampleSlots: [] },
+            photos: [photo(1)],
+            page: 1,
+            pageSize: 54,
+            total: 1,
+            totalPages: 1,
+            selectedDriveFileIds: [],
+            selectedPhotos: [],
+        },
+    }));
+    await page.route(`**/api/public/galleries/${id}/photos/*/thumbnail?*`, (route) => fulfillImage(route, 320, 320));
+
+    await page.goto(`/culling/${id}`);
+    await page.getByRole('button', { name: 'How to submit' }).click();
+    await expect(page.getByTestId('tutorial-submit-step')).toBeVisible();
+    await expect(page.getByTestId('tutorial-confidence-step')).toHaveCount(0);
 });

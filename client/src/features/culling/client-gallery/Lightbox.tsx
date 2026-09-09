@@ -16,8 +16,13 @@ export const Lightbox = memo(function Lightbox({
     displayStartIndex,
     currentPhotoId,
     selectedIds,
+    hasPreviousPage = false,
+    hasNextPage = false,
+    totalCount,
     onClose,
     onMove,
+    onPreviousPage,
+    onNextPage,
     onToggle,
 }: {
     galleryId: string;
@@ -27,8 +32,13 @@ export const Lightbox = memo(function Lightbox({
     displayStartIndex: number;
     currentPhotoId: string | null;
     selectedIds: Set<string>;
+    hasPreviousPage?: boolean;
+    hasNextPage?: boolean;
+    totalCount?: number;
     onClose: () => void;
     onMove: (driveFileId: string) => void;
+    onPreviousPage?: () => void;
+    onNextPage?: () => void;
     onToggle: (photo: GalleryPhoto) => void;
 }) {
     const currentIndex = currentPhotoId ? photos.findIndex((item) => item.driveFileId === currentPhotoId) : -1;
@@ -42,6 +52,10 @@ export const Lightbox = memo(function Lightbox({
     const moveRequestRef = useRef(0);
     const swipeStartXRef = useRef<number | null>(null);
     const currentImageReady = Boolean(currentUrl) && (loadedUrl === currentUrl || isPreviewImageReady(currentUrl));
+    const canMovePrevious = currentIndex > 0 || hasPreviousPage;
+    const canMoveNext = currentIndex >= 0 && (currentIndex < photos.length - 1 || hasNextPage);
+    const displayPosition = displayStartIndex + currentIndex + 1;
+    const displayTotal = totalCount || photos.length;
 
     const closeLightbox = useCallback(() => {
         moveRequestRef.current += 1;
@@ -49,7 +63,23 @@ export const Lightbox = memo(function Lightbox({
     }, [onClose]);
 
     const requestMove = useCallback((nextIndex: number) => {
-        if (currentIndex < 0 || nextIndex < 0 || nextIndex >= photos.length || nextIndex === currentIndex) return;
+        if (currentIndex < 0 || nextIndex === currentIndex) return;
+
+        if (nextIndex < 0) {
+            if (hasPreviousPage) {
+                moveRequestRef.current += 1;
+                onPreviousPage?.();
+            }
+            return;
+        }
+
+        if (nextIndex >= photos.length) {
+            if (hasNextPage) {
+                moveRequestRef.current += 1;
+                onNextPage?.();
+            }
+            return;
+        }
 
         const nextPhoto = photos[nextIndex];
         if (!nextPhoto) return;
@@ -57,7 +87,7 @@ export const Lightbox = memo(function Lightbox({
         moveRequestRef.current += 1;
         onMove(nextPhoto.driveFileId);
         void preloadPreviewImage(nextUrl, 'high').catch(() => undefined);
-    }, [currentIndex, galleryId, onMove, photos, token]);
+    }, [currentIndex, galleryId, hasNextPage, hasPreviousPage, onMove, onNextPage, onPreviousPage, photos, token]);
 
     useEffect(() => {
         if (!currentUrl || isPreviewImageReady(currentUrl)) return;
@@ -163,10 +193,10 @@ export const Lightbox = memo(function Lightbox({
                             )}
                         />
                     )}
-                    <button type="button" disabled={currentIndex === 0} aria-label="Previous photo" onClick={() => requestMove(currentIndex - 1)} className="absolute left-1.5 top-1/2 z-30 flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-full border border-white/20 bg-black/40 text-white backdrop-blur transition-opacity disabled:opacity-25 sm:left-4 sm:h-10 sm:w-10">
+                    <button type="button" disabled={!canMovePrevious} aria-label="Previous photo" onClick={() => requestMove(currentIndex - 1)} className="absolute left-1.5 top-1/2 z-30 flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-full border border-white/20 bg-black/40 text-white backdrop-blur transition-opacity disabled:opacity-25 sm:left-4 sm:h-10 sm:w-10">
                         <ChevronLeft size={18} />
                     </button>
-                    <button type="button" disabled={currentIndex === photos.length - 1} aria-label="Next photo" onClick={() => requestMove(currentIndex + 1)} className="absolute right-1.5 top-1/2 z-30 flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-full border border-white/20 bg-black/40 text-white backdrop-blur transition-opacity disabled:opacity-25 sm:right-4 sm:h-10 sm:w-10">
+                    <button type="button" disabled={!canMoveNext} aria-label="Next photo" onClick={() => requestMove(currentIndex + 1)} className="absolute right-1.5 top-1/2 z-30 flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-full border border-white/20 bg-black/40 text-white backdrop-blur transition-opacity disabled:opacity-25 sm:right-4 sm:h-10 sm:w-10">
                         <ChevronRight size={18} />
                     </button>
                     {failedUrl === currentUrl && (
@@ -194,7 +224,7 @@ export const Lightbox = memo(function Lightbox({
                 <footer data-testid="gallery-lightbox-footer" className="relative z-20 flex shrink-0 flex-col gap-2 border-t border-white/10 bg-black/80 px-3 py-3 backdrop-blur sm:flex-row sm:items-center sm:justify-between sm:gap-3 sm:px-5 sm:py-4">
                     <div className="min-w-0">
                         <p title={photo.filename} className="truncate text-xs font-semibold sm:text-sm">{displayLabel}</p>
-                        <p className="mt-0.5 text-[9px] uppercase tracking-[0.14em] text-white/50 sm:mt-1 sm:text-[10px]">{currentIndex + 1} / {photos.length}</p>
+                        <p className="mt-0.5 text-[9px] uppercase tracking-[0.14em] text-white/50 sm:mt-1 sm:text-[10px]">{displayPosition} / {displayTotal}</p>
                     </div>
                     <div className="flex w-full flex-col gap-2 sm:w-auto sm:min-w-[220px]">
                         <button type="button" onClick={() => onToggle(photo)} className={clsx('flex h-9 items-center justify-center gap-2 rounded-lg px-4 text-[10px] font-black uppercase tracking-[0.12em] transition-colors sm:h-10 sm:px-5 sm:tracking-[0.14em]', selected ? 'bg-white text-black' : 'border border-white/30 bg-black/30 text-white hover:border-white/60 hover:bg-white/10')}>
@@ -207,4 +237,3 @@ export const Lightbox = memo(function Lightbox({
         </div>
     );
 });
-

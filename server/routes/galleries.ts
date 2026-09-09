@@ -48,6 +48,12 @@ type GalleryRow = {
     editAddonPricingMode?: string | null;
     editAddonPrice?: number | null;
     driveFolderId: string;
+    tutorialBeforeDriveFileId?: string | null;
+    tutorialAfterDriveFileId?: string | null;
+    tutorialBefore2DriveFileId?: string | null;
+    tutorialAfter2DriveFileId?: string | null;
+    tutorialBefore3DriveFileId?: string | null;
+    tutorialAfter3DriveFileId?: string | null;
     pinHash: string;
     accessVersion: number;
     photoCount?: number;
@@ -198,6 +204,37 @@ function normalizeDriveFolderId(value: unknown): string {
         .trim();
 }
 
+function normalizeDriveFileId(value: unknown): string | null {
+    const raw = String(value || "").trim();
+    if (!raw) return null;
+
+    try {
+        const url = new URL(raw);
+        const pathMatch = url.pathname.match(/\/d\/([^/]+)/);
+        if (pathMatch?.[1]) return decodeURIComponent(pathMatch[1]);
+        const queryId = url.searchParams.get("id");
+        if (queryId) return queryId;
+    } catch {
+        // The input may already be a Drive file ID.
+    }
+
+    return raw.replace(/[?#].*$/, "").replace(/^.*\//, "").trim() || null;
+}
+
+function tutorialSampleFileIds(row: Pick<GalleryRow, 'tutorialBeforeDriveFileId' | 'tutorialAfterDriveFileId' | 'tutorialBefore2DriveFileId' | 'tutorialAfter2DriveFileId' | 'tutorialBefore3DriveFileId' | 'tutorialAfter3DriveFileId'>, slot: number): { before: string | null; after: string | null } {
+    if (slot === 1) return { before: row.tutorialBeforeDriveFileId || null, after: row.tutorialAfterDriveFileId || null };
+    if (slot === 2) return { before: row.tutorialBefore2DriveFileId || null, after: row.tutorialAfter2DriveFileId || null };
+    if (slot === 3) return { before: row.tutorialBefore3DriveFileId || null, after: row.tutorialAfter3DriveFileId || null };
+    return { before: null, after: null };
+}
+
+function tutorialSampleSlots(row: Pick<GalleryRow, 'tutorialBeforeDriveFileId' | 'tutorialAfterDriveFileId' | 'tutorialBefore2DriveFileId' | 'tutorialAfter2DriveFileId' | 'tutorialBefore3DriveFileId' | 'tutorialAfter3DriveFileId'>): number[] {
+    return [1, 2, 3].filter((slot) => {
+        const sample = tutorialSampleFileIds(row, slot);
+        return Boolean(sample.before && sample.after);
+    });
+}
+
 function normalizeWhatsappNumber(value: unknown): string | null {
     let phone = String(value || "").replace(/[\s().-]/g, "");
     if (phone.startsWith("https://wa.me/")) phone = phone.slice("https://wa.me/".length);
@@ -242,6 +279,7 @@ function galleryPublicShape(row: GalleryRow) {
         additionalLimit: Number(row.additionalSelectionLimit || 0),
         addonStatus,
         addon: { enabled: addonActive, additionalLimit: addonActive ? Number(row.additionalSelectionLimit || 0) : 0, pricingMode: row.editAddonPricingMode || "per_photo", unitPrice: Number(row.editAddonPrice ?? DEFAULT_ADDON_UNIT_PRICE), status: addonStatus },
+        tutorialSampleSlots: tutorialSampleSlots(row),
     };
 }
 
@@ -267,6 +305,12 @@ function galleryAdminShape(row: GalleryRow, counts?: { photoCount?: number; sele
         selectionDurationDays: Math.ceil(selectionDurationHours / 24),
         selectionDeadlineAt: row.selectionDeadlineAt || null,
         isExpired,
+        tutorialBeforeDriveFileId: row.tutorialBeforeDriveFileId || null,
+        tutorialAfterDriveFileId: row.tutorialAfterDriveFileId || null,
+        tutorialBefore2DriveFileId: row.tutorialBefore2DriveFileId || null,
+        tutorialAfter2DriveFileId: row.tutorialAfter2DriveFileId || null,
+        tutorialBefore3DriveFileId: row.tutorialBefore3DriveFileId || null,
+        tutorialAfter3DriveFileId: row.tutorialAfter3DriveFileId || null,
         serverTime: new Date().toISOString(),
         createdAt: row.createdAt,
         updatedAt: row.updatedAt,
@@ -385,7 +429,7 @@ async function requirePublicGallery(c: Context<Env>): Promise<{ gallery: Gallery
 
     const token = c.req.query("token") || c.req.header("x-gallery-token") || "";
     const gallery = await galleryOne<GalleryRow>(`
-        SELECT id, title, public_key as "publicKey", contact_whatsapp_url as "contactWhatsappUrl", drive_folder_id as "driveFolderId", pin_hash as "pinHash", status,
+        SELECT id, title, public_key as "publicKey", contact_whatsapp_url as "contactWhatsappUrl", drive_folder_id as "driveFolderId", tutorial_before_drive_file_id as "tutorialBeforeDriveFileId", tutorial_after_drive_file_id as "tutorialAfterDriveFileId", tutorial_before_2_drive_file_id as "tutorialBefore2DriveFileId", tutorial_after_2_drive_file_id as "tutorialAfter2DriveFileId", tutorial_before_3_drive_file_id as "tutorialBefore3DriveFileId", tutorial_after_3_drive_file_id as "tutorialAfter3DriveFileId", pin_hash as "pinHash", status,
                max_selections as "maxSelections", additional_selection_limit as "additionalSelectionLimit",
                edit_addon_status as "editAddonStatus", edit_addon_pricing_mode as "editAddonPricingMode", edit_addon_price as "editAddonPrice",
                photo_count as "photoCount", selection_count as "selectionCount",
@@ -494,7 +538,7 @@ adminGalleriesRouter.get("/", async (c) => {
     const totalRow = await galleryOne<{ total: number }>(`SELECT COUNT(*) as total FROM galleries g ${where}`, params);
     const total = Number(totalRow?.total || 0);
     const rows = await galleryAll<GalleryRow & { photoCount?: number; selectionCount?: number }>(`
-        SELECT g.id, g.title, g.drive_folder_id as "driveFolderId", g.pin_hash as "pinHash", g.status,
+        SELECT g.id, g.title, g.drive_folder_id as "driveFolderId", g.tutorial_before_drive_file_id as "tutorialBeforeDriveFileId", g.tutorial_after_drive_file_id as "tutorialAfterDriveFileId", g.tutorial_before_2_drive_file_id as "tutorialBefore2DriveFileId", g.tutorial_after_2_drive_file_id as "tutorialAfter2DriveFileId", g.tutorial_before_3_drive_file_id as "tutorialBefore3DriveFileId", g.tutorial_after_3_drive_file_id as "tutorialAfter3DriveFileId", g.pin_hash as "pinHash", g.status,
                g.public_key as "publicKey", g.contact_whatsapp_url as "contactWhatsappUrl",
                g.max_selections as "maxSelections", g.additional_selection_limit as "additionalSelectionLimit",
                g.edit_addon_status as "editAddonStatus", g.edit_addon_pricing_mode as "editAddonPricingMode", g.edit_addon_price as "editAddonPrice",
@@ -647,6 +691,12 @@ adminGalleriesRouter.post("/", async (c) => {
     const title = String(body.title || "").trim();
     const driveFolderId = normalizeDriveFolderId(body.driveFolderUrl ?? body.driveFolderId);
     const pin = String(body.pin || "").trim();
+    const tutorialBeforeDriveFileId = normalizeDriveFileId(body.tutorialBeforeDriveFileId);
+    const tutorialAfterDriveFileId = normalizeDriveFileId(body.tutorialAfterDriveFileId);
+    const tutorialBefore2DriveFileId = normalizeDriveFileId(body.tutorialBefore2DriveFileId);
+    const tutorialAfter2DriveFileId = normalizeDriveFileId(body.tutorialAfter2DriveFileId);
+    const tutorialBefore3DriveFileId = normalizeDriveFileId(body.tutorialBefore3DriveFileId);
+    const tutorialAfter3DriveFileId = normalizeDriveFileId(body.tutorialAfter3DriveFileId);
     const status = normalizeStatus(body.status, "draft");
     const maxSelections = Math.min(500, Math.max(0, Number(body.maxSelections ?? 50) || 50));
     const requestedDurationHours = body.selectionDurationHours ?? (body.selectionDurationDays === undefined ? DEFAULT_SELECTION_DURATION_HOURS : Number(body.selectionDurationDays) * 24);
@@ -661,11 +711,11 @@ adminGalleriesRouter.post("/", async (c) => {
     const publicKey = createGalleryPublicKey(title);
     const selectionDeadlineAt = selectionDeadlineFromNow(selectionDurationHours);
     const id = await galleryInsertReturningId(
-        "INSERT INTO galleries (title, public_key, max_selections, edit_addon_pricing_mode, edit_addon_price, drive_folder_id, pin_hash, selection_duration_days, selection_duration_hours, selection_deadline_at, status) VALUES (?, ?, ?, 'per_photo', ?, ?, ?, ?, ?, ?, ?)",
-        [title, publicKey, maxSelections, DEFAULT_ADDON_UNIT_PRICE, driveFolderId, pinHash, selectionDurationDays, selectionDurationHours, selectionDeadlineAt, status],
+        "INSERT INTO galleries (title, public_key, max_selections, edit_addon_pricing_mode, edit_addon_price, drive_folder_id, tutorial_before_drive_file_id, tutorial_after_drive_file_id, tutorial_before_2_drive_file_id, tutorial_after_2_drive_file_id, tutorial_before_3_drive_file_id, tutorial_after_3_drive_file_id, pin_hash, selection_duration_days, selection_duration_hours, selection_deadline_at, status) VALUES (?, ?, ?, 'per_photo', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        [title, publicKey, maxSelections, DEFAULT_ADDON_UNIT_PRICE, driveFolderId, tutorialBeforeDriveFileId, tutorialAfterDriveFileId, tutorialBefore2DriveFileId, tutorialAfter2DriveFileId, tutorialBefore3DriveFileId, tutorialAfter3DriveFileId, pinHash, selectionDurationDays, selectionDurationHours, selectionDeadlineAt, status],
     );
     const row = await galleryOne<GalleryRow>(`
-        SELECT id, title, public_key as "publicKey", contact_whatsapp_url as "contactWhatsappUrl", drive_folder_id as "driveFolderId", pin_hash as "pinHash", status, max_selections as "maxSelections", additional_selection_limit as "additionalSelectionLimit", edit_addon_status as "editAddonStatus", edit_addon_pricing_mode as "editAddonPricingMode", edit_addon_price as "editAddonPrice",
+        SELECT id, title, public_key as "publicKey", contact_whatsapp_url as "contactWhatsappUrl", drive_folder_id as "driveFolderId", tutorial_before_drive_file_id as "tutorialBeforeDriveFileId", tutorial_after_drive_file_id as "tutorialAfterDriveFileId", tutorial_before_2_drive_file_id as "tutorialBefore2DriveFileId", tutorial_after_2_drive_file_id as "tutorialAfter2DriveFileId", tutorial_before_3_drive_file_id as "tutorialBefore3DriveFileId", tutorial_after_3_drive_file_id as "tutorialAfter3DriveFileId", pin_hash as "pinHash", status, max_selections as "maxSelections", additional_selection_limit as "additionalSelectionLimit", edit_addon_status as "editAddonStatus", edit_addon_pricing_mode as "editAddonPricingMode", edit_addon_price as "editAddonPrice",
                photo_count as "photoCount", selection_count as "selectionCount", selection_duration_days as "selectionDurationDays", selection_duration_hours as "selectionDurationHours", selection_deadline_at as "selectionDeadlineAt", created_at as "createdAt", updated_at as "updatedAt", synced_at as "syncedAt"
         FROM galleries WHERE id = ?
     `, [id]);
@@ -679,7 +729,7 @@ adminGalleriesRouter.get("/:id", async (c) => {
     const id = Number(c.req.param("id"));
     if (!Number.isInteger(id)) return c.json({ error: "Invalid gallery ID" }, 400);
     const gallery = await galleryOne<GalleryRow>(`
-        SELECT id, title, public_key as "publicKey", contact_whatsapp_url as "contactWhatsappUrl", drive_folder_id as "driveFolderId", pin_hash as "pinHash", status, max_selections as "maxSelections", additional_selection_limit as "additionalSelectionLimit", edit_addon_status as "editAddonStatus", edit_addon_pricing_mode as "editAddonPricingMode", edit_addon_price as "editAddonPrice",
+        SELECT id, title, public_key as "publicKey", contact_whatsapp_url as "contactWhatsappUrl", drive_folder_id as "driveFolderId", tutorial_before_drive_file_id as "tutorialBeforeDriveFileId", tutorial_after_drive_file_id as "tutorialAfterDriveFileId", tutorial_before_2_drive_file_id as "tutorialBefore2DriveFileId", tutorial_after_2_drive_file_id as "tutorialAfter2DriveFileId", tutorial_before_3_drive_file_id as "tutorialBefore3DriveFileId", tutorial_after_3_drive_file_id as "tutorialAfter3DriveFileId", pin_hash as "pinHash", status, max_selections as "maxSelections", additional_selection_limit as "additionalSelectionLimit", edit_addon_status as "editAddonStatus", edit_addon_pricing_mode as "editAddonPricingMode", edit_addon_price as "editAddonPrice",
                photo_count as "photoCount", selection_count as "selectionCount", selection_duration_days as "selectionDurationDays", selection_duration_hours as "selectionDurationHours", selection_deadline_at as "selectionDeadlineAt", created_at as "createdAt", updated_at as "updatedAt", synced_at as "syncedAt"
         FROM galleries WHERE id = ?
     `, [id]);
@@ -728,7 +778,7 @@ adminGalleriesRouter.patch("/:id", async (c) => {
     const id = Number(c.req.param("id"));
     if (!Number.isInteger(id)) return c.json({ error: "Invalid gallery ID" }, 400);
     const existing = await galleryOne<GalleryRow>(`
-        SELECT id, title, drive_folder_id as "driveFolderId", pin_hash as "pinHash", status, max_selections as "maxSelections", additional_selection_limit as "additionalSelectionLimit", edit_addon_status as "editAddonStatus", edit_addon_pricing_mode as "editAddonPricingMode", edit_addon_price as "editAddonPrice",
+        SELECT id, title, drive_folder_id as "driveFolderId", tutorial_before_drive_file_id as "tutorialBeforeDriveFileId", tutorial_after_drive_file_id as "tutorialAfterDriveFileId", tutorial_before_2_drive_file_id as "tutorialBefore2DriveFileId", tutorial_after_2_drive_file_id as "tutorialAfter2DriveFileId", tutorial_before_3_drive_file_id as "tutorialBefore3DriveFileId", tutorial_after_3_drive_file_id as "tutorialAfter3DriveFileId", pin_hash as "pinHash", status, max_selections as "maxSelections", additional_selection_limit as "additionalSelectionLimit", edit_addon_status as "editAddonStatus", edit_addon_pricing_mode as "editAddonPricingMode", edit_addon_price as "editAddonPrice",
                selection_count as "selectionCount", selection_duration_days as "selectionDurationDays", selection_duration_hours as "selectionDurationHours", selection_deadline_at as "selectionDeadlineAt", created_at as "createdAt", updated_at as "updatedAt", synced_at as "syncedAt"
         FROM galleries WHERE id = ?
     `, [id]);
@@ -762,6 +812,12 @@ adminGalleriesRouter.patch("/:id", async (c) => {
     const editAddonStatus = body.editAddonStatus === undefined ? normalizeAddonStatus(existing.editAddonStatus) : normalizeAddonStatus(body.editAddonStatus);
     const editAddonPricingMode = body.editAddonPricingMode === undefined ? existing.editAddonPricingMode || "per_photo" : String(body.editAddonPricingMode || "") || "per_photo";
     const editAddonPrice = body.editAddonPrice === undefined ? Number(existing.editAddonPrice ?? DEFAULT_ADDON_UNIT_PRICE) : Math.max(0, Number(body.editAddonPrice) || 0);
+    const tutorialBeforeDriveFileId = body.tutorialBeforeDriveFileId === undefined ? existing.tutorialBeforeDriveFileId || null : normalizeDriveFileId(body.tutorialBeforeDriveFileId);
+    const tutorialAfterDriveFileId = body.tutorialAfterDriveFileId === undefined ? existing.tutorialAfterDriveFileId || null : normalizeDriveFileId(body.tutorialAfterDriveFileId);
+    const tutorialBefore2DriveFileId = body.tutorialBefore2DriveFileId === undefined ? existing.tutorialBefore2DriveFileId || null : normalizeDriveFileId(body.tutorialBefore2DriveFileId);
+    const tutorialAfter2DriveFileId = body.tutorialAfter2DriveFileId === undefined ? existing.tutorialAfter2DriveFileId || null : normalizeDriveFileId(body.tutorialAfter2DriveFileId);
+    const tutorialBefore3DriveFileId = body.tutorialBefore3DriveFileId === undefined ? existing.tutorialBefore3DriveFileId || null : normalizeDriveFileId(body.tutorialBefore3DriveFileId);
+    const tutorialAfter3DriveFileId = body.tutorialAfter3DriveFileId === undefined ? existing.tutorialAfter3DriveFileId || null : normalizeDriveFileId(body.tutorialAfter3DriveFileId);
     const pin = body.pin === undefined ? "" : String(body.pin || "").trim();
     const pinHash = pin ? await Bun.password.hash(pin, { algorithm: "bcrypt", cost: 10 }) : existing.pinHash;
     const activeSelectionLimit = maxSelections ? maxSelections + (editAddonStatus === "paid" ? additionalSelectionLimit : 0) : 0;
@@ -774,8 +830,8 @@ adminGalleriesRouter.patch("/:id", async (c) => {
     }
 
     await galleryRun(
-        "UPDATE galleries SET title = ?, drive_folder_id = ?, pin_hash = ?, contact_whatsapp_url = ?, max_selections = ?, additional_selection_limit = ?, edit_addon_status = ?, edit_addon_pricing_mode = ?, edit_addon_price = ?, selection_duration_days = ?, selection_duration_hours = ?, selection_deadline_at = ?, status = ?, access_version = access_version + 1, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-        [title, driveFolderId, pinHash, contactWhatsappUrl, maxSelections, additionalSelectionLimit, editAddonStatus, editAddonPricingMode, editAddonPrice, selectionDurationDays, selectionDurationHours, selectionDeadlineAt, status, id],
+        "UPDATE galleries SET title = ?, drive_folder_id = ?, tutorial_before_drive_file_id = ?, tutorial_after_drive_file_id = ?, tutorial_before_2_drive_file_id = ?, tutorial_after_2_drive_file_id = ?, tutorial_before_3_drive_file_id = ?, tutorial_after_3_drive_file_id = ?, pin_hash = ?, contact_whatsapp_url = ?, max_selections = ?, additional_selection_limit = ?, edit_addon_status = ?, edit_addon_pricing_mode = ?, edit_addon_price = ?, selection_duration_days = ?, selection_duration_hours = ?, selection_deadline_at = ?, status = ?, access_version = access_version + 1, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+        [title, driveFolderId, tutorialBeforeDriveFileId, tutorialAfterDriveFileId, tutorialBefore2DriveFileId, tutorialAfter2DriveFileId, tutorialBefore3DriveFileId, tutorialAfter3DriveFileId, pinHash, contactWhatsappUrl, maxSelections, additionalSelectionLimit, editAddonStatus, editAddonPricingMode, editAddonPrice, selectionDurationDays, selectionDurationHours, selectionDeadlineAt, status, id],
     );
     return c.json({ status: "updated" });
 });
@@ -980,6 +1036,49 @@ publicGalleriesRouter.get("/:id/contact", async (c) => {
     return c.json({ contactWhatsappUrl: settings.contact_whatsapp_url || null, message: settings.contact_whatsapp_message || DEFAULT_CONTACT_MESSAGE, requestMoreMessage: settings.request_more_whatsapp_message || DEFAULT_REQUEST_MORE_MESSAGE });
 });
 
+async function serveTutorialImage(c: Context<Env>, slot: number, variant: string): Promise<Response> {
+    const result = await requirePublicGallery(c);
+    if (result instanceof Response) return result;
+
+    if (!Number.isInteger(slot) || slot < 1 || slot > 3 || (variant !== "before" && variant !== "after")) {
+        return c.json({ error: "Tutorial image not found." }, 404);
+    }
+
+    const sample = tutorialSampleFileIds(result.gallery, slot);
+    const fileId = variant === "before" ? sample.before : sample.after;
+    if (!fileId) return c.json({ error: "Tutorial image is not configured." }, 404);
+
+    try {
+        let driveResponse: Response;
+        try {
+            driveResponse = await fetchDriveFile(fileId, undefined, 1600, true);
+        } catch {
+            const metadata = await getDrivePhotoMetadata(fileId);
+            if (!metadata.thumbnailLink) throw new Error("Google Drive did not return a thumbnail for this tutorial image.");
+            driveResponse = await fetchDriveFile(fileId, metadata.thumbnailLink, 1600, true);
+        }
+        return new Response(driveResponse.body, {
+            headers: {
+                "Content-Type": driveResponse.headers.get("Content-Type") || "image/jpeg",
+                "Cache-Control": "private, max-age=3600, stale-while-revalidate=86400",
+                "X-Content-Type-Options": "nosniff",
+            },
+        });
+    } catch (error) {
+        console.warn(`[culling tutorial] Unable to load ${variant} image for gallery ${result.gallery.id}:`, error instanceof Error ? error.message : error);
+        return c.json({ error: "Unable to load tutorial image." }, 502);
+    }
+}
+
+publicGalleriesRouter.get("/:id/tutorial/:slot/:variant", async (c) => {
+    return serveTutorialImage(c, Number(c.req.param("slot")), c.req.param("variant"));
+});
+
+// Keep the original slot-one URL working for already-open client sessions and saved links.
+publicGalleriesRouter.get("/:id/tutorial/:variant", async (c) => {
+    return serveTutorialImage(c, 1, c.req.param("variant"));
+});
+
 publicGalleriesRouter.post("/:id/verify", async (c) => {
     const identifier = c.req.param("id");
     if (!identifier) return c.json({ error: "Gallery ID is required." }, 400);
@@ -988,7 +1087,7 @@ publicGalleriesRouter.post("/:id/verify", async (c) => {
     const pin = String(body.pin || "").trim();
     const gallery = await galleryOne<GalleryRow>(`
         SELECT id, title, drive_folder_id as "driveFolderId", pin_hash as "pinHash", status,
-               created_at as "createdAt", updated_at as "updatedAt", synced_at as "syncedAt", access_version as "accessVersion", contact_whatsapp_url as "contactWhatsappUrl", max_selections as "maxSelections", additional_selection_limit as "additionalSelectionLimit", edit_addon_status as "editAddonStatus", edit_addon_pricing_mode as "editAddonPricingMode", edit_addon_price as "editAddonPrice",
+               created_at as "createdAt", updated_at as "updatedAt", synced_at as "syncedAt", access_version as "accessVersion", contact_whatsapp_url as "contactWhatsappUrl", max_selections as "maxSelections", additional_selection_limit as "additionalSelectionLimit", edit_addon_status as "editAddonStatus", edit_addon_pricing_mode as "editAddonPricingMode", edit_addon_price as "editAddonPrice", tutorial_before_drive_file_id as "tutorialBeforeDriveFileId", tutorial_after_drive_file_id as "tutorialAfterDriveFileId", tutorial_before_2_drive_file_id as "tutorialBefore2DriveFileId", tutorial_after_2_drive_file_id as "tutorialAfter2DriveFileId", tutorial_before_3_drive_file_id as "tutorialBefore3DriveFileId", tutorial_after_3_drive_file_id as "tutorialAfter3DriveFileId",
                photo_count as "photoCount", selection_count as "selectionCount", selection_duration_days as "selectionDurationDays", selection_duration_hours as "selectionDurationHours", selection_deadline_at as "selectionDeadlineAt"
         FROM galleries WHERE ${lookup.sql}
     `, lookup.params);
@@ -1018,7 +1117,7 @@ publicGalleriesRouter.get("/:id/photos", async (c) => {
     const includeSelectedPhotos = c.req.query("includeSelectedPhotos") === "1";
     const includeSelections = c.req.query("includeSelections") === "1";
     const total = Number(result.gallery.photoCount || 0);
-    const pageSize = Math.min(50, Math.max(1, Number(c.req.query("pageSize") || 50) || 50));
+    const pageSize = Math.min(54, Math.max(1, Number(c.req.query("pageSize") || 54) || 54));
     const totalPages = total > 0 ? Math.ceil(total / pageSize) : 0;
     const page = totalPages > 0 ? Math.min(totalPages, Math.max(1, Number(c.req.query("page") || 1) || 1)) : 1;
     const offset = (page - 1) * pageSize;

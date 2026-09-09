@@ -1,7 +1,7 @@
 import type { CSSProperties } from 'react';
 import type { DiscountRule } from '../culling.types';
 
-export const GALLERY_PAGE_SIZE = 50;
+export const GALLERY_PAGE_SIZE = 54;
 
 export const DEFAULT_ADDON_DISCOUNT_RULES: DiscountRule[] = [
     { minCount: 20, discountPercent: 20 },

@@ -37,6 +37,8 @@ test('create gallery dialog stays compact on desktop and mobile', async ({ page 
 
     const dialog = page.getByRole('dialog', { name: 'Create gallery' });
     await expect(dialog).toBeVisible();
+    await expect(dialog.getByLabel('Before photo')).toHaveCount(3);
+    await expect(dialog.getByLabel('Edited photo')).toHaveCount(3);
     const desktopBox = await dialog.locator(':scope > div').boundingBox();
     expect(desktopBox).not.toBeNull();
     expect(desktopBox?.width ?? 0).toBeLessThanOrEqual(520);

@@ -40,7 +40,7 @@ export async function saveGalleryContact(input: { contactWhatsappUrl: string; me
     if (!response.ok) throw await parseError(response, 'Unable to save gallery settings.');
 }
 
-export async function createGallery(input: { title: string; driveFolderUrl: string; pin: string; status: GalleryStatus; maxSelections: number; selectionDurationHours: number }): Promise<GallerySummary> {
+export async function createGallery(input: { title: string; driveFolderUrl: string; pin: string; status: GalleryStatus; maxSelections: number; selectionDurationHours: number; tutorialBeforeDriveFileId?: string; tutorialAfterDriveFileId?: string; tutorialBefore2DriveFileId?: string; tutorialAfter2DriveFileId?: string; tutorialBefore3DriveFileId?: string; tutorialAfter3DriveFileId?: string }): Promise<GallerySummary> {
     const response = await fetchWithAuth('/galleries', {
         method: 'POST',
         body: JSON.stringify(input),
@@ -49,7 +49,7 @@ export async function createGallery(input: { title: string; driveFolderUrl: stri
     return response.json();
 }
 
-export async function updateGallery(input: { id: number; title?: string; driveFolderId?: string; driveFolderUrl?: string; pin?: string; status?: GalleryStatus; contactWhatsappUrl?: string; maxSelections?: number; selectionDurationHours?: number; additionalSelectionLimit?: number; editAddonStatus?: string; editAddonPricingMode?: string; editAddonPrice?: number; editAddonPackageId?: number | null }): Promise<void> {
+export async function updateGallery(input: { id: number; title?: string; driveFolderId?: string; driveFolderUrl?: string; pin?: string; status?: GalleryStatus; contactWhatsappUrl?: string; maxSelections?: number; selectionDurationHours?: number; additionalSelectionLimit?: number; editAddonStatus?: string; editAddonPricingMode?: string; editAddonPrice?: number; editAddonPackageId?: number | null; tutorialBeforeDriveFileId?: string; tutorialAfterDriveFileId?: string; tutorialBefore2DriveFileId?: string; tutorialAfter2DriveFileId?: string; tutorialBefore3DriveFileId?: string; tutorialAfter3DriveFileId?: string }): Promise<void> {
     const { id, ...body } = input;
     const response = await fetchWithAuth(`/galleries/${id}`, {
         method: 'PATCH',

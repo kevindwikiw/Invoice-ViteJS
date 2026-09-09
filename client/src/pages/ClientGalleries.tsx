@@ -66,7 +66,9 @@ const PAGE_SIZE = 10;
 const dateFormat = new Intl.DateTimeFormat('en-GB', { dateStyle: 'medium', timeStyle: 'short' });
 const idrFormat = new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 });
 const inputClass = 'h-11 w-full rounded-md border border-[var(--border)] bg-[var(--bg-deep)] px-3.5 text-sm text-[var(--text-primary)] outline-none transition-colors placeholder:text-[var(--text-muted)]/60 hover:border-[var(--text-muted)] focus:border-[var(--accent)] focus:ring-1 focus:ring-[var(--accent)]';
+const compactInputClass = inputClass.replace('h-11', 'h-9');
 const unitInputShellClass = 'grid h-11 grid-cols-[minmax(0,1fr)_4.5rem] overflow-hidden rounded-md border border-[var(--border)] bg-[var(--bg-deep)] transition-colors hover:border-[var(--text-muted)] focus-within:border-[var(--accent)] focus-within:ring-1 focus-within:ring-[var(--accent)]';
+const compactUnitInputShellClass = unitInputShellClass.replace('h-11', 'h-9');
 const unitInputClass = 'h-full min-w-0 border-0 bg-transparent px-3.5 text-sm tabular-nums text-[var(--text-primary)] outline-none';
 const unitInputSuffixClass = 'flex h-full items-center justify-center border-l border-[var(--border)] px-2 text-[11px] font-medium text-[var(--text-muted)]';
 const publicUrl = (gallery: GallerySummary) => `${window.location.origin}/culling/${gallery.publicKey || gallery.id}`;
@@ -120,7 +122,7 @@ function useDismissableMenu(open: boolean, close: () => void) {
   return ref;
 }
 
-function Modal({ title, close, children, widthClass = 'max-w-2xl' }: { title: string; close: () => void; children: ReactNode; widthClass?: string }) {
+function Modal({ title, close, children, widthClass = 'max-w-2xl', maxHeightClass = 'max-h-[90vh]' }: { title: string; close: () => void; children: ReactNode; widthClass?: string; maxHeightClass?: string }) {
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') close();
@@ -139,7 +141,7 @@ function Modal({ title, close, children, widthClass = 'max-w-2xl' }: { title: st
         if (event.target === event.currentTarget) close();
       }}
     >
-      <div className={clsx('max-h-[90vh] w-full overflow-y-auto rounded-lg border border-[var(--border)] bg-[var(--bg-card)] shadow-2xl', widthClass)}>
+      <div className={clsx('w-full overflow-y-auto rounded-lg border border-[var(--border)] bg-[var(--bg-card)] shadow-2xl', maxHeightClass, widthClass)}>
         <header className="flex items-center justify-between gap-4 border-b border-[var(--border)] px-6 py-5">
           <h2 className="font-display text-xl text-[var(--text-primary)]">{title}</h2>
           <button
@@ -210,12 +212,12 @@ function CreateGalleryModal({
 }: {
   close: () => void;
   pending: boolean;
-  submit: (input: { title: string; driveFolderUrl: string; pin: string; status: GalleryStatus; maxSelections: number; selectionDurationHours: number }) => void;
+  submit: (input: { title: string; driveFolderUrl: string; pin: string; status: GalleryStatus; maxSelections: number; selectionDurationHours: number; tutorialBeforeDriveFileId?: string; tutorialAfterDriveFileId?: string; tutorialBefore2DriveFileId?: string; tutorialAfter2DriveFileId?: string; tutorialBefore3DriveFileId?: string; tutorialAfter3DriveFileId?: string }) => void;
 }) {
   return (
-    <Modal title="Create gallery" close={close} widthClass="max-w-lg">
+    <Modal title="Create gallery" close={close} widthClass="max-w-lg" maxHeightClass="max-h-[min(90vh,620px)]">
       <form
-        className="space-y-5"
+        className="space-y-0"
         onSubmit={(event) => {
           event.preventDefault();
           const data = new FormData(event.currentTarget);
@@ -226,34 +228,59 @@ function CreateGalleryModal({
             status: 'draft',
             maxSelections: Math.min(500, Math.max(0, Number(data.get('limit')) || 0)),
             selectionDurationHours: Math.min(8760, Math.max(1, Number(data.get('duration')) || 72)),
+            tutorialBeforeDriveFileId: String(data.get('tutorialBeforeDriveFileId') || '').trim(),
+            tutorialAfterDriveFileId: String(data.get('tutorialAfterDriveFileId') || '').trim(),
+            tutorialBefore2DriveFileId: String(data.get('tutorialBefore2DriveFileId') || '').trim(),
+            tutorialAfter2DriveFileId: String(data.get('tutorialAfter2DriveFileId') || '').trim(),
+            tutorialBefore3DriveFileId: String(data.get('tutorialBefore3DriveFileId') || '').trim(),
+            tutorialAfter3DriveFileId: String(data.get('tutorialAfter3DriveFileId') || '').trim(),
           });
         }}
       >
         <Field label="Gallery name">
-          <input name="title" required placeholder="Aldian & Panpan Prewedding" className={inputClass} />
+          <input name="title" required placeholder="Aldian & Panpan Prewedding" className={compactInputClass} />
         </Field>
         <Field label="Google Drive folder">
-          <input name="drive" required placeholder="https://drive.google.com/drive/folders/..." className={inputClass} />
+          <input name="drive" required placeholder="https://drive.google.com/drive/folders/..." className={compactInputClass} />
         </Field>
+        <div className="border-t border-[var(--border)] pt-3">
+          <p className="label-xs text-[var(--accent)]">BEFORE / EDITED PREVIEW <span className="font-normal tracking-normal text-[var(--text-muted)]">(optional Drive file links or IDs)</span></p>
+          <div className="mt-2 space-y-0.5">
+            {[1, 2, 3].map((slot) => {
+              const suffix = slot === 1 ? '' : String(slot);
+              return (
+                <div key={slot} className="grid grid-cols-[auto_minmax(0,1fr)_minmax(0,1fr)] items-end gap-2">
+                  <span className="pb-2 text-[9px] font-black uppercase tracking-[0.12em] text-[var(--text-muted)]">{String(slot).padStart(2, '0')}</span>
+                  <Field label="Before photo">
+                    <input name={`tutorialBefore${suffix}DriveFileId`} placeholder="Before file link or ID" className={compactInputClass} />
+                  </Field>
+                  <Field label="Edited photo">
+                    <input name={`tutorialAfter${suffix}DriveFileId`} placeholder="Edited file link or ID" className={compactInputClass} />
+                  </Field>
+                </div>
+              );
+            })}
+          </div>
+        </div>
         <div className="grid gap-4 sm:grid-cols-2">
           <Field label="Client PIN">
-            <input name="pin" required minLength={4} inputMode="numeric" autoComplete="off" placeholder="4821" className={inputClass} />
+            <input name="pin" required minLength={4} inputMode="numeric" autoComplete="off" placeholder="4821" className={compactInputClass} />
           </Field>
           <Field label="Selection window">
-            <div className={unitInputShellClass}>
+            <div className={compactUnitInputShellClass}>
               <input name="duration" required type="number" min="1" max="8760" defaultValue="72" className={unitInputClass} />
               <span className={unitInputSuffixClass}>hours</span>
             </div>
           </Field>
         </div>
         <Field label="Selection limit">
-          <div className={unitInputShellClass}>
+          <div className={compactUnitInputShellClass}>
             <input name="limit" required type="number" min="0" max="500" defaultValue="50" className={unitInputClass} />
             <span className={unitInputSuffixClass}>photos</span>
           </div>
           <span className="block text-[10px] leading-4 text-[var(--text-muted)]">Use 0 for unlimited selections.</span>
         </Field>
-        <div className="flex items-center justify-end gap-2 border-t border-[var(--border)] pt-4">
+        <div className="flex items-center justify-end gap-2 border-t border-[var(--border)] pt-2">
           <button type="button" onClick={close} className="h-10 cursor-pointer rounded-md px-4 text-[11px] font-semibold text-[var(--text-secondary)] transition-colors hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)]">
             Cancel
           </button>
@@ -781,7 +808,7 @@ function GalleryDetail({ gallery, close }: { gallery: GallerySummary; close: () 
         </div>
 
         {/* Memasang key={data.updatedAt || data.id} memastikan form ter-refresh jika data server berubah */}
-        <div key={`${data.id}-${data.updatedAt}-${data.maxSelections}-${data.selectionDurationHours}-${data.additionalLimit}-${data.addonStatus}`} className="space-y-4 rounded-xl border border-[var(--border)] p-4">
+        <div key={`${data.id}-${data.updatedAt}-${data.maxSelections}-${data.selectionDurationHours}-${data.additionalLimit}-${data.addonStatus}-${data.tutorialBeforeDriveFileId}-${data.tutorialAfterDriveFileId}-${data.tutorialBefore2DriveFileId}-${data.tutorialAfter2DriveFileId}-${data.tutorialBefore3DriveFileId}-${data.tutorialAfter3DriveFileId}`} className="space-y-4 rounded-xl border border-[var(--border)] p-4">
           <form
             onSubmit={(event) => {
               event.preventDefault();
@@ -798,9 +825,15 @@ function GalleryDetail({ gallery, close }: { gallery: GallerySummary; close: () 
               update.mutate({
                 id: data.id,
                 title: String(form.get('title') || data.title).trim(),
-                driveFolderUrl: String(form.get('driveFolderUrl') || driveUrl).trim(),
-                pin: String(form.get('pin') || ''),
-                maxSelections: nextMasterLimit,
+               driveFolderUrl: String(form.get('driveFolderUrl') || driveUrl).trim(),
+               pin: String(form.get('pin') || ''),
+               maxSelections: nextMasterLimit,
+                tutorialBeforeDriveFileId: String(form.get('tutorialBeforeDriveFileId') || '').trim(),
+                tutorialAfterDriveFileId: String(form.get('tutorialAfterDriveFileId') || '').trim(),
+                tutorialBefore2DriveFileId: String(form.get('tutorialBefore2DriveFileId') || '').trim(),
+                tutorialAfter2DriveFileId: String(form.get('tutorialAfter2DriveFileId') || '').trim(),
+                tutorialBefore3DriveFileId: String(form.get('tutorialBefore3DriveFileId') || '').trim(),
+                tutorialAfter3DriveFileId: String(form.get('tutorialAfter3DriveFileId') || '').trim(),
                 ...(durationChanged ? { selectionDurationHours: nextDurationHours } : {}),
               });
             }}
@@ -813,6 +846,28 @@ function GalleryDetail({ gallery, close }: { gallery: GallerySummary; close: () 
               <Field label="Google Drive folder URL">
                 <input name="driveFolderUrl" required defaultValue={driveUrl} className={inputClass} />
               </Field>
+              <div className="border-t border-[var(--border)] pt-4">
+                <p className="label-xs text-[var(--accent)]">BEFORE / EDITED PREVIEW</p>
+                <p className="mt-1 text-[10px] leading-4 text-[var(--text-muted)]">Optional sample pairs shown in the client&apos;s Choose with confidence guide. Paste Google Drive file links or IDs.</p>
+                <div className="mt-3 space-y-2">
+                  {[1, 2, 3].map((slot) => {
+                    const suffix = slot === 1 ? '' : String(slot);
+                    const beforeKey = `tutorialBefore${suffix}DriveFileId` as keyof typeof data;
+                    const afterKey = `tutorialAfter${suffix}DriveFileId` as keyof typeof data;
+                    return (
+                      <div key={slot} className="grid grid-cols-[auto_minmax(0,1fr)_minmax(0,1fr)] items-end gap-2">
+                        <span className="pb-2 text-[9px] font-black uppercase tracking-[0.12em] text-[var(--text-muted)]">{String(slot).padStart(2, '0')}</span>
+                        <Field label="Before photo">
+                          <input name={String(beforeKey)} defaultValue={String(data[beforeKey] || '')} placeholder="Before file link or ID" className={inputClass} />
+                        </Field>
+                        <Field label="Edited photo">
+                          <input name={String(afterKey)} defaultValue={String(data[afterKey] || '')} placeholder="Edited file link or ID" className={inputClass} />
+                        </Field>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
               <div className="grid gap-4 sm:grid-cols-3">
                 <Field label="Client PIN">
                   <input name="pin" minLength={4} placeholder="Set a new PIN (optional)" className={inputClass} />

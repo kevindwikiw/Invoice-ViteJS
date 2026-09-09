@@ -92,3 +92,8 @@ export function galleryPreviewUrl(galleryId: string | number, driveFileId: strin
     if (photoToken) params.set('pt', photoToken);
     return apiUrl(`/public/galleries/${galleryId}/photos/${encodeURIComponent(driveFileId)}/preview?${params.toString()}`);
 }
+
+export function cullingTutorialImageUrl(galleryId: string | number, token: string, slot: number, variant: 'before' | 'after'): string {
+    const params = new URLSearchParams({ token });
+    return apiUrl(`/public/galleries/${galleryId}/tutorial/${slot}/${variant}?${params.toString()}`);
+}

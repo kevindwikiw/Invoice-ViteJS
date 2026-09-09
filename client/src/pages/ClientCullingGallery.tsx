@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, useCallback } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useState, useCallback } from 'react';
 import { useParams } from '@tanstack/react-router';
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { AlertCircle, Check, CheckSquare, ChevronLeft, ChevronRight, HelpCircle, ImageIcon, Instagram, Loader2, Lock, Send } from 'lucide-react';
@@ -73,6 +73,7 @@ export default function ClientCullingGallery() {
     const [requestedCount, setRequestedCount] = useState(10);
     const [showSubmitConfirm, setShowSubmitConfirm] = useState(false);
     const [knownPhotosById, setKnownPhotosById] = useState<Record<string, GalleryPhoto>>({});
+    const [pendingLightboxPageMove, setPendingLightboxPageMove] = useState<'first' | 'last' | null>(null);
     const selectedIds = selectionDraft.selectedIds;
     const selectedPhotoMetaById = selectionDraft.photoMetaById;
     const shouldIncludeSelections = !showSelected && !selectionTouched && selectedIds.size === 0 && page === 1;
@@ -125,6 +126,56 @@ export default function ClientCullingGallery() {
     const countdown = useSelectionCountdown(displayGallery?.selectionDeadlineAt, displayGallery?.serverTime);
     const galleryError = photosQuery.error as (Error & { code?: string; contactUrl?: string | null }) | null;
     const galleryLockCode = galleryError?.code === 'GALLERY_EXPIRED' || galleryError?.code === 'GALLERY_CLOSED' ? galleryError.code : null;
+    const totalPages = photosQuery.data?.totalPages || 0;
+    const totalPhotos = photosQuery.data?.total || visiblePhotos.length;
+    const hasPreviousGalleryPage = !showSelected && totalPages > 0 && page > 1;
+    const hasNextGalleryPage = !showSelected && totalPages > 0 && page < totalPages;
+
+    const goToGalleryPage = useCallback((nextPage: number) => {
+        const clampedPage = totalPages ? Math.min(totalPages, Math.max(1, nextPage)) : Math.max(1, nextPage);
+        if (clampedPage === page) return;
+        setPendingLightboxPageMove(null);
+        setPage(clampedPage);
+        setLightboxPhotoId(null);
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+    }, [page, totalPages]);
+
+    const moveLightboxAcrossPage = useCallback((direction: 'previous' | 'next') => {
+        if (showSelected || pendingLightboxPageMove) return;
+
+        if (direction === 'previous' && hasPreviousGalleryPage) {
+            setPendingLightboxPageMove('last');
+            setPage((current) => Math.max(1, current - 1));
+            return;
+        }
+
+        if (direction === 'next' && hasNextGalleryPage) {
+            setPendingLightboxPageMove('first');
+            setPage((current) => totalPages ? Math.min(totalPages, current + 1) : current + 1);
+        }
+    }, [hasNextGalleryPage, hasPreviousGalleryPage, pendingLightboxPageMove, showSelected, totalPages]);
+
+    useLayoutEffect(() => {
+        if (!pendingLightboxPageMove || showSelected || photosQuery.data?.page !== page || !photos.length) return;
+
+        const targetPhoto = pendingLightboxPageMove === 'first' ? photos[0] : photos[photos.length - 1];
+        if (!targetPhoto) return;
+
+        /* eslint-disable react-hooks/set-state-in-effect -- Continue lightbox navigation before the boundary page transition paints. */
+        setLightboxPhotoId(targetPhoto.driveFileId);
+        setPendingLightboxPageMove(null);
+        /* eslint-enable react-hooks/set-state-in-effect */
+    }, [page, pendingLightboxPageMove, photos, photosQuery.data?.page, showSelected]);
+
+    useEffect(() => {
+        const errorStatus = (photosQuery.error as (Error & { status?: number }) | null)?.status;
+        if (!token || errorStatus !== 401) return;
+
+        localStorage.removeItem(tokenKey(galleryId));
+        // eslint-disable-next-line react-hooks/set-state-in-effect -- Drop an invalidated public session and return to the PIN gate.
+        setToken('');
+    }, [galleryId, photosQuery.error, token]);
+
     const masterLimit = Number(displayGallery?.maxSelections || 0);
     const additionalLimit = Number(displayGallery?.additionalLimit || 0);
     const isAddonActive = Boolean(displayGallery?.addon?.enabled && additionalLimit > 0);
@@ -515,11 +566,11 @@ export default function ClientCullingGallery() {
                     </div>
                 )}
                 
-                {!showSelected && !photosQuery.isLoading && !photosQuery.isError && photosQuery.data && photosQuery.data.totalPages > 1 && (
+                {!showSelected && !photosQuery.isLoading && !photosQuery.isError && photosQuery.data && totalPages > 1 && (
                     <nav className="mt-8 flex items-center justify-center gap-4" aria-label="Gallery pages">
-                        <button type="button" disabled={page === 1} onClick={() => { setPage((current) => current - 1); setLightboxPhotoId(null); window.scrollTo({ top: 0, behavior: 'smooth' }); }} className="flex h-9 items-center gap-2 rounded-lg border border-[var(--border)] px-4 text-[10px] font-bold uppercase tracking-wider text-[var(--text-secondary)] disabled:opacity-35"><ChevronLeft size={14} /> Previous</button>
-                        <span className="text-xs text-[var(--text-muted)]">Page {page} of {photosQuery.data.totalPages}</span>
-                        <button type="button" disabled={page === photosQuery.data.totalPages} onClick={() => { setPage((current) => current + 1); setLightboxPhotoId(null); window.scrollTo({ top: 0, behavior: 'smooth' }); }} className="flex h-9 items-center gap-2 rounded-lg border border-[var(--border)] px-4 text-[10px] font-bold uppercase tracking-wider text-[var(--text-secondary)] disabled:opacity-35">Next <ChevronRight size={14} /></button>
+                        <button type="button" disabled={page === 1} onClick={() => goToGalleryPage(page - 1)} className="flex h-9 items-center gap-2 rounded-lg border border-[var(--border)] px-4 text-[10px] font-bold uppercase tracking-wider text-[var(--text-secondary)] disabled:opacity-35"><ChevronLeft size={14} /> Previous</button>
+                        <span className="text-xs text-[var(--text-muted)]">Page {page} of {totalPages}</span>
+                        <button type="button" disabled={!hasNextGalleryPage} onClick={() => goToGalleryPage(page + 1)} className="flex h-9 items-center gap-2 rounded-lg border border-[var(--border)] px-4 text-[10px] font-bold uppercase tracking-wider text-[var(--text-secondary)] disabled:opacity-35">Next <ChevronRight size={14} /></button>
                     </nav>
                 )}
             </section>
@@ -541,8 +592,13 @@ export default function ClientCullingGallery() {
                 displayStartIndex={showSelected ? 0 : (page - 1) * GALLERY_PAGE_SIZE}
                 currentPhotoId={lightboxPhotoId}
                 selectedIds={effectiveSelectedIds}
+                hasPreviousPage={hasPreviousGalleryPage}
+                hasNextPage={hasNextGalleryPage}
+                totalCount={showSelected ? visiblePhotos.length : totalPhotos}
                 onClose={() => setLightboxPhotoId(null)}
                 onMove={setLightboxPhotoId}
+                onPreviousPage={() => moveLightboxAcrossPage('previous')}
+                onNextPage={() => moveLightboxAcrossPage('next')}
                 onToggle={handleToggleSelection}
             />
 
@@ -568,7 +624,7 @@ export default function ClientCullingGallery() {
                 />
             )}
             
-            {showTutorial && <TutorialModal onClose={closeTutorial} />}
+            {showTutorial && <TutorialModal galleryId={galleryId} token={token} tutorialSampleSlots={displayGallery?.tutorialSampleSlots || []} onClose={closeTutorial} />}
         </main>
     );
 }
