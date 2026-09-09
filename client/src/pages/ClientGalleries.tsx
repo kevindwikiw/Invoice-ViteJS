@@ -39,6 +39,7 @@ import {
 } from '../constants/uiContract';
 
 import type {
+  GallerySelection,
   GalleryStatus,
   GallerySummary
 } from '../features/culling/culling.types';
@@ -76,6 +77,12 @@ function deadlineLabel(gallery: Pick<GallerySummary, 'selectionDeadlineAt' | 'is
   if (!gallery.selectionDeadlineAt) return 'Not set';
   if (gallery.isExpired) return 'Expired';
   return dateFormat.format(new Date(gallery.selectionDeadlineAt));
+}
+
+function selectionClientLabel(selection: Pick<GallerySelection, 'clientLabel' | 'displayOrder'>, galleryTitle: string, index: number): string {
+  const displayOrder = Number(selection.displayOrder);
+  const displayIndex = Number.isFinite(displayOrder) && displayOrder >= 0 ? displayOrder : index;
+  return selection.clientLabel || `${galleryTitle.trim() || 'Photo'} ${String(displayIndex + 1).padStart(2, '0')}`;
 }
 
 const Unlimited = () => (
@@ -702,6 +709,7 @@ function GalleryDetail({ gallery, close }: { gallery: GallerySummary; close: () 
   const discountRules = data.addon?.discountRules;
   const addonEstimatedTotal = calculateAddonQuote(addonDraftLimit, addonUnitPrice, discountRules).total;
   const submittedCount = Number(data.selectionCount || 0);
+  const selectionRows = detail.data?.selections || [];
   const link = publicUrl(data);
   const driveUrl = data.driveFolderId.startsWith('http') ? data.driveFolderId : `https://drive.google.com/drive/folders/${data.driveFolderId}`;
 
@@ -934,6 +942,43 @@ function GalleryDetail({ gallery, close }: { gallery: GallerySummary; close: () 
             )}
           </div>
         </div>
+
+        <section className="border border-[var(--border)]">
+          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--border)] px-4 py-3">
+            <div>
+              <p className="label-xs text-[var(--accent)]">Selection mapping</p>
+              <p className="mt-1 text-xs text-[var(--text-muted)]">Client labels are paired with the original Google Drive filenames.</p>
+            </div>
+            <span className="text-[10px] font-bold uppercase tracking-[0.12em] text-[var(--text-muted)]">{selectionRows.length} selected</span>
+          </div>
+
+          {selectionRows.length ? (
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[760px] text-left text-xs">
+                <thead className="bg-[var(--bg-elevated)] text-[10px] uppercase tracking-[0.12em] text-[var(--text-muted)]">
+                  <tr>
+                    <th className="px-4 py-2.5">Client label</th>
+                    <th className="px-4 py-2.5">Google Drive filename</th>
+                    <th className="px-4 py-2.5">Drive file ID</th>
+                    <th className="px-4 py-2.5">Submitted</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-[var(--border)]">
+                  {selectionRows.map((selection, index) => (
+                    <tr key={selection.selectedDriveFileId} className="text-[var(--text-secondary)]">
+                      <td className="px-4 py-3 font-semibold text-[var(--text-primary)]">{selectionClientLabel(selection, data.title, index)}</td>
+                      <td className="max-w-[220px] truncate px-4 py-3" title={selection.selectedFilename}>{selection.selectedFilename}</td>
+                      <td className="max-w-[220px] truncate px-4 py-3 font-mono text-[10px]" title={selection.selectedDriveFileId}>{selection.selectedDriveFileId}</td>
+                      <td className="px-4 py-3 text-[var(--text-muted)]">{dateFormat.format(new Date(selection.submittedAt))}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <div className="px-4 py-8 text-center text-xs text-[var(--text-muted)]">No submitted selections yet.</div>
+          )}
+        </section>
       </div>
     </Modal>
   );

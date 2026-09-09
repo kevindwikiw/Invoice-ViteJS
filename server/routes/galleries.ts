@@ -80,6 +80,8 @@ type SelectionRow = {
     galleryId: number;
     selectedDriveFileId: string;
     selectedFilename: string;
+    clientLabel?: string;
+    displayOrder?: number | null;
     note?: string | null;
     submittedAt: string;
 };
@@ -411,6 +413,15 @@ function csvEscape(value: string | number | null | undefined): string {
     return /[",\n\r]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
 }
 
+function galleryPhotoDisplayLabel(galleryTitle: string, displayIndex: number): string {
+    return `${galleryTitle.trim() || "Photo"} ${String(displayIndex + 1).padStart(2, "0")}`;
+}
+
+function selectionDisplayIndex(row: SelectionRow, fallbackIndex: number): number {
+    const displayOrder = Number(row.displayOrder);
+    return Number.isFinite(displayOrder) && displayOrder >= 0 ? displayOrder : fallbackIndex;
+}
+
 async function photoForImageRequest(c: Context<Env>, gallery: GalleryRow, fileId: string): Promise<PhotoRow | null> {
     const tokenPayload = verifyPhotoToken(c.req.query("pt") || "", gallery.id, gallery.accessVersion, fileId);
     if (tokenPayload) {
@@ -680,14 +691,22 @@ adminGalleriesRouter.get("/:id", async (c) => {
         FROM gallery_photos WHERE gallery_id = ? ORDER BY display_order, filename
     `, [id]);
     const selections = await galleryAll<SelectionRow>(`
-        SELECT id, gallery_id as "galleryId", selected_drive_file_id as "selectedDriveFileId",
-               selected_filename as "selectedFilename", note, submitted_at as "submittedAt"
-        FROM gallery_selections WHERE gallery_id = ? ORDER BY selected_filename
+        SELECT s.id, s.gallery_id as "galleryId", s.selected_drive_file_id as "selectedDriveFileId",
+               s.selected_filename as "selectedFilename", p.display_order as "displayOrder",
+               s.note, s.submitted_at as "submittedAt"
+        FROM gallery_selections s
+        LEFT JOIN gallery_photos p ON p.gallery_id = s.gallery_id AND p.drive_file_id = s.selected_drive_file_id
+        WHERE s.gallery_id = ?
+        ORDER BY COALESCE(p.display_order, 2147483647), s.selected_filename
     `, [id]);
     return c.json({
         gallery: galleryAdminShape(gallery, { photoCount: photos.length, selectionCount: selections.length }),
         photos: photos.map((photo) => photoShape(photo as PhotoRow & Record<string, unknown>)),
-        selections,
+        selections: selections.map((selection, index) => ({
+            ...selection,
+            displayOrder: selection.displayOrder ?? null,
+            clientLabel: galleryPhotoDisplayLabel(gallery.title, selectionDisplayIndex(selection, index)),
+        })),
     });
 });
 
@@ -890,13 +909,25 @@ adminGalleriesRouter.get("/:id/export.csv", async (c) => {
     const gallery = await galleryOne<GalleryRow>("SELECT id, title, drive_folder_id as \"driveFolderId\", pin_hash as \"pinHash\", status, created_at as \"createdAt\", updated_at as \"updatedAt\", synced_at as \"syncedAt\", access_version as \"accessVersion\" FROM galleries WHERE id = ?", [id]);
     if (!gallery) return c.text("Gallery not found", 404);
     const selections = await galleryAll<SelectionRow>(`
-        SELECT id, gallery_id as "galleryId", selected_drive_file_id as "selectedDriveFileId",
-               selected_filename as "selectedFilename", note, submitted_at as "submittedAt"
-        FROM gallery_selections WHERE gallery_id = ? ORDER BY selected_filename
+        SELECT s.id, s.gallery_id as "galleryId", s.selected_drive_file_id as "selectedDriveFileId",
+               s.selected_filename as "selectedFilename", p.display_order as "displayOrder",
+               s.note, s.submitted_at as "submittedAt"
+        FROM gallery_selections s
+        LEFT JOIN gallery_photos p ON p.gallery_id = s.gallery_id AND p.drive_file_id = s.selected_drive_file_id
+        WHERE s.gallery_id = ?
+        ORDER BY COALESCE(p.display_order, 2147483647), s.selected_filename
     `, [id]);
     const lines = [
-        ["gallery_id", "gallery_title", "drive_file_id", "filename", "note", "submitted_at"].map(csvEscape).join(","),
-        ...selections.map((row) => [gallery.id, gallery.title, row.selectedDriveFileId, row.selectedFilename, row.note, row.submittedAt].map(csvEscape).join(",")),
+        ["gallery_id", "gallery_title", "client_label", "drive_file_id", "filename", "note", "submitted_at"].map(csvEscape).join(","),
+        ...selections.map((row, index) => [
+            gallery.id,
+            gallery.title,
+            galleryPhotoDisplayLabel(gallery.title, selectionDisplayIndex(row, index)),
+            row.selectedDriveFileId,
+            row.selectedFilename,
+            row.note,
+            row.submittedAt,
+        ].map(csvEscape).join(",")),
     ];
     return new Response(lines.join("\n"), {
         headers: {
@@ -915,15 +946,20 @@ adminGalleriesRouter.get("/:id/export.xlsx", async (c) => {
     const gallery = await galleryOne<GalleryRow>("SELECT id, title, drive_folder_id as \"driveFolderId\", pin_hash as \"pinHash\", status, created_at as \"createdAt\", updated_at as \"updatedAt\", synced_at as \"syncedAt\", access_version as \"accessVersion\" FROM galleries WHERE id = ?", [id]);
     if (!gallery) return c.json({ error: "Gallery not found" }, 404);
     const selections = await galleryAll<SelectionRow>(`
-        SELECT id, gallery_id as "galleryId", selected_drive_file_id as "selectedDriveFileId",
-               selected_filename as "selectedFilename", note, submitted_at as "submittedAt"
-        FROM gallery_selections WHERE gallery_id = ? ORDER BY selected_filename
+        SELECT s.id, s.gallery_id as "galleryId", s.selected_drive_file_id as "selectedDriveFileId",
+               s.selected_filename as "selectedFilename", p.display_order as "displayOrder",
+               s.note, s.submitted_at as "submittedAt"
+        FROM gallery_selections s
+        LEFT JOIN gallery_photos p ON p.gallery_id = s.gallery_id AND p.drive_file_id = s.selected_drive_file_id
+        WHERE s.gallery_id = ?
+        ORDER BY COALESCE(p.display_order, 2147483647), s.selected_filename
     `, [id]);
     const rows = [
-        ["No", "Gallery", "DriveFileId", "Filename", "Note", "SubmittedAt"],
+        ["No", "Gallery", "ClientLabel", "DriveFileId", "Filename", "Note", "SubmittedAt"],
         ...selections.map((row, index) => [
             index + 1,
             gallery.title,
+            galleryPhotoDisplayLabel(gallery.title, selectionDisplayIndex(row, index)),
             row.selectedDriveFileId,
             row.selectedFilename,
             row.note || "",

@@ -58,6 +58,8 @@ export interface GallerySelection {
     galleryId: number;
     selectedDriveFileId: string;
     selectedFilename: string;
+    clientLabel?: string;
+    displayOrder?: number | null;
     note?: string | null;
     submittedAt: string;
 }

@@ -38,6 +38,10 @@ function gallery(deadline: string, serverTime = '2026-09-02T03:00:00.000Z') {
     };
 }
 
+function galleryWithTitle(title: string, deadline = '2026-09-05T03:00:00.000Z') {
+    return { ...gallery(deadline), title };
+}
+
 async function installSession(page: Page, id = galleryId) {
     await page.addInitScript(({ galleryKey, galleryToken }) => {
         localStorage.setItem(`orbit_culling_token_${galleryKey}`, galleryToken);
@@ -77,7 +81,7 @@ async function expectMobileGalleryViewport(page: Page, width: number, height: nu
     const layout = await page.evaluate(() => {
         const grid = document.querySelector('[data-testid="gallery-grid"]')?.getBoundingClientRect();
         const submit = [...document.querySelectorAll('button')].find((button) => button.textContent?.trim() === 'Submit')?.getBoundingClientRect();
-        const visibleTiles = [...document.querySelectorAll('button[aria-label^="Open photo-"]')]
+        const visibleTiles = [...document.querySelectorAll('button[aria-label^="Open Full Frame Test Gallery"]')]
             .filter((node) => {
                 const rect = node.getBoundingClientRect();
                 return rect.width > 0 && rect.height > 0 && rect.top < window.innerHeight && rect.bottom > 0;
@@ -133,7 +137,7 @@ test('opens photo 101 on page 2 by driveFileId and keeps the full frame above th
     });
 
     await page.goto(`/culling/${galleryId}`);
-    await expect(page.getByRole('button', { name: /^Open photo-/ })).toHaveCount(50);
+    await expect(page.getByRole('button', { name: /^Open Full Frame Test Gallery/ })).toHaveCount(50);
     await expectMobileGalleryViewport(page, 375, 667);
     await expectMobileGalleryViewport(page, 390, 844);
     await expectMobileGalleryViewport(page, 414, 896);
@@ -143,14 +147,14 @@ test('opens photo 101 on page 2 by driveFileId and keeps the full frame above th
     await nextPage.click();
     await expect.poll(() => secondPageRequests).toBeGreaterThan(0);
     await expect(page.getByText('Page 2 of 2')).toBeVisible();
-    await expect(page.getByRole('button', { name: /^Open photo-/ })).toHaveCount(51);
+    await expect(page.getByRole('button', { name: /^Open Full Frame Test Gallery/ })).toHaveCount(51);
 
-    const lastPhoto = page.getByRole('button', { name: 'Open photo-101.jpg' });
+    const lastPhoto = page.getByRole('button', { name: 'Open Full Frame Test Gallery 101' });
     await lastPhoto.scrollIntoViewIfNeeded();
     await expect(lastPhoto).toBeVisible();
     await lastPhoto.click();
 
-    await expect(page.getByTestId('gallery-lightbox-footer').getByText('photo-101.jpg', { exact: true })).toBeVisible();
+    await expect(page.getByTestId('gallery-lightbox-footer').getByText('Full Frame Test Gallery 101', { exact: true })).toBeVisible();
     const image = page.getByTestId('gallery-lightbox-image');
     await expect(image).toHaveAttribute('src', /\/file-101\/preview\?/);
     await expectLightboxFrame(page, 1600 / 1067);
@@ -196,4 +200,84 @@ test('locks an open gallery when its countdown reaches zero', async ({ page }) =
     await expect(page.getByTitle('Selection time remaining')).toBeVisible();
     await expect(page.getByRole('heading', { name: 'Selection Closed' })).toBeVisible({ timeout: 5_000 });
     await expect(page.getByText('The selection deadline has ended. Please contact the admin if you need more time.')).toBeVisible();
+});
+
+test('keeps long Google Drive filenames below the image and uses a short client label', async ({ page }) => {
+    const id = 'long-name-gallery';
+    const longName = 'Copy of P150018-with-a-very-long-google-drive-duplicate-name-that-should-not-cover-the-photo-final-v2.jpg';
+    await page.setViewportSize({ width: 375, height: 667 });
+    await installSession(page, id);
+
+    await page.route(`**/api/public/galleries/${id}/contact`, (route) => route.fulfill({ json: {} }));
+    await page.route(`**/api/public/galleries/${id}/photos?*`, (route) => route.fulfill({
+        json: {
+            gallery: galleryWithTitle('Kevin Prewedding'),
+            photos: [{ ...photo(1), filename: longName }],
+            page: 1,
+            pageSize: 50,
+            total: 1,
+            totalPages: 1,
+            selectedDriveFileIds: [],
+            selectedPhotos: [],
+        },
+    }));
+    await page.route(`**/api/public/galleries/${id}/photos/*/thumbnail?*`, (route) => fulfillImage(route, 320, 320));
+
+    await page.goto(`/culling/${id}`);
+    const opener = page.getByRole('button', { name: 'Open Kevin Prewedding 01' });
+    await expect(opener).toBeVisible();
+    await expect(page.getByText('Kevin Prewedding 01', { exact: true })).toBeVisible();
+    await expect(page.getByText(longName)).toHaveCount(0);
+
+    const layout = await page.evaluate(() => {
+        const openerElement = document.querySelector('button[aria-label="Open Kevin Prewedding 01"]');
+        const tile = openerElement?.closest('article')?.getBoundingClientRect();
+        const image = openerElement?.getBoundingClientRect();
+        const label = [...document.querySelectorAll('p')].find((node) => node.textContent === 'Kevin Prewedding 01')?.getBoundingClientRect();
+        return {
+            imageBottom: image?.bottom ?? 0,
+            imageHeight: image?.height ?? 0,
+            labelTop: label?.top ?? 0,
+            tileHeight: tile?.height ?? 0,
+        };
+    });
+
+    expect(layout.labelTop).toBeGreaterThanOrEqual(layout.imageBottom - 1);
+    expect(layout.tileHeight).toBeGreaterThan(layout.imageHeight);
+});
+
+test('keeps draft selections through reload and clears the unsaved status after submit', async ({ page }) => {
+    const id = 'draft-safety-gallery';
+    await installSession(page, id);
+
+    await page.route(`**/api/public/galleries/${id}/contact`, (route) => route.fulfill({ json: {} }));
+    await page.route(`**/api/public/galleries/${id}/photos?*`, (route) => route.fulfill({
+        json: {
+            gallery: gallery('2026-09-05T03:00:00.000Z'),
+            photos: [photo(1), photo(2)],
+            page: 1,
+            pageSize: 50,
+            total: 2,
+            totalPages: 1,
+            selectedDriveFileIds: [],
+            selectedPhotos: [],
+        },
+    }));
+    await page.route(`**/api/public/galleries/${id}/photos/*/thumbnail?*`, (route) => fulfillImage(route, 320, 320));
+    await page.route(`**/api/public/galleries/${id}/selections`, (route) => route.fulfill({
+        json: { status: 'submitted', selectionCount: 1, filenames: ['photo-001.jpg'] },
+    }));
+
+    await page.goto(`/culling/${id}`);
+    await page.getByRole('button', { name: 'Select Full Frame Test Gallery 01' }).click();
+    await expect(page.getByText('Not submitted')).toBeVisible();
+
+    await page.reload();
+    await expect(page.getByRole('button', { name: 'Remove Full Frame Test Gallery 01' })).toHaveAttribute('aria-pressed', 'true');
+    await expect(page.getByText('Not submitted')).toBeVisible();
+
+    await page.getByRole('button', { name: 'Submit', exact: true }).click();
+    await page.getByRole('button', { name: 'Submit 1' }).click();
+    await expect(page.getByText('Selection saved. 1 filenames submitted.')).toBeVisible();
+    await expect(page.getByText('Not submitted')).toHaveCount(0);
 });
