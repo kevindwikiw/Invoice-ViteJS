@@ -5,6 +5,7 @@ WORKDIR /app
 COPY package.json bun.lock ./
 COPY client/package.json ./client/package.json
 COPY server/package.json ./server/package.json
+COPY marketing/package.json ./marketing/package.json
 
 RUN bun install --frozen-lockfile
 
@@ -18,6 +19,7 @@ WORKDIR /app
 COPY package.json bun.lock ./
 COPY client/package.json ./client/package.json
 COPY server/package.json ./server/package.json
+COPY marketing/package.json ./marketing/package.json
 RUN bun install --production --filter=server --frozen-lockfile
 COPY server ./server
 COPY --from=build /app/client/dist ./client/dist
