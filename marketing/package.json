@@ -1,0 +1,28 @@
+{
+  "name": "marketing",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "description": "The Orbit Photo public marketing website workspace.",
+  "scripts": {
+    "dev": "rsbuild dev --port 5180 --strict-port",
+    "build": "rsbuild build",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@tanstack/react-router": "^1.168.50",
+    "@tanstack/react-start": "^1.168.50",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0"
+  },
+  "devDependencies": {
+    "@rsbuild/core": "^2.1.10",
+    "@rsbuild/plugin-react": "^2.1.0",
+    "@rsbuild/plugin-tailwindcss": "^2.0.3",
+    "@types/node": "^24.10.1",
+    "@types/react": "^19.2.5",
+    "@types/react-dom": "^19.2.3",
+    "tailwindcss": "^4.3.3",
+    "typescript": "~5.9.3"
+  }
+}

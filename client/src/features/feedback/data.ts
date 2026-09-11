@@ -4,12 +4,12 @@ import { apiFetch, fetchWithAuth } from '../../lib/api';
 export type FeedbackStatus = 'new' | 'reviewed';
 
 export const FEEDBACK_TAGS = [
-    'Relaxed & Fun',
-    'Light & Airy',
-    'Friendly Team',
-    'Natural Direction',
-    'Cinematic Film',
-    'Professional Service',
+    'Easy Communication',
+    'Friendly Crew',
+    'Clear Direction',
+    'Candid Moments',
+    'Photo Quality',
+    'Video Storytelling',
 ] as const;
 
 export type FeedbackTag = (typeof FEEDBACK_TAGS)[number];

@@ -9,6 +9,7 @@ import {
   Clipboard,
   Download,
   ExternalLink,
+  FileCode2,
   FileSpreadsheet,
   FolderSync,
   Images,
@@ -51,6 +52,7 @@ import {
 import {
   createGallery,
   deleteGallery,
+  downloadGallerySelectionCopyScript,
   downloadGallerySelections,
   downloadGallerySelectionsXlsx,
   getGalleryContact,
@@ -363,6 +365,17 @@ function DownloadMenu({ gallery }: { gallery: GallerySummary }) {
           >
             <FileSpreadsheet size={12} />
             XLSX
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setOpen(false);
+              void downloadGallerySelectionCopyScript(gallery.id);
+            }}
+            className="flex w-full cursor-pointer items-center gap-2 rounded-md px-3 py-2 text-[10px] font-bold uppercase hover:bg-[var(--bg-elevated)]"
+          >
+            <FileCode2 size={12} />
+            PS1
           </button>
         </div>
       )}

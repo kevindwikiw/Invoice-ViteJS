@@ -52,6 +52,12 @@ function normalizeMessage(value: unknown): string {
 }
 
 const FEEDBACK_TAGS = new Set([
+    "Easy Communication",
+    "Friendly Crew",
+    "Clear Direction",
+    "Candid Moments",
+    "Photo Quality",
+    "Video Storytelling",
     "Relaxed & Fun",
     "Light & Airy",
     "Friendly Team",
@@ -115,7 +121,6 @@ publicFeedbackRoutes.post("/", feedbackRateLimiter, async (c) => {
             return c.json({ error: "Rating must be an integer between 1 and 5." }, 400);
         }
         if (clientName.length > 80) return c.json({ error: "Names must not exceed 80 characters." }, 400);
-        if (tags.length > 3) return c.json({ error: "Choose up to 3 highlights." }, 400);
         if (note.length > 1_000 || loved.length > 1_000 || improvement.length > 1_000) {
             return c.json({ error: "Feedback note must not exceed 1000 characters." }, 400);
         }

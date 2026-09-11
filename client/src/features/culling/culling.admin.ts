@@ -152,3 +152,17 @@ export async function downloadGallerySelectionsXlsx(id: number): Promise<void> {
     link.remove();
     window.setTimeout(() => URL.revokeObjectURL(url), 0);
 }
+
+export async function downloadGallerySelectionCopyScript(id: number): Promise<void> {
+    const response = await fetchWithAuth(`/galleries/${id}/export-copy.ps1`);
+    if (!response.ok) throw await parseError(response, 'Unable to export copy script.');
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `gallery-${id}-copy-submitted.ps1`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 0);
+}

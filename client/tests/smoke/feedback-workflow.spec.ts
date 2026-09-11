@@ -25,12 +25,16 @@ test('anonymous feedback form is available at the simple public URL', async ({ p
     await expect(page.getByLabel('Choose a photo from your day')).toBeAttached();
     await expect(page.getByRole('button', { name: /Choose your photo/i })).toBeVisible();
     await expect(page.getByText(/private Polaroid board/i)).toBeVisible();
-    await page.getByRole('button', { name: 'Relaxed & Fun' }).click();
-    await page.getByRole('button', { name: 'Light & Airy' }).click();
-    await page.getByRole('button', { name: 'Friendly Team' }).click();
-    await expect(page.getByRole('button', { name: 'Natural Direction' })).toBeDisabled();
-    await page.getByRole('button', { name: 'Relaxed & Fun' }).click();
-    await expect(page.getByRole('button', { name: 'Natural Direction' })).toBeEnabled();
+    await page.getByRole('button', { name: 'Easy Communication' }).click();
+    await page.getByRole('button', { name: 'Friendly Crew' }).click();
+    await page.getByRole('button', { name: 'Clear Direction' }).click();
+    await expect(page.getByText('3 selected')).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Candid Moments' })).toBeEnabled();
+    await page.getByRole('button', { name: 'Candid Moments' }).click();
+    await expect(page.getByText('4 selected')).toBeVisible();
+    await page.getByRole('button', { name: 'Easy Communication' }).click();
+    await expect(page.getByText('3 selected')).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Candid Moments' })).toBeEnabled();
     await page.getByRole('button', { name: /Send feedback/i }).click();
     await expect(page.getByRole('alert')).toContainText('rating');
 });
@@ -56,7 +60,7 @@ for (const viewport of [{ width: 390, height: 844 }, { width: 430, height: 932 }
         expect(Math.abs((labelBox?.y ?? 0) - (optionalBox?.y ?? 0))).toBeLessThan(4);
         expect((optionalBox?.x ?? 0) - ((labelBox?.x ?? 0) + (labelBox?.width ?? 0))).toBeLessThan(12);
 
-        const vibeLabel = page.getByText('What matched your vibe?', { exact: true });
+        const vibeLabel = page.getByText('What stood out?', { exact: true });
         const beforeReaction = await vibeLabel.boundingBox();
         await page.getByRole('radio', { name: /4 stars, Great!/i }).click();
         await expect(page.getByText('Great!', { exact: true })).toBeVisible();
@@ -64,8 +68,8 @@ for (const viewport of [{ width: 390, height: 844 }, { width: 430, height: 932 }
         const afterReaction = await vibeLabel.boundingBox();
         expect(Math.abs((beforeReaction?.y ?? 0) - (afterReaction?.y ?? 0))).toBeLessThan(2);
 
-        await page.getByRole('button', { name: 'Natural Direction' }).click();
-        await expect(page.getByRole('button', { name: 'Natural Direction' })).toHaveAttribute('aria-pressed', 'true');
+        await page.getByRole('button', { name: 'Clear Direction' }).click();
+        await expect(page.getByRole('button', { name: 'Clear Direction' })).toHaveAttribute('aria-pressed', 'true');
         await expect(page.getByRole('button', { name: /Send feedback/i })).toBeVisible();
     });
 }
@@ -91,7 +95,7 @@ test('public feedback endpoint parses multipart before storage', async ({ reques
         multipart: {
             clientName: 'Multipart Smoke',
             rating: '5',
-            tags: JSON.stringify(['Friendly Team']),
+            tags: JSON.stringify(['Friendly Crew']),
             note: 'This request must stop before storage.',
             photo: {
                 name: 'oversized.jpg',
@@ -112,7 +116,7 @@ test('admin can receive wedding feedback and review it in the drawer', async ({ 
     await page.goto('/feedback');
     await page.getByLabel('Your names').fill(marker);
     await page.getByRole('radio', { name: /5 stars, Absolutely amazing/i }).click();
-    await page.getByRole('button', { name: 'Relaxed & Fun' }).click();
+    await page.getByRole('button', { name: 'Clear Direction' }).click();
     await page.getByLabel("Anything else you'd like to share?").fill('The whole session felt effortless.');
     await page.getByLabel('Choose a photo from your day').setInputFiles({
         name: 'rings.svg',
@@ -131,7 +135,7 @@ test('admin can receive wedding feedback and review it in the drawer', async ({ 
     await expect(row).toBeVisible();
     await row.click();
     await expect(page.getByRole('dialog', { name: marker })).toBeVisible();
-    await expect(page.getByText('Relaxed & Fun', { exact: true }).last()).toBeVisible();
+    await expect(page.getByText('Clear Direction', { exact: true }).last()).toBeVisible();
     await expect(page.getByText('The whole session felt effortless.')).toBeVisible();
     await expect(page.getByAltText(`Photo shared by ${marker}`)).toBeVisible();
     await page.getByRole('button', { name: 'Mark reviewed' }).click();

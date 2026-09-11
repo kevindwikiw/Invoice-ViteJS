@@ -457,6 +457,14 @@ function csvEscape(value: string | number | null | undefined): string {
     return /[",\n\r]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
 }
 
+function powershellSingleQuoted(value: string | number | null | undefined): string {
+    return `'${String(value ?? "").replaceAll("'", "''")}'`;
+}
+
+function scriptSafeFilenamePart(value: string): string {
+    return value.replace(/[<>:"/\\|?*\u0000-\u001F]/g, "_").trim() || "photo";
+}
+
 function galleryPhotoDisplayLabel(galleryTitle: string, displayIndex: number): string {
     return `${galleryTitle.trim() || "Photo"} ${String(displayIndex + 1).padStart(2, "0")}`;
 }
@@ -1027,6 +1035,77 @@ adminGalleriesRouter.get("/:id/export.xlsx", async (c) => {
         headers: {
             "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             "Content-Disposition": `attachment; filename="gallery-${id}-selections.xlsx"`,
+        },
+    });
+});
+
+adminGalleriesRouter.get("/:id/export-copy.ps1", async (c) => {
+    const denied = await requireGalleryAdmin(c);
+    if (denied) return denied;
+
+    const id = Number(c.req.param("id"));
+    if (!Number.isInteger(id)) return c.text("Invalid gallery ID", 400);
+    const gallery = await galleryOne<GalleryRow>("SELECT id, title, drive_folder_id as \"driveFolderId\", pin_hash as \"pinHash\", status, created_at as \"createdAt\", updated_at as \"updatedAt\", synced_at as \"syncedAt\", access_version as \"accessVersion\" FROM galleries WHERE id = ?", [id]);
+    if (!gallery) return c.text("Gallery not found", 404);
+    const selections = await galleryAll<SelectionRow>(`
+        SELECT s.id, s.gallery_id as "galleryId", s.selected_drive_file_id as "selectedDriveFileId",
+               s.selected_filename as "selectedFilename", p.display_order as "displayOrder",
+               s.note, s.submitted_at as "submittedAt"
+        FROM gallery_selections s
+        LEFT JOIN gallery_photos p ON p.gallery_id = s.gallery_id AND p.drive_file_id = s.selected_drive_file_id
+        WHERE s.gallery_id = ?
+        ORDER BY COALESCE(p.display_order, 2147483647), s.selected_filename
+    `, [id]);
+    const entries = selections.map((row, index) => {
+        const clientLabel = galleryPhotoDisplayLabel(gallery.title, selectionDisplayIndex(row, index));
+        return `    [pscustomobject]@{ ClientLabel = ${powershellSingleQuoted(clientLabel)}; Filename = ${powershellSingleQuoted(row.selectedFilename)}; DriveFileId = ${powershellSingleQuoted(row.selectedDriveFileId)} }`;
+    });
+    const script = [
+        "# Orbit submitted selection copy script",
+        `# Gallery: ${gallery.title}`,
+        `# Gallery ID: ${gallery.id}`,
+        "#",
+        "# Usage:",
+        "# 1. Set $SourceRoot to your local folder that contains the original exported Google Drive files.",
+        "# 2. Set $DestinationRoot to the folder where selected files should be copied.",
+        "# 3. Run this script in PowerShell.",
+        "",
+        "$ErrorActionPreference = 'Stop'",
+        "",
+        "$SourceRoot = 'C:\\Path\\To\\Original\\Photos'",
+        "$DestinationRoot = 'C:\\Path\\To\\Selected\\Photos'",
+        "",
+        "$Selections = @(",
+        entries.length ? entries.join("\n") : "    # No submitted selections yet.",
+        ")",
+        "",
+        "New-Item -ItemType Directory -Force -Path $DestinationRoot | Out-Null",
+        "",
+        "foreach ($item in $Selections) {",
+        "    $source = Join-Path $SourceRoot $item.Filename",
+        "    if (-not (Test-Path -LiteralPath $source)) {",
+        "        Write-Warning \"Missing source file: $($item.Filename) [$($item.ClientLabel)]\"",
+        "        continue",
+        "    }",
+        "",
+        "    $extension = [System.IO.Path]::GetExtension($item.Filename)",
+        "    $labelName = ($item.ClientLabel -replace '[<>:\"/\\\\|?*]', '_').Trim()",
+        "    if (-not $labelName) { $labelName = 'Selected photo' }",
+        "    $destination = Join-Path $DestinationRoot ($labelName + $extension)",
+        "",
+        "    Copy-Item -LiteralPath $source -Destination $destination -Force",
+        "    Write-Host \"Copied $($item.ClientLabel): $($item.Filename)\"",
+        "}",
+        "",
+        "Write-Host \"Done copying submitted selections.\"",
+        "",
+    ].join("\r\n");
+
+    return new Response(script, {
+        headers: {
+            "Content-Type": "text/plain; charset=utf-8",
+            "Content-Disposition": `attachment; filename="${scriptSafeFilenamePart(gallery.title)}-${id}-copy-submitted.ps1"`,
+            "X-Content-Type-Options": "nosniff",
         },
     });
 });

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { type CSSProperties, useEffect, useRef, useState } from 'react';
 import { ArrowRight, Camera, Check, CheckCircle2, Loader2, Moon, Star, Sun, X } from 'lucide-react';
 import orbitLogo from '../assets/pdf/logo.png';
 import { FEEDBACK_TAGS, submitPublicFeedback, type FeedbackTag, type PublicFeedbackInput } from '../features/feedback/data';
@@ -13,6 +13,17 @@ const RATING_REACTIONS: Record<(typeof RATINGS)[number], { emoji: string; label:
     5: { emoji: '🥰', label: 'Absolutely amazing!' },
 };
 const MAX_SOURCE_PHOTO_BYTES = 20_000_000;
+type FeedbackThemeStyle = CSSProperties & { '--accent': string; '--accent-muted': string };
+
+const FEEDBACK_DARK_THEME: FeedbackThemeStyle = {
+    '--accent': '#ffffff',
+    '--accent-muted': 'rgba(255, 255, 255, 0.14)',
+};
+
+const FEEDBACK_LIGHT_THEME: FeedbackThemeStyle = {
+    '--accent': '#1a1a1a',
+    '--accent-muted': 'rgba(26, 26, 26, 0.1)',
+};
 
 function PublicPageHeader({ darkMode, toggleTheme }: { darkMode: boolean; toggleTheme: () => void }) {
     return (
@@ -28,10 +39,10 @@ function PublicPageHeader({ darkMode, toggleTheme }: { darkMode: boolean; toggle
 function PolaroidStack({ loading }: { loading: boolean }) {
     return (
         <span className="relative h-[72px] w-[82px] shrink-0 [perspective:500px]" aria-hidden="true">
-            <span className="absolute left-2 top-2 h-[58px] w-[46px] -rotate-[11deg] border border-black/10 bg-[#ded8ca] shadow-md transition-transform duration-300 ease-out group-hover:-translate-x-1.5 group-hover:-rotate-[15deg] motion-reduce:transition-none" />
-            <span className="absolute right-1 top-1.5 h-[59px] w-[47px] rotate-[10deg] border border-black/10 bg-[#eee9de] shadow-md transition-transform duration-300 ease-out group-hover:translate-x-1.5 group-hover:rotate-[14deg] motion-reduce:transition-none" />
-            <span className="absolute left-[17px] top-0 flex h-[64px] w-[50px] -rotate-2 flex-col bg-[#faf7ef] p-1 pb-2 shadow-[0_10px_24px_rgba(0,0,0,0.24)] transition-transform duration-300 ease-out [transform-style:preserve-3d] group-hover:-translate-y-1 group-hover:rotate-0 group-hover:scale-[1.04] motion-reduce:transition-none">
-                <span className="flex flex-1 items-center justify-center bg-[#27231c] text-[#d1b46c]">
+            <span className="absolute left-2 top-2 h-[58px] w-[46px] -rotate-[11deg] border border-black/10 bg-[#d8d8d8] shadow-md transition-transform duration-300 ease-out group-hover:-translate-x-1.5 group-hover:-rotate-[15deg] motion-reduce:transition-none" />
+            <span className="absolute right-1 top-1.5 h-[59px] w-[47px] rotate-[10deg] border border-black/10 bg-[#e8e8e8] shadow-md transition-transform duration-300 ease-out group-hover:translate-x-1.5 group-hover:rotate-[14deg] motion-reduce:transition-none" />
+            <span className="absolute left-[17px] top-0 flex h-[64px] w-[50px] -rotate-2 flex-col bg-[#f7f7f7] p-1 pb-2 shadow-[0_10px_24px_rgba(0,0,0,0.24)] transition-transform duration-300 ease-out [transform-style:preserve-3d] group-hover:-translate-y-1 group-hover:rotate-0 group-hover:scale-[1.04] motion-reduce:transition-none">
+                <span className="flex flex-1 items-center justify-center bg-[#111111] text-white">
                     {loading ? <Loader2 size={15} className="animate-spin" /> : <Camera size={15} />}
                 </span>
                 <span className="mx-auto mt-1 h-px w-5 bg-black/20" />
@@ -137,10 +148,8 @@ export default function Feedback() {
     };
 
     const previewRating = hoverRating || rating;
-    const tagLimitReached = tags.length === 3;
-
     return (
-        <div className="min-h-[100svh] overflow-x-hidden bg-[var(--bg-deep)] text-[var(--text-primary)]">
+        <div style={darkMode ? FEEDBACK_DARK_THEME : FEEDBACK_LIGHT_THEME} className="min-h-[100svh] overflow-x-hidden bg-[var(--bg-deep)] text-[var(--text-primary)]">
             <PublicPageHeader darkMode={darkMode} toggleTheme={() => setDarkMode((current) => !current)} />
             <main className="mx-auto grid w-full max-w-6xl px-5 pb-8 pt-1 sm:px-8 sm:pt-3 lg:grid-cols-[0.82fr_1.18fr] lg:gap-16 lg:pb-16 lg:pt-6">
                 <section className="border-b border-[var(--border)] pb-5 lg:min-h-[650px] lg:border-b-0 lg:border-r lg:pb-0 lg:pr-14">
@@ -149,7 +158,7 @@ export default function Feedback() {
                         <span className="block">How was it</span>
                         <span className="block">working with us?</span>
                     </h1>
-                    <p className="mt-3 max-w-[19rem] text-xs leading-5 text-[var(--text-muted)] md:mt-5 md:max-w-sm md:text-sm md:leading-6">Tap the tags that match your vibe, then leave a note if you'd like.</p>
+                    <p className="mt-3 max-w-[19rem] text-xs leading-5 text-[var(--text-muted)] md:mt-5 md:max-w-sm md:text-sm md:leading-6">Pick the highlights from your photo and video experience, then leave a note if you'd like.</p>
                 </section>
 
                 <section className="pt-5 md:pt-6 lg:pt-0">
@@ -200,15 +209,14 @@ export default function Feedback() {
 
                             <fieldset>
                                 <div className="flex items-center justify-between gap-4">
-                                    <legend className="label-xs text-[var(--text-muted)]">What matched your vibe?</legend>
-                                    <span className="text-[9px] uppercase tracking-[0.14em] text-[var(--text-muted)]">{tags.length} / 3 selected</span>
+                                    <legend className="label-xs text-[var(--text-muted)]">What stood out?</legend>
+                                    <span className="text-[9px] uppercase tracking-[0.14em] text-[var(--text-muted)]">{tags.length} selected</span>
                                 </div>
                                 <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3">
                                     {FEEDBACK_TAGS.map((tag) => {
                                         const active = tags.includes(tag);
-                                        const disabled = tagLimitReached && !active;
                                         return (
-                                            <button key={tag} type="button" aria-pressed={active} disabled={disabled} onClick={() => toggleTag(tag)} className={`flex min-h-10 items-center gap-2 rounded-lg border px-3 py-2 text-left text-[10px] font-semibold leading-4 transition-[transform,color,border-color,background-color,opacity] duration-150 active:scale-[0.98] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)] ${active ? 'border-[var(--accent)] bg-[var(--accent)] text-[var(--bg-deep)]' : disabled ? 'cursor-not-allowed border-[var(--border)] bg-[var(--bg-card)] text-[var(--text-muted)] opacity-35' : 'border-[var(--border)] bg-[var(--bg-card)] text-[var(--text-secondary)] hover:border-[var(--accent)]/50 hover:text-[var(--text-primary)]'}`}>
+                                            <button key={tag} type="button" aria-pressed={active} onClick={() => toggleTag(tag)} className={`flex min-h-10 items-center gap-2 rounded-lg border px-3 py-2 text-left text-[10px] font-semibold leading-4 transition-[transform,color,border-color,background-color,opacity] duration-150 active:scale-[0.98] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)] ${active ? 'border-[var(--accent)] bg-[var(--accent)] text-[var(--bg-deep)]' : 'border-[var(--border)] bg-[var(--bg-card)] text-[var(--text-secondary)] hover:border-[var(--accent)]/50 hover:text-[var(--text-primary)]'}`}>
                                                 {active && <CheckCircle2 size={13} className="shrink-0" />}
                                                 <span>{tag}</span>
                                             </button>
@@ -234,7 +242,7 @@ export default function Feedback() {
                                 <input ref={photoInputRef} type="file" accept="image/*,.heic,.heif" onChange={handlePhoto} className="hidden" aria-label="Choose a photo from your day" />
                                 {photo && photoPreview ? (
                                     <div className="flex items-center gap-4 rounded-xl border border-[var(--border)] bg-[var(--bg-card)] p-3">
-                                        <span className="relative h-[68px] w-[56px] shrink-0 -rotate-2 bg-[#faf7ef] p-1 pb-3 shadow-[0_8px_20px_rgba(0,0,0,0.2)]">
+                                        <span className="relative h-[68px] w-[56px] shrink-0 -rotate-2 bg-[#f7f7f7] p-1 pb-3 shadow-[0_8px_20px_rgba(0,0,0,0.2)]">
                                             <img src={photoPreview} alt="Selected memory preview" className="h-full w-full object-cover" />
                                             <span className="absolute bottom-1.5 left-1/2 h-px w-5 -translate-x-1/2 bg-black/20" aria-hidden="true" />
                                         </span>
