@@ -699,6 +699,7 @@ export default function CreateInvoice() {
         onSuccess: () => {
             addToast('Updated!', 'success');
             queryClient.invalidateQueries({ queryKey: ['invoices'] });
+            queryClient.invalidateQueries({ queryKey: ['invoice', editInvoiceKey] });
             queryClient.invalidateQueries({ queryKey: ['analytics'] });
             navigate({ to: '/history' });
         }

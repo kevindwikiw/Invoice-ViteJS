@@ -177,6 +177,24 @@ function legacyProofs(invoiceData: unknown): string[] {
     }
 }
 
+function invoiceNumber(value: unknown, fallback = 0): number {
+    const normalized = typeof value === "string" ? value.trim().replace(/[^\d.-]/g, "") : value;
+    const numeric = Number(normalized);
+    return Number.isFinite(numeric) ? numeric : fallback;
+}
+
+function calculateInvoiceTotal(body: any): number {
+    const items = Array.isArray(body?.items) ? body.items : [];
+    const subtotal = items.reduce((sum: number, item: unknown) => {
+        const record = asRecord(item);
+        const price = invoiceNumber(record.price ?? record.Price ?? record.unitPrice ?? record.unit_price);
+        const qty = Math.max(1, invoiceNumber(record.qty ?? record.Qty ?? record.quantity, 1));
+        return sum + (price * qty);
+    }, 0);
+
+    return Math.max(0, subtotal - invoiceNumber(body?.cashback));
+}
+
 function exposeProofs<T extends { paymentProofs?: unknown; invoiceData?: unknown }>(invoice: T): T {
     const direct = parseProofs(invoice.paymentProofs);
     const proofs = direct.length ? direct : legacyProofs(invoice.invoiceData);
@@ -343,7 +361,7 @@ invoicesRouter.delete("/:id", async (c) => {
 
 function buildInvoiceData(body: any): string {
     const { items, paymentTerms, cashback, venue, weddingDate, clientPhone, eventTitle, bankName, bankAcc, bankHolder, terms, footerAddress, footerEmail, footerIG, footerPhone, waTemplate, hours, notes } = body;
-    return JSON.stringify({ items, paymentTerms, cashback, venue, weddingDate, clientPhone, eventTitle, bankName, bankAcc, bankHolder, terms, footerAddress, footerEmail, footerIG, footerPhone, waTemplate, hours: hours || "", notes: notes || "" });
+    return JSON.stringify({ items, paymentTerms, cashback, totalAmount: calculateInvoiceTotal(body), venue, weddingDate, clientPhone, eventTitle, bankName, bankAcc, bankHolder, terms, footerAddress, footerEmail, footerIG, footerPhone, waTemplate, hours: hours || "", notes: notes || "" });
 }
 
 invoicesRouter.put("/:id", async (c) => {
@@ -353,14 +371,15 @@ invoicesRouter.put("/:id", async (c) => {
         const id = Number(c.req.param("id"));
         if (!Number.isInteger(id)) return c.json({ error: "Invalid ID" }, 400);
         const body = await c.req.json();
-        const values = [body.invoiceNo, body.clientName, body.weddingDate || new Date().toISOString().split("T")[0], body.totalAmount, buildInvoiceData(body)];
+        const totalAmount = calculateInvoiceTotal(body);
+        const values = [body.invoiceNo, body.clientName, body.weddingDate || new Date().toISOString().split("T")[0], totalAmount, buildInvoiceData(body)];
         if (body.payment_proofs === undefined) {
             await run("UPDATE invoices SET invoice_no = ?, client_name = ?, date = ?, total_amount = ?, invoice_data = ? WHERE id = ?", [...values, id]);
         } else {
             await run("UPDATE invoices SET invoice_no = ?, client_name = ?, date = ?, total_amount = ?, invoice_data = ?, payment_proofs = ? WHERE id = ?", [...values, JSON.stringify(parseProofs(body.payment_proofs)), id]);
         }
-        await logInvoiceActivity({ invoiceId: id, action: "UPDATED", actor: user, details: `Updated invoice total: ${body.totalAmount}`, ipAddress: getClientIp(c) });
-        return c.json({ id, invoiceNo: body.invoiceNo, clientName: body.clientName, totalAmount: body.totalAmount, status: "updated" });
+        await logInvoiceActivity({ invoiceId: id, action: "UPDATED", actor: user, details: `Updated invoice total: ${totalAmount}`, ipAddress: getClientIp(c) });
+        return c.json({ id, invoiceNo: body.invoiceNo, clientName: body.clientName, totalAmount, status: "updated" });
     } catch (e) { return c.json({ error: String(e) }, 500); }
 });
 
@@ -376,9 +395,10 @@ invoicesRouter.post("/", async (c) => {
             if (!invoiceNo) invoiceNo = `${seq.prefix}${String(next).padStart(seq.padding, "0")}_${String(body.clientName || "").replace(/\s+/g, "_")}`;
             await run("UPDATE sequences SET last_value = ? WHERE name = 'invoice'", [next]);
         } else if (!invoiceNo) return c.json({ error: "Invoice sequence configuration missing" }, 500);
-        const id = await insertReturningId(`INSERT INTO invoices (invoice_no, client_name, date, total_amount, invoice_data, payment_proofs) VALUES (?, ?, ?, ?, ?, ?)`, [invoiceNo, body.clientName, body.weddingDate || new Date().toISOString().split("T")[0], body.totalAmount, buildInvoiceData(body), JSON.stringify(parseProofs(body.payment_proofs))]);
+        const totalAmount = calculateInvoiceTotal(body);
+        const id = await insertReturningId(`INSERT INTO invoices (invoice_no, client_name, date, total_amount, invoice_data, payment_proofs) VALUES (?, ?, ?, ?, ?, ?)`, [invoiceNo, body.clientName, body.weddingDate || new Date().toISOString().split("T")[0], totalAmount, buildInvoiceData(body), JSON.stringify(parseProofs(body.payment_proofs))]);
         await logInvoiceActivity({ invoiceId: id, action: "CREATED", actor: user, details: `Created invoice ${invoiceNo} for ${body.clientName}`, ipAddress: getClientIp(c) });
-        return c.json({ id, invoiceNo, clientName: body.clientName, totalAmount: body.totalAmount, status: "created" });
+        return c.json({ id, invoiceNo, clientName: body.clientName, totalAmount, status: "created" });
     } catch (e) { console.error("Error creating invoice:", e); return c.json({ error: String(e) }, 500); }
 });
 
