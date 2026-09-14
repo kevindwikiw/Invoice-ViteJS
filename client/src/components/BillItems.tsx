@@ -78,6 +78,9 @@ export function BillItems({
     const allocationDetail = remaining < 0
         ? `Over by ${rupiah(Math.abs(remaining))}`
         : `Remaining: ${rupiah(remaining)}`;
+    const handleCashbackChange = (value: string) => {
+        setCashback(Math.max(0, Math.min(subtotal, safeNumber(value))));
+    };
 
     return (
         <>
@@ -354,7 +357,16 @@ export function BillItems({
                                     </button>
                                     <div className="flex min-w-0 flex-1 items-center justify-end gap-1">
                                         <span className="text-[10px] font-bold text-[var(--accent)]/70">Rp</span>
-                  <span id="cashback-amount" className="font-display text-lg font-semibold tabular-nums text-[var(--text-primary)]">{formatNumber(cashback)}</span>
+                                        <input
+                                            id="cashback-amount"
+                                            name="cashbackAmount"
+                                            aria-label="Cashback amount"
+                                            type="text"
+                                            inputMode="numeric"
+                                            value={formatNumber(cashback)}
+                                            onChange={(e) => handleCashbackChange(e.target.value)}
+                                            className="w-full !h-auto !min-h-0 !border-0 !bg-transparent !p-0 !shadow-none !ring-0 focus:!ring-0 text-right font-display text-lg font-semibold tabular-nums text-[var(--text-primary)] outline-none"
+                                        />
                                     </div>
                                 </div>
                             </div>
@@ -396,7 +408,16 @@ export function BillItems({
                                                 <button type="button" onClick={() => stepPaymentTerm(term.id, 'up')} aria-label={`Increase ${term.label}`} title="Increase amount" className="flex h-7 w-8 shrink-0 items-center justify-center rounded text-[var(--accent)] transition-colors hover:bg-[var(--accent)]/10"><Plus size={13} /></button>
                                                 <div className="flex min-w-0 flex-1 items-center justify-end gap-2">
                                                     <span className="text-[10px] font-bold text-[var(--accent)]/70">Rp</span>
-                                                    {term.locked ? <span className="w-full text-right font-display text-base font-semibold tabular-nums text-[var(--text-primary)]">{formatNumber(term.amount)}</span> : <input id={`payment-term-amount-${term.id}`} name={`paymentTermAmount-${term.id}`} aria-label={`Amount for ${term.label}`} type="text" value={formatNumber(term.amount)} onChange={(e) => updatePaymentTerm(term.id, 'amount', Number(e.target.value.replace(/\D/g, '')))} className="w-full !h-auto !min-h-0 !border-0 !bg-transparent !p-0 !shadow-none !ring-0 focus:!ring-0 text-right font-display text-base font-semibold tabular-nums text-[var(--text-primary)] outline-none" />}
+                                                    <input
+                                                        id={`payment-term-amount-${term.id}`}
+                                                        name={`paymentTermAmount-${term.id}`}
+                                                        aria-label={`Amount for ${term.label}`}
+                                                        type="text"
+                                                        inputMode="numeric"
+                                                        value={formatNumber(term.amount)}
+                                                        onChange={(e) => updatePaymentTerm(term.id, 'amount', safeNumber(e.target.value))}
+                                                        className="w-full !h-auto !min-h-0 !border-0 !bg-transparent !p-0 !shadow-none !ring-0 focus:!ring-0 text-right font-display text-base font-semibold tabular-nums text-[var(--text-primary)] outline-none"
+                                                    />
                                                 </div>
                                             </div>
                                         </div>
