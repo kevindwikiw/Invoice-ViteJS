@@ -1,0 +1,22 @@
+[Unit]
+Description=Orbit Photo face recognition worker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=orbit-worker
+Group=orbit-worker
+WorkingDirectory=/opt/orbit-face-worker
+EnvironmentFile=/etc/orbit-face-worker.env
+ExecStart=/opt/orbit-face-worker/.venv/bin/uvicorn main:app --host 127.0.0.1 --port 8088
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/orbit-face-worker /mnt/orbit-drive
+
+[Install]
+WantedBy=multi-user.target

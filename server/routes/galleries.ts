@@ -15,6 +15,8 @@ import {
 import { getGallerySettings, invalidateGallerySettingsCache } from "../lib/gallery-settings-cache";
 import { resetGalleryPinAttempts } from "../middleware/rate-limit";
 import { hasFeaturePermission } from "../permissions";
+import { handlePublicFaceSearch, handlePublicFaceSearchStatus, prepareGalleryFaceIndex } from "./face-index";
+import { getFaceSourceVersion } from "../lib/face-source";
 
 type Env = {
     Variables: {
@@ -841,6 +843,7 @@ adminGalleriesRouter.patch("/:id", async (c) => {
         "UPDATE galleries SET title = ?, drive_folder_id = ?, tutorial_before_drive_file_id = ?, tutorial_after_drive_file_id = ?, tutorial_before_2_drive_file_id = ?, tutorial_after_2_drive_file_id = ?, tutorial_before_3_drive_file_id = ?, tutorial_after_3_drive_file_id = ?, pin_hash = ?, contact_whatsapp_url = ?, max_selections = ?, additional_selection_limit = ?, edit_addon_status = ?, edit_addon_pricing_mode = ?, edit_addon_price = ?, selection_duration_days = ?, selection_duration_hours = ?, selection_deadline_at = ?, status = ?, access_version = access_version + 1, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
         [title, driveFolderId, tutorialBeforeDriveFileId, tutorialAfterDriveFileId, tutorialBefore2DriveFileId, tutorialAfter2DriveFileId, tutorialBefore3DriveFileId, tutorialAfter3DriveFileId, pinHash, contactWhatsappUrl, maxSelections, additionalSelectionLimit, editAddonStatus, editAddonPricingMode, editAddonPrice, selectionDurationDays, selectionDurationHours, selectionDeadlineAt, status, id],
     );
+    if (status === "open" && driveFolderId === existing.driveFolderId) void prepareGalleryFaceIndex(id);
     return c.json({ status: "updated" });
 });
 
@@ -854,6 +857,9 @@ adminGalleriesRouter.delete("/:id", async (c) => {
     if (!gallery) return c.json({ error: "Gallery not found" }, 404);
 
     // Delete dependent metadata explicitly so cleanup is reliable across SQLite/Turso settings.
+    await galleryRun("DELETE FROM face_index_photos WHERE gallery_id = ?", [id]);
+    await galleryRun("DELETE FROM face_embeddings WHERE gallery_id = ?", [id]);
+    await galleryRun("DELETE FROM face_index_jobs WHERE gallery_id = ?", [id]);
     await galleryRun("DELETE FROM gallery_edit_requests WHERE gallery_id = ?", [id]);
     await galleryRun("DELETE FROM gallery_photos WHERE gallery_id = ?", [id]);
     await galleryRun("DELETE FROM gallery_selections WHERE gallery_id = ?", [id]);
@@ -875,14 +881,15 @@ adminGalleriesRouter.post("/:id/sync", async (c) => {
     if (!gallery) return c.json({ error: "Gallery not found" }, 404);
 
     const photos = await listDrivePhotos(gallery.driveFolderId);
-    const existingPhotos = await galleryAll<PhotoRow>(`
+    const existingPhotos = await galleryAll<PhotoRow & { sourceVersion: string }>(`
         SELECT id, gallery_id as "galleryId", drive_file_id as "driveFileId", filename, mime_type as "mimeType",
                thumbnail_url as "thumbnailUrl", web_view_url as "webViewUrl", width, height,
-               display_order as "displayOrder", created_at as "createdAt"
+               display_order as "displayOrder", created_at as "createdAt", source_version as "sourceVersion"
         FROM gallery_photos WHERE gallery_id = ?
     `, [id]);
     const normalizedExistingPhotos = existingPhotos.map((photo) => photoShape(photo as PhotoRow & Record<string, unknown>));
     const existingByDriveId = new Map(normalizedExistingPhotos.map((photo) => [photo.driveFileId, photo]));
+    const existingVersions = new Map(existingPhotos.map((photo) => [photo.driveFileId, photo.sourceVersion]));
     const driveIds = new Set(photos.map((photo) => photo.id));
     const syncStatements: Array<{ sql: string; params: unknown[] }> = [];
     let photoChanges = 0;
@@ -901,12 +908,16 @@ adminGalleriesRouter.post("/:id/sync", async (c) => {
         const nextWebView = photo.webViewLink || null;
         const nextWidth = photo.width || null;
         const nextHeight = photo.height || null;
+        // Binary images have a checksum; timestamps/size cover formats without one.
+        const nextSourceVersion = photo.md5Checksum
+            ? `md5:${photo.md5Checksum}`
+            : `${photo.modifiedTime || new Date().toISOString()}:${photo.size || ""}`;
         if (!existingPhoto) {
             syncStatements.push({ sql: `
                 INSERT INTO gallery_photos (
                     gallery_id, drive_file_id, filename, mime_type, thumbnail_url,
-                    web_view_url, width, height, display_order
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    web_view_url, width, height, display_order, source_version
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             `, params: [
                 id,
                 photo.id,
@@ -917,6 +928,7 @@ adminGalleriesRouter.post("/:id/sync", async (c) => {
                 nextWidth,
                 nextHeight,
                 index,
+                nextSourceVersion,
             ] });
             photoChanges += 1;
             continue;
@@ -930,10 +942,11 @@ adminGalleriesRouter.post("/:id/sync", async (c) => {
             || (existingPhoto.width || null) !== nextWidth
             || (existingPhoto.height || null) !== nextHeight
             || Number(existingPhoto.displayOrder) !== index
+            || existingVersions.get(photo.id) !== nextSourceVersion
         ) {
             syncStatements.push({ sql: `
                 UPDATE gallery_photos
-                SET filename = ?, mime_type = ?, thumbnail_url = ?, web_view_url = ?, width = ?, height = ?, display_order = ?
+                SET filename = ?, mime_type = ?, thumbnail_url = ?, web_view_url = ?, width = ?, height = ?, display_order = ?, source_version = ?
                 WHERE gallery_id = ? AND drive_file_id = ?
             `, params: [
                 photo.name,
@@ -943,6 +956,7 @@ adminGalleriesRouter.post("/:id/sync", async (c) => {
                 nextWidth,
                 nextHeight,
                 index,
+                nextSourceVersion,
                 id,
                 photo.id,
             ] });
@@ -961,6 +975,8 @@ adminGalleriesRouter.post("/:id/sync", async (c) => {
         params: [photos.length, id, id],
     });
     await galleryBatch(syncStatements);
+    await getFaceSourceVersion(id);
+    void prepareGalleryFaceIndex(id);
     return c.json({ status: "synced", photoCount: photos.length, changes: photoChanges });
 });
 
@@ -1185,6 +1201,49 @@ publicGalleriesRouter.post("/:id/verify", async (c) => {
     if (!pin || !await Bun.password.verify(pin, gallery.pinHash)) return c.json({ error: "Invalid PIN." }, 401);
     const token = await createGalleryToken(gallery.id, gallery.accessVersion);
     return c.json({ token, expiresIn: GALLERY_TOKEN_TTL_SECONDS, gallery: galleryPublicShape(gallery) });
+});
+
+publicGalleriesRouter.get("/:id/photo-manifest", async (c) => {
+    const result = await requirePublicGallery(c);
+    if (result instanceof Response) return result;
+    const sessionExpiresAt = galleryTokenExpiration(result.token) ?? Math.floor(Date.now() / 1000) + PHOTO_TOKEN_TTL_SECONDS;
+    const deadlineExpiresAt = selectionDeadlineEpochSeconds(result.gallery.selectionDeadlineAt);
+    const photoTokenExpiresAt = deadlineExpiresAt === null ? sessionExpiresAt : Math.min(sessionExpiresAt, deadlineExpiresAt);
+    const photos = await galleryAll<PhotoRow>(`
+        SELECT id, gallery_id as "galleryId", drive_file_id as "driveFileId", filename, mime_type as "mimeType",
+               thumbnail_url as "thumbnailUrl", web_view_url as "webViewUrl", width, height, display_order as "displayOrder", created_at as "createdAt"
+        FROM gallery_photos WHERE gallery_id = ? ORDER BY display_order, filename
+    `, [result.gallery.id]);
+
+    return c.json({
+        gallery: galleryPublicShape(result.gallery),
+        photos: photos.map((photo) => publicPhotoShape(photo as PhotoRow & Record<string, unknown>, result.gallery.accessVersion, photoTokenExpiresAt)),
+        total: photos.length,
+    });
+});
+
+publicGalleriesRouter.post("/:id/face-search", async (c) => {
+    const result = await requirePublicGallery(c);
+    if (result instanceof Response) return result;
+    const sessionExpiresAt = galleryTokenExpiration(result.token) ?? Math.floor(Date.now() / 1000) + PHOTO_TOKEN_TTL_SECONDS;
+    const deadlineExpiresAt = selectionDeadlineEpochSeconds(result.gallery.selectionDeadlineAt);
+    const photoTokenExpiresAt = deadlineExpiresAt === null ? sessionExpiresAt : Math.min(sessionExpiresAt, deadlineExpiresAt);
+    return handlePublicFaceSearch(
+        c,
+        result.gallery.id,
+        (photo) => publicPhotoShape(photo as PhotoRow & Record<string, unknown>, result.gallery.accessVersion, photoTokenExpiresAt),
+        async () => {
+            const fresh = await requirePublicGallery(c);
+            if (fresh instanceof Response) return fresh;
+            return fresh.gallery.id === result.gallery.id ? null : c.json({ error: "Gallery access changed." }, 401);
+        },
+    );
+});
+
+publicGalleriesRouter.get("/:id/face-search/status", async (c) => {
+    const result = await requirePublicGallery(c);
+    if (result instanceof Response) return result;
+    return handlePublicFaceSearchStatus(c, result.gallery.id);
 });
 
 publicGalleriesRouter.get("/:id/photos", async (c) => {

@@ -1,4 +1,7 @@
 import { expect, test, type Page, type Route } from '@playwright/test';
+import type { FaceSearchResult } from '../../src/features/culling/client-gallery/face-search';
+
+test.use({ baseURL: process.env.PLAYWRIGHT_BASE_URL || 'http://127.0.0.1:5174' });
 
 const galleryId = 'batch-gallery';
 const token = 'gallery-session-token';
@@ -48,6 +51,17 @@ async function installSession(page: Page, id = galleryId) {
         localStorage.setItem(`orbit_culling_token_${galleryKey}`, galleryToken);
         localStorage.setItem(`orbit_culling_tutorial_${galleryKey}`, '1');
     }, { galleryKey: id, galleryToken: token });
+    await page.route('**/face-search/status', (route) => route.fulfill({
+        status: 200,
+        json: { available: false, status: 'unavailable', processed: 0, total: 0, code: 'worker_offline' },
+    }));
+}
+
+async function mockFaceSearchAvailable(page: Page, id: string, status: 'not_indexed' | 'ready' = 'not_indexed') {
+    await page.unroute('**/face-search/status');
+    await page.route(`**/api/public/galleries/${id}/face-search/status`, (route) => route.fulfill({
+        json: { available: true, status, processed: status === 'ready' ? 1 : 0, total: status === 'ready' ? 1 : 0 },
+    }));
 }
 
 async function fulfillImage(route: Route, width: number, height: number) {
@@ -457,4 +471,294 @@ test('skips the awareness step when no tutorial samples are configured', async (
     await page.getByRole('button', { name: 'How to submit' }).click();
     await expect(page.getByTestId('tutorial-submit-step')).toBeVisible();
     await expect(page.getByTestId('tutorial-confidence-step')).toHaveCount(0);
+});
+
+test('filters immediately from a selfie and keeps selection submit working', async ({ page }) => {
+    const id = 'face-filter-gallery';
+    await page.setViewportSize({ width: 390, height: 844 });
+    await installSession(page, id);
+    await page.unroute('**/face-search/status');
+    let indexingStarted = false;
+    let statusPolls = 0;
+    let searchRequests = 0;
+    let browserModelRequests = 0;
+    await page.route(`**/api/public/galleries/${id}/face-search/status`, (route) => {
+        if (!indexingStarted) return route.fulfill({ json: { available: true, status: 'not_indexed', processed: 0, total: 0 } });
+        statusPolls += 1;
+        return route.fulfill({
+            json: statusPolls === 1
+                ? { available: true, status: 'indexing', processed: 55, total: 101 }
+                : { available: true, status: 'ready', processed: 101, total: 101 },
+        });
+    });
+    await page.route(`**/api/public/galleries/${id}/face-search`, (route) => {
+        searchRequests += 1;
+        if (searchRequests === 1) {
+            indexingStarted = true;
+            return route.fulfill({ status: 202, json: { status: 'indexing', job: { processed: 0, total: 101 }, matches: [], total: 0 } });
+        }
+        return route.fulfill({ json: { status: 'complete', total: 101, matches: [photo(2), photo(56)] } });
+    });
+    await page.route(/\/(?:models\/face-api|vendor\/face-api)\//, (route) => {
+        browserModelRequests += 1;
+        return route.abort();
+    });
+
+    await page.route(`**/api/public/galleries/${id}/contact`, (route) => route.fulfill({ json: {} }));
+    await page.route(`**/api/public/galleries/${id}/photos?*`, async (route) => {
+        const requestUrl = new URL(route.request().url());
+        const requestedPage = Number(requestUrl.searchParams.get('page') || 1);
+        await route.fulfill({
+            json: {
+                gallery: gallery('2026-09-05T03:00:00.000Z'),
+                photos: requestedPage === 1
+                    ? Array.from({ length: 54 }, (_, index) => photo(index + 1))
+                    : Array.from({ length: 47 }, (_, index) => photo(index + 55)),
+                page: requestedPage,
+                pageSize: 54,
+                total: 101,
+                totalPages: 2,
+                selectedDriveFileIds: [],
+                selectedPhotos: [],
+            },
+        });
+    });
+    await page.route(`**/api/public/galleries/${id}/photos/*/thumbnail?*`, (route) => fulfillImage(route, 320, 320));
+    await page.route(`**/api/public/galleries/${id}/selections`, (route) => route.fulfill({
+        json: { status: 'submitted', selectionCount: 1, filenames: ['photo-002.jpg'] },
+    }));
+
+    await page.goto(`/culling/${id}`);
+    await expect(page.getByRole('button', { name: /^Open Full Frame Test Gallery/ })).toHaveCount(54);
+    await page.getByRole('button', { name: 'Filter by selfie' }).click();
+    const dialog = page.getByRole('dialog', { name: 'Filter by selfie' });
+    await expect(dialog).toBeVisible();
+    await expect(dialog.getByRole('checkbox')).toHaveCount(0);
+    await expect(dialog.getByRole('button', { name: 'Choose selfie' })).toBeEnabled();
+    await expect(dialog.getByText('Selecting a selfie starts face matching.', { exact: false })).toBeVisible();
+    await page.screenshot({ path: 'test-results/selfie-filter-mobile.png', animations: 'disabled' });
+
+    await dialog.locator('input[aria-label="Choose selfie"]').setInputFiles({
+        name: 'selfie.png',
+        mimeType: 'image/png',
+        buffer: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aM1sAAAAASUVORK5CYII=', 'base64'),
+    });
+    await expect(dialog.getByText('Preparing face search 55 / 101')).toBeVisible();
+    await expect(dialog.getByText('2 photos found')).toBeVisible();
+    expect(searchRequests).toBe(2);
+    expect(browserModelRequests).toBe(0);
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.screenshot({ path: 'test-results/selfie-filter-results-desktop.png', animations: 'disabled' });
+    await page.setViewportSize({ width: 320, height: 568 });
+    await dialog.locator('summary').click();
+    await dialog.getByRole('button', { name: 'Wider', exact: true }).click();
+    await expect(dialog.getByText('2 photos found')).toBeVisible();
+    const box = await dialog.getByRole('button', { name: 'Show 2 photos' }).boundingBox();
+    expect(box!.y + box!.height).toBeLessThanOrEqual(568);
+    expect(await dialog.locator('.gallery-modal-scroll').evaluate((element) => element.scrollWidth <= element.clientWidth + 1)).toBe(true);
+    await page.screenshot({ path: 'test-results/selfie-filter-results-mobile.png', animations: 'disabled' });
+    await dialog.getByRole('button', { name: 'Show 2 photos' }).click();
+    await page.setViewportSize({ width: 390, height: 844 });
+
+    await expect(page.getByRole('button', { name: 'Face (2)' })).toBeVisible();
+    await expect(page.getByRole('button', { name: /^Open Full Frame Test Gallery/ })).toHaveCount(2);
+    await expect(page.getByRole('button', { name: 'Next' })).toHaveCount(0);
+
+    await page.getByRole('button', { name: 'Select Full Frame Test Gallery 02' }).click();
+    await expect(page.getByText('Not submitted')).toBeVisible();
+    await page.getByRole('button', { name: 'Submit', exact: true }).click();
+    await page.getByRole('button', { name: 'Submit 1' }).click();
+    await expect(page.getByText('Selection saved. 1 filenames submitted.')).toBeVisible();
+
+    await page.getByRole('button', { name: 'Face (2)' }).click();
+    await dialog.getByRole('button', { name: 'Reset' }).click();
+    await dialog.getByRole('button', { name: 'Close', exact: true }).click();
+    await expect(page.getByRole('button', { name: 'Filter by selfie' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Next' })).toBeVisible();
+
+    const layout = await page.evaluate(() => ({
+        scrollWidth: document.documentElement.scrollWidth,
+        viewportWidth: window.innerWidth,
+    }));
+    expect(layout.scrollWidth).toBeLessThanOrEqual(layout.viewportWidth + 1);
+});
+
+test('selfie search shows index-changed errors and can retry without browser scanning', async ({ page }) => {
+    const id = 'changed-face-index';
+    await installSession(page, id);
+    await mockFaceSearchAvailable(page, id, 'ready');
+    await page.route(`**/api/public/galleries/${id}/contact`, (route) => route.fulfill({ json: {} }));
+    await page.route(`**/api/public/galleries/${id}/photos?*`, (route) => route.fulfill({ json: {
+        gallery: gallery('2026-09-05T03:00:00.000Z'), photos: [photo(1)], page: 1, pageSize: 54,
+        total: 1, totalPages: 1, selectedDriveFileIds: [], selectedPhotos: [],
+    } }));
+    await page.route(`**/api/public/galleries/${id}/photos/*/thumbnail?*`, (route) => fulfillImage(route, 320, 320));
+    let attempts = 0;
+    let browserModels = 0;
+    await page.route(/\/(?:models\/face-api|vendor\/face-api)\//, (route) => { browserModels++; return route.abort(); });
+    await page.route(`**/api/public/galleries/${id}/face-search`, (route) => {
+        attempts++;
+        return attempts === 1
+            ? route.fulfill({ status: 409, json: { code: 'index_changed', error: 'This gallery changed during your search. Please try again.' } })
+            : route.fulfill({ json: { status: 'complete', total: 1, matches: [photo(1)] } });
+    });
+    await page.goto(`/culling/${id}`);
+    await page.getByRole('button', { name: 'Filter by selfie' }).click();
+    const dialog = page.getByRole('dialog', { name: 'Filter by selfie' });
+    const file = { name: 'selfie.png', mimeType: 'image/png', buffer: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aM1sAAAAASUVORK5CYII=', 'base64') };
+    await dialog.getByLabel('Choose selfie', { exact: true }).setInputFiles(file);
+    await expect(dialog.getByRole('alert')).toHaveText('This gallery changed during your search. Please try again.');
+    await dialog.getByLabel('Choose selfie', { exact: true }).setInputFiles(file);
+    await expect(dialog.getByText('1 photos found', { exact: true })).toBeVisible();
+    expect(attempts).toBe(2);
+    expect(browserModels).toBe(0);
+});
+
+for (const theme of ['black', 'white'] as const) {
+    test(`selfie modal keeps the ${theme} gallery theme across search states and the body portal`, async ({ page }) => {
+        const id = `face-theme-${theme}`;
+        const accent = theme === 'black' ? 'rgb(255, 255, 255)' : 'rgb(17, 17, 17)';
+        const surface = theme === 'black' ? 'rgb(13, 13, 13)' : 'rgb(255, 255, 255)';
+        const inverse = theme === 'black' ? 'rgb(5, 5, 5)' : 'rgb(247, 247, 245)';
+        await installSession(page, id);
+        await mockFaceSearchAvailable(page, id);
+        await page.addInitScript(({ id, theme }) => {
+            localStorage.setItem(`orbit_culling_theme_${id}`, theme);
+        }, { id, theme });
+        await page.route(`**/api/public/galleries/${id}/contact`, (route) => route.fulfill({ json: {} }));
+        await page.route(`**/api/public/galleries/${id}/photos?*`, (route) => route.fulfill({
+            json: {
+                gallery: gallery('2026-09-05T03:00:00.000Z'), photos: [photo(1)],
+                page: 1, pageSize: 54, total: 1, totalPages: 1,
+                selectedDriveFileIds: [], selectedPhotos: [],
+            },
+        }));
+        await page.route(`**/api/public/galleries/${id}/photos/*/thumbnail?*`, (route) => fulfillImage(route, 320, 320));
+        await page.goto(`/culling/${id}`);
+        // The admin/body theme is deliberately opposite to the gallery's local theme.
+        await page.evaluate((theme) => document.documentElement.classList.toggle('light', theme === 'black'), theme);
+        const adminAccent = await page.evaluate(() => getComputedStyle(document.body).getPropertyValue('--accent'));
+        await page.getByRole('button', { name: 'Filter by selfie' }).click();
+        const dialog = page.getByRole('dialog', { name: 'Filter by selfie' });
+        const chooser = dialog.getByRole('button', { name: 'Choose selfie', exact: true });
+        await expect(chooser).toHaveCSS('background-color', accent);
+        await expect(chooser).toHaveCSS('color', inverse);
+        await expect(dialog.locator('.gallery-modal-panel')).toHaveCSS('background-color', surface);
+        await expect(dialog.getByRole('button', { name: 'Close', exact: true })).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
+        await page.keyboard.press('Tab');
+        await expect(dialog.getByRole('button', { name: 'Close Filter by selfie' })).toBeFocused();
+        await expect(dialog.getByRole('button', { name: 'Close Filter by selfie' })).toHaveCSS('outline-color', accent);
+        await page.keyboard.press('Tab');
+        await expect(chooser).toBeFocused();
+        await expect(chooser).toHaveCSS('outline-color', accent);
+
+        for (const [width, height] of [[1280, 800], [390, 844], [320, 568]]) {
+            await page.setViewportSize({ width, height });
+            await expect(dialog.locator('.gallery-modal-panel')).toBeVisible();
+            expect(await dialog.locator('.gallery-modal-scroll').evaluate((el) => el.scrollWidth <= el.clientWidth + 1)).toBe(true);
+            const footer = await dialog.locator('footer').boundingBox();
+            expect(footer!.y + footer!.height).toBeLessThanOrEqual(height);
+            await page.screenshot({ path: `test-results/selfie-${theme}-${width}.png`, animations: 'disabled' });
+        }
+        await dialog.locator('summary').click();
+        await expect(dialog.getByRole('button', { name: 'Balanced', exact: true })).toHaveCSS('background-color', accent);
+        await dialog.getByRole('button', { name: 'Wider', exact: true }).click();
+        await expect(dialog.getByRole('button', { name: 'Wider', exact: true })).toHaveCSS('background-color', accent);
+        await expect(dialog.getByRole('button', { name: 'Wider', exact: true })).toHaveAttribute('aria-pressed', 'true');
+
+        await page.evaluate((matchedPhoto) => {
+            window.__ORBIT_FACE_SEARCH_TEST__ = async ({ selfieFile, onProgress }) => {
+                onProgress?.({ phase: 'worker', processed: 1, total: 2, matches: 0 });
+                await new Promise<void>((resolve) => {
+                    (window as Window & { finishFaceSearch?: () => void }).finishFaceSearch = resolve;
+                });
+                if (selfieFile.name === 'error.png') throw new Error('Unable to read this selfie.');
+                return {
+                    status: 'complete',
+                    total: 2,
+                    matches: selfieFile.name === 'empty.png' ? [] : [{ photo: matchedPhoto, distance: 0.42 }],
+                } satisfies FaceSearchResult;
+            };
+        }, photo(2));
+        const upload = async (name: string) => {
+            await dialog.locator('input[aria-label="Choose selfie"]').setInputFiles({
+                name, mimeType: 'image/png',
+                buffer: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aM1sAAAAASUVORK5CYII=', 'base64'),
+            });
+            await expect(dialog.getByRole('progressbar')).toHaveCSS('accent-color', accent);
+            await expect(dialog.getByRole('button', { name: 'Change selfie' })).toBeDisabled();
+            await expect(dialog.getByRole('button', { name: 'Cancel search' })).toBeVisible();
+        };
+        const finish = () => page.evaluate(() => (window as Window & { finishFaceSearch?: () => void }).finishFaceSearch?.());
+        await upload('match.png');
+        await page.screenshot({ path: `test-results/selfie-${theme}-scanning.png`, animations: 'disabled' });
+        await finish();
+        await expect(dialog.getByText('1 photos found')).toBeVisible();
+        await expect(dialog.getByRole('button', { name: 'Show 1 photos' })).toHaveCSS('background-color', accent);
+        await page.screenshot({ path: `test-results/selfie-${theme}-results.png`, animations: 'disabled' });
+
+        await upload('empty.png');
+        await finish();
+        await expect(dialog.getByText('No matching photos yet')).toBeVisible();
+        await expect(dialog.getByRole('button', { name: 'Close', exact: true })).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
+        await upload('error.png');
+        await finish();
+        await expect(dialog.getByRole('alert')).toHaveText('Unable to read this selfie.');
+
+        await page.emulateMedia({ reducedMotion: 'reduce' });
+        const reset = dialog.getByRole('button', { name: 'Reset', exact: true });
+        await expect(reset).toHaveCSS('transition-property', 'none');
+        await reset.hover();
+        await page.mouse.down();
+        await expect(reset).toHaveCSS('transform', 'none');
+        await page.mouse.up();
+        await expect(dialog.getByRole('button', { name: 'Choose selfie', exact: true })).toBeEnabled();
+        await page.keyboard.press('Escape');
+        await expect(dialog).toHaveCount(0);
+        await expect(page.getByRole('button', { name: 'Filter by selfie' })).toBeFocused();
+        expect(await page.evaluate(() => getComputedStyle(document.body).getPropertyValue('--accent'))).toBe(adminAccent);
+    });
+}
+
+test('hides selfie filtering offline and reveals its mobile label when the worker recovers', async ({ page }) => {
+    const id = 'face-worker-offline-gallery';
+    await page.setViewportSize({ width: 320, height: 740 });
+    await installSession(page, id);
+    await page.unroute('**/face-search/status');
+    let ready = false;
+    let statusRequests = 0;
+    await page.route(`**/api/public/galleries/${id}/face-search/status`, (route) => {
+        statusRequests += 1;
+        return route.fulfill({ json: {
+            available: ready, status: ready ? 'not_indexed' : 'unavailable', processed: 0, total: 0,
+        } });
+    });
+    await page.route(`**/api/public/galleries/${id}/contact`, (route) => route.fulfill({ json: {} }));
+    await page.route(`**/api/public/galleries/${id}/photos?*`, (route) => route.fulfill({
+        json: {
+            gallery: gallery('2026-09-05T03:00:00.000Z'), photos: [photo(1)],
+            page: 1, pageSize: 54, total: 1, totalPages: 1,
+            selectedDriveFileIds: [], selectedPhotos: [],
+        },
+    }));
+    await page.route(`**/api/public/galleries/${id}/photos/*/thumbnail?*`, (route) => fulfillImage(route, 320, 320));
+
+    await page.goto(`/culling/${id}`);
+    await expect.poll(() => statusRequests).toBeGreaterThan(0);
+    await expect(page.getByRole('button', { name: 'Filter by selfie' })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: /^Open Full Frame Test Gallery/ })).toHaveCount(1);
+    ready = true;
+    const filter = page.getByRole('button', { name: 'Filter by selfie' });
+    await expect(filter).toBeVisible({ timeout: 8_000 });
+    await expect(filter.getByText('Selfie', { exact: true })).toBeVisible();
+    for (const width of [320, 390]) {
+        await page.setViewportSize({ width, height: 740 });
+        const bounds = await filter.boundingBox();
+        expect(bounds).not.toBeNull();
+        expect(bounds!.x).toBeGreaterThanOrEqual(0);
+        expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(width);
+        await page.screenshot({ path: `test-results/selfie-toolbar-${width}.png`, animations: 'disabled' });
+    }
+    await filter.click();
+    await expect(page.getByRole('dialog', { name: 'Filter by selfie' })).toBeVisible();
 });

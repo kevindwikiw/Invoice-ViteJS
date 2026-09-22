@@ -2,6 +2,8 @@
 import React, { createContext, useContext, useState, useCallback, useEffect, useRef } from 'react';
 import { X, CheckCircle, AlertCircle, Info } from 'lucide-react';
 import { clsx } from 'clsx';
+import { createPortal } from 'react-dom';
+import '../components/gallery-modal.css';
 
 export type ToastType = 'success' | 'error' | 'info';
 
@@ -47,7 +49,7 @@ export const ToastProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
         const timer = window.setTimeout(() => {
             removeToast(id);
-        }, 3000);
+        }, type === 'error' ? 7000 : 4500);
         timersRef.current.set(id, timer);
     }, [removeToast]);
 
@@ -62,32 +64,35 @@ export const ToastProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     return (
         <ToastContext.Provider value={{ addToast, removeToast }}>
             {children}
-            <div className="fixed bottom-4 right-4 z-50 flex flex-col gap-2 pointer-events-none">
+            {createPortal(<div aria-label="Notifications" className="fixed left-4 right-4 top-[max(1rem,env(safe-area-inset-top))] z-[1000] flex max-h-[50dvh] flex-col gap-2 overflow-y-auto pointer-events-none sm:left-auto sm:w-96">
                 {toasts.map((toast) => (
                     <div
                         key={toast.id}
+                        role={toast.type === 'error' ? 'alert' : 'status'}
+                        aria-atomic="true"
                         className={clsx(
-                            "pointer-events-auto flex items-center gap-3 px-4 py-3 rounded-lg shadow-lg border animate-in slide-in-from-right-full fade-in duration-300 max-w-sm",
-                            toast.type === 'success' && "bg-white border-green-200 text-green-800",
-                            toast.type === 'error' && "bg-white border-red-200 text-red-800",
-                            toast.type === 'info' && "bg-white border-blue-200 text-blue-800"
+                            "orbit-toast pointer-events-auto flex w-full items-center gap-3 px-4 py-3 rounded-lg shadow-lg border bg-[var(--bg-card)] text-[var(--text-primary)] [&>svg]:shrink-0",
+                            toast.type === 'success' && "border-emerald-500/50",
+                            toast.type === 'error' && "border-rose-500/50",
+                            toast.type === 'info' && "border-sky-500/50"
                         )}
                     >
                         {toast.type === 'success' && <CheckCircle size={18} className="text-green-500" />}
                         {toast.type === 'error' && <AlertCircle size={18} className="text-red-500" />}
                         {toast.type === 'info' && <Info size={18} className="text-blue-500" />}
 
-                        <p className="text-sm font-medium">{toast.message}</p>
+                        <p className="min-w-0 flex-1 break-words text-sm font-medium">{toast.message}</p>
 
                         <button
                             onClick={() => removeToast(toast.id)}
-                            className="ml-auto p-1 hover:bg-black/5 rounded-full transition-colors"
+                            aria-label="Dismiss notification"
+                            className="flex h-11 w-11 shrink-0 items-center justify-center hover:bg-black/5 rounded-md transition-colors focus-visible:outline-2"
                         >
                             <X size={14} className="opacity-50" />
                         </button>
                     </div>
                 ))}
-            </div>
+            </div>, document.body)}
         </ToastContext.Provider>
     );
 };

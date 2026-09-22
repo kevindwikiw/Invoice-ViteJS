@@ -1,7 +1,7 @@
 // File: src/features/culling/culling.public.ts
 
 import { apiFetch, apiUrl } from '../../lib/api';
-import type { PublicGallery, PublicGalleryPhotos, DiscountRule } from './culling.types';
+import type { PublicGallery, PublicGalleryPhotoManifest, PublicGalleryPhotos, DiscountRule } from './culling.types';
 
 // 1. Fungsi penangkap error (digunakan oleh public dan admin)
 export class GalleryApiError extends Error {
@@ -62,6 +62,13 @@ export async function getPublicGalleryPhotos(id: string, token: string, page = 1
     if (includeSelections) params.set('includeSelections', '1');
     const response = await apiFetch(`/public/galleries/${id}/photos?${params.toString()}`);
     if (!response.ok) throw await parseError(response, 'Unable to load gallery photos.');
+    return response.json();
+}
+
+export async function getPublicGalleryPhotoManifest(id: string, token: string): Promise<PublicGalleryPhotoManifest> {
+    const params = new URLSearchParams({ token });
+    const response = await apiFetch(`/public/galleries/${id}/photo-manifest?${params.toString()}`);
+    if (!response.ok) throw await parseError(response, 'Unable to load gallery photo manifest.');
     return response.json();
 }
 

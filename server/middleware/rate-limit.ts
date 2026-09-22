@@ -48,6 +48,18 @@ export const galleryPinRateLimiter = async (c: Context, next: Next) => {
     await next();
 };
 
+export const faceSearchRateLimiter = async (c: Context, next: Next) => {
+    const windowMs = Number.parseInt(process.env.FACE_SEARCH_RATE_LIMIT_WINDOW_MS || "60000", 10);
+    const maxAttempts = Number.parseInt(process.env.FACE_SEARCH_RATE_LIMIT_MAX || "10", 10);
+    const galleryId = c.req.param("id") || "unknown";
+    const result = await hitRateLimitSafely(`face_search:${clientIp(c)}:${galleryId}`, windowMs, maxAttempts);
+    if (!result.allowed) {
+        c.header("Retry-After", String(result.retryAfter || 0));
+        return c.json({ error: "Too many face searches. Please try again later.", retryAfter: result.retryAfter || 0 }, 429);
+    }
+    await next();
+};
+
 export const resetGalleryPinAttempts = async (identifiers: string[]) => {
     try {
         await resetRateLimitSuffixes("gallery_pin", identifiers.filter(Boolean));

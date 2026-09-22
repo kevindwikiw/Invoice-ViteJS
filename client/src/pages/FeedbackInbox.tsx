@@ -9,6 +9,7 @@ import { PANEL_CARD_CLASS } from '../constants/invoice';
 import { PAGE_SHELL_CLASS, SEGMENT_BUTTON_ACTIVE_CLASS, SEGMENT_BUTTON_BASE_CLASS, SEGMENT_BUTTON_INACTIVE_CLASS, SEGMENT_GROUP_CLASS } from '../constants/uiContract';
 import { SectionHeading } from '../components/SectionHeading';
 import { fetchFeedbackPhoto, useFeedbackQuery, useUpdateFeedbackStatusMutation, type FeedbackItem, type FeedbackStatus } from '../features/feedback/data';
+import { formatDateValue } from '../lib/date';
 
 const PAGE_SIZE = 10;
 const TABLE_COLUMNS = 'minmax(190px,1.1fr) 120px minmax(340px,2fr) 120px 170px';
@@ -137,7 +138,7 @@ function FeedbackDrawer({ item, pending, closeButtonRef, drawerRef, onClose, onT
                             <dl className="mt-9 divide-y divide-[var(--border)] border-y border-[var(--border)]">
                                 <div className="grid grid-cols-[110px_1fr] gap-4 py-4">
                                     <dt className="label-xs text-[var(--text-muted)]">Submitted</dt>
-                                    <dd className="text-right text-xs text-[var(--text-secondary)]">{DATE_FORMATTER.format(new Date(item.createdAt))}</dd>
+                                    <dd className="text-right text-xs text-[var(--text-secondary)]">{formatDateValue(item.createdAt, DATE_FORMATTER)}</dd>
                                 </div>
                                 {item.invoiceId && (
                                     <div className="grid grid-cols-[110px_1fr] gap-4 py-4">
@@ -152,7 +153,7 @@ function FeedbackDrawer({ item, pending, closeButtonRef, drawerRef, onClose, onT
                                 {item.reviewedAt && (
                                     <div className="grid grid-cols-[110px_1fr] gap-4 py-4">
                                         <dt className="label-xs text-[var(--text-muted)]">Reviewed</dt>
-                                        <dd className="text-right text-xs text-[var(--text-secondary)]">{DATE_FORMATTER.format(new Date(item.reviewedAt))}</dd>
+                                        <dd className="text-right text-xs text-[var(--text-secondary)]">{formatDateValue(item.reviewedAt, DATE_FORMATTER)}</dd>
                                     </div>
                                 )}
                             </dl>
@@ -303,7 +304,7 @@ export default function FeedbackInbox() {
                                             <span className="flex justify-center"><RatingBadge rating={item.rating} /></span>
                                             <div className="min-w-0 px-5 text-left"><div className="flex flex-wrap gap-1.5">{feedbackTags(item).slice(0, 2).map((tag) => <span key={tag} className="rounded-full border border-[var(--border)] px-2 py-0.5 text-[9px] text-[var(--text-secondary)]">{tag}</span>)}{feedbackTags(item).length > 2 && <span className="text-[9px] text-[var(--text-muted)]">+{feedbackTags(item).length - 2}</span>}</div><p className="mt-1.5 line-clamp-1 text-xs leading-5 text-[var(--text-secondary)]">{item.message}</p></div>
                                             <span className={clsx('mx-auto inline-flex w-fit rounded border px-2 py-1 text-[9px] font-bold uppercase tracking-wider', item.status === 'new' ? 'border-sky-500/25 bg-sky-500/10 text-sky-400' : 'border-[var(--border)] text-[var(--text-muted)]')}>{item.status}</span>
-                                            <span className="text-[10px] leading-4 text-[var(--text-muted)]">{DATE_FORMATTER.format(new Date(item.createdAt))}</span>
+                                            <span className="text-[10px] leading-4 text-[var(--text-muted)]">{formatDateValue(item.createdAt, DATE_FORMATTER)}</span>
                                         </div>
                                     ))}
                                 </div>
@@ -313,7 +314,7 @@ export default function FeedbackInbox() {
                                 {feedbackQuery.data.items.map((item) => (
                                     <article key={item.id} role="button" tabIndex={0} aria-label={`Open feedback for ${item.clientName || 'Anonymous'}`} onClick={(event) => openDrawer(item, event.currentTarget)} onKeyDown={(event) => handleRowKey(event, item)} className={clsx('cursor-pointer space-y-4 px-5 py-5 transition-colors hover:bg-[var(--bg-elevated)] focus-visible:outline-2 focus-visible:outline-inset focus-visible:outline-[var(--accent)]', item.status === 'new' && 'border-l-2 border-l-sky-400/60')}>
                                         <div className="flex items-start justify-between gap-4">
-                                            <div className="min-w-0"><p className="truncate text-sm font-semibold text-[var(--text-primary)]">{item.clientName || 'Anonymous'}</p><p className="mt-1 text-[10px] text-[var(--text-muted)]">{DATE_FORMATTER.format(new Date(item.createdAt))}</p></div>
+                                            <div className="min-w-0"><p className="truncate text-sm font-semibold text-[var(--text-primary)]">{item.clientName || 'Anonymous'}</p><p className="mt-1 text-[10px] text-[var(--text-muted)]">{formatDateValue(item.createdAt, DATE_FORMATTER)}</p></div>
                                             <RatingBadge rating={item.rating} />
                                         </div>
                                         {feedbackTags(item).length > 0 && <div className="flex flex-wrap gap-1.5">{feedbackTags(item).map((tag) => <span key={tag} className="rounded-full border border-[var(--border)] px-2 py-1 text-[9px] text-[var(--text-secondary)]">{tag}</span>)}</div>}

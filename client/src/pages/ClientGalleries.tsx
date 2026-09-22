@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   AlertCircle,
+  Check,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
@@ -23,7 +24,6 @@ import {
   Search,
   Settings2,
   Trash2,
-  X,
 } from 'lucide-react';
 import clsx from 'clsx';
 import { useAuth } from '../context/auth';
@@ -63,14 +63,16 @@ import {
   syncGallery,
   updateGallery,
 } from '../features/culling/culling.admin';
+import { formatDateValue } from '../lib/date';
+import { GalleryModal as Modal } from '../components/GalleryModal';
 
 const PAGE_SIZE = 10;
 const dateFormat = new Intl.DateTimeFormat('en-GB', { dateStyle: 'medium', timeStyle: 'short' });
 const idrFormat = new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 });
 const inputClass = 'h-11 w-full rounded-md border border-[var(--border)] bg-[var(--bg-deep)] px-3.5 text-sm text-[var(--text-primary)] outline-none transition-colors placeholder:text-[var(--text-muted)]/60 hover:border-[var(--text-muted)] focus:border-[var(--accent)] focus:ring-1 focus:ring-[var(--accent)]';
-const compactInputClass = inputClass.replace('h-11', 'h-9');
+const compactInputClass = inputClass;
 const unitInputShellClass = 'grid h-11 grid-cols-[minmax(0,1fr)_4.5rem] overflow-hidden rounded-md border border-[var(--border)] bg-[var(--bg-deep)] transition-colors hover:border-[var(--text-muted)] focus-within:border-[var(--accent)] focus-within:ring-1 focus-within:ring-[var(--accent)]';
-const compactUnitInputShellClass = unitInputShellClass.replace('h-11', 'h-9');
+const compactUnitInputShellClass = unitInputShellClass;
 const unitInputClass = 'h-full min-w-0 border-0 bg-transparent px-3.5 text-sm tabular-nums text-[var(--text-primary)] outline-none';
 const unitInputSuffixClass = 'flex h-full items-center justify-center border-l border-[var(--border)] px-2 text-[11px] font-medium text-[var(--text-muted)]';
 const publicUrl = (gallery: GallerySummary) => `${window.location.origin}/culling/${gallery.publicKey || gallery.id}`;
@@ -80,7 +82,7 @@ const parseIdr = (value: FormDataEntryValue | null) => Number(String(value || ''
 function deadlineLabel(gallery: Pick<GallerySummary, 'selectionDeadlineAt' | 'isExpired'>): string {
   if (!gallery.selectionDeadlineAt) return 'Not set';
   if (gallery.isExpired) return 'Expired';
-  return dateFormat.format(new Date(gallery.selectionDeadlineAt));
+  return formatDateValue(gallery.selectionDeadlineAt, dateFormat, 'Not set');
 }
 
 function selectionClientLabel(selection: Pick<GallerySelection, 'clientLabel' | 'displayOrder'>, galleryTitle: string, index: number): string {
@@ -124,46 +126,9 @@ function useDismissableMenu(open: boolean, close: () => void) {
   return ref;
 }
 
-function Modal({ title, close, children, widthClass = 'max-w-2xl', maxHeightClass = 'max-h-[90vh]' }: { title: string; close: () => void; children: ReactNode; widthClass?: string; maxHeightClass?: string }) {
-  useEffect(() => {
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') close();
-    };
-    document.addEventListener('keydown', handleKeyDown);
-    return () => document.removeEventListener('keydown', handleKeyDown);
-  }, [close]);
-
-  return (
-    <div
-      className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 p-4"
-      role="dialog"
-      aria-modal="true"
-      aria-label={title}
-      onMouseDown={(event) => {
-        if (event.target === event.currentTarget) close();
-      }}
-    >
-      <div className={clsx('w-full overflow-y-auto rounded-lg border border-[var(--border)] bg-[var(--bg-card)] shadow-2xl', maxHeightClass, widthClass)}>
-        <header className="flex items-center justify-between gap-4 border-b border-[var(--border)] px-6 py-5">
-          <h2 className="font-display text-xl text-[var(--text-primary)]">{title}</h2>
-          <button
-            type="button"
-            onClick={close}
-            aria-label={`Close ${title}`}
-            className="flex h-9 w-9 cursor-pointer items-center justify-center rounded-md border border-[var(--border)] text-[var(--text-muted)] transition-colors hover:border-[var(--accent)] hover:text-[var(--text-primary)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)]"
-          >
-            <X size={16} />
-          </button>
-        </header>
-        <div className="px-6 py-5">{children}</div>
-      </div>
-    </div>
-  );
-}
-
 function Field({ label, title, children }: { label: string; title?: string; children: ReactNode }) {
   return (
-    <label className="block space-y-2">
+    <label className="block min-w-0 space-y-2">
       <span className="block text-[11px] font-semibold text-[var(--text-secondary)]" title={title}>{label}</span>
       {children}
     </label>
@@ -217,11 +182,22 @@ function CreateGalleryModal({
   submit: (input: { title: string; driveFolderUrl: string; pin: string; status: GalleryStatus; maxSelections: number; selectionDurationHours: number; tutorialBeforeDriveFileId?: string; tutorialAfterDriveFileId?: string; tutorialBefore2DriveFileId?: string; tutorialAfter2DriveFileId?: string; tutorialBefore3DriveFileId?: string; tutorialAfter3DriveFileId?: string }) => void;
 }) {
   return (
-    <Modal title="Create gallery" close={close} widthClass="max-w-lg" maxHeightClass="max-h-[min(90vh,620px)]">
+    <Modal title="Create gallery" close={close} busy={pending} widthClass="max-w-lg" maxHeightClass="max-h-[min(90dvh,620px)]" footer={(
+      <>
+        <button type="button" disabled={pending} onClick={close} className="h-11 rounded-md px-4 text-xs font-semibold text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] disabled:opacity-50">Cancel</button>
+        <button type="submit" form="create-gallery-form" disabled={pending} className="inline-flex h-11 min-w-36 items-center justify-center gap-2 rounded-md bg-[var(--accent)] px-4 text-xs font-bold text-[var(--bg-deep)] disabled:opacity-50">
+          {pending ? <Loader2 size={14} className="animate-spin" /> : <Plus size={14} />}
+          {pending ? 'Creating...' : 'Create gallery'}
+        </button>
+      </>
+    )}>
       <form
-        className="space-y-0"
+        id="create-gallery-form"
+        aria-busy={pending}
+        className="space-y-4"
         onSubmit={(event) => {
           event.preventDefault();
+          if (pending) return;
           const data = new FormData(event.currentTarget);
           submit({
             title: String(data.get('title') || '').trim(),
@@ -245,9 +221,9 @@ function CreateGalleryModal({
         <Field label="Google Drive folder">
           <input name="drive" required placeholder="https://drive.google.com/drive/folders/..." className={compactInputClass} />
         </Field>
-        <div className="border-t border-[var(--border)] pt-3">
-          <p className="label-xs text-[var(--accent)]">BEFORE / EDITED PREVIEW <span className="font-normal tracking-normal text-[var(--text-muted)]">(optional Drive file links or IDs)</span></p>
-          <div className="mt-2 space-y-0.5">
+        <details className="border-y border-[var(--border)] py-3">
+          <summary className="cursor-pointer text-xs font-semibold text-[var(--text-secondary)]">Before / edited preview <span className="font-normal text-[var(--text-muted)]">(optional)</span></summary>
+          <div className="mt-3 space-y-3">
             {[1, 2, 3].map((slot) => {
               const suffix = slot === 1 ? '' : String(slot);
               return (
@@ -263,7 +239,7 @@ function CreateGalleryModal({
               );
             })}
           </div>
-        </div>
+        </details>
         <div className="grid gap-4 sm:grid-cols-2">
           <Field label="Client PIN">
             <input name="pin" required minLength={4} inputMode="numeric" autoComplete="off" placeholder="4821" className={compactInputClass} />
@@ -282,15 +258,6 @@ function CreateGalleryModal({
           </div>
           <span className="block text-[10px] leading-4 text-[var(--text-muted)]">Use 0 for unlimited selections.</span>
         </Field>
-        <div className="flex items-center justify-end gap-2 border-t border-[var(--border)] pt-2">
-          <button type="button" onClick={close} className="h-10 cursor-pointer rounded-md px-4 text-[11px] font-semibold text-[var(--text-secondary)] transition-colors hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)]">
-            Cancel
-          </button>
-          <button disabled={pending} className="inline-flex h-10 cursor-pointer items-center gap-2 rounded-md bg-[var(--accent)] px-4 text-[11px] font-bold text-[var(--bg-deep)] transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50">
-            {pending ? <Loader2 size={14} className="animate-spin" /> : <Plus size={14} />}
-            Create gallery
-          </button>
-        </div>
       </form>
     </Modal>
   );
@@ -619,7 +586,7 @@ function GalleryTable({
               <td className="text-center text-xs font-medium tabular-nums text-[var(--text-secondary)]">{gallery.selectionCount}</td>
               <td className="text-center text-xs font-medium tabular-nums text-[var(--text-secondary)]">{gallery.maxSelections ? gallery.maxSelections : <span className="inline-flex justify-center"><Unlimited /></span>}</td>
               <td className={clsx('text-center text-[10px] font-medium leading-4', gallery.isExpired ? 'text-rose-400' : 'text-[var(--text-muted)]')}>{deadlineLabel(gallery)}</td>
-              <td className="text-center text-[10px] font-medium leading-4 text-[var(--text-muted)]">{gallery.syncedAt ? dateFormat.format(new Date(gallery.syncedAt)) : 'Never'}</td>
+              <td className="text-center text-[10px] font-medium leading-4 text-[var(--text-muted)]">{formatDateValue(gallery.syncedAt, dateFormat, 'Never')}</td>
               <td className="px-7 text-center">
                 <div className="flex justify-center gap-1.5">
                   <ClientLinkMenu gallery={gallery} />
@@ -707,13 +674,16 @@ function ContactSettings({ close }: { close: () => void }) {
 
 function GalleryDetail({ gallery, close }: { gallery: GallerySummary; close: () => void }) {
   const { addToast } = useToast();
+  const editFormRef = useRef<HTMLFormElement>(null);
   const qc = useQueryClient();
   const detail = useQuery({ queryKey: ['gallery-detail', gallery.id], queryFn: () => getGalleryDetail(gallery.id) });
   const data = detail.data?.gallery || gallery;
 
   const update = useMutation({
     mutationFn: updateGallery,
-    onSuccess: () => {
+    onSuccess: (_result, variables) => {
+      const pin = editFormRef.current?.elements.namedItem('pin');
+      if (variables.pin && pin instanceof HTMLInputElement && pin.value === variables.pin) pin.value = '';
       addToast('Gallery updated.', 'success');
       qc.invalidateQueries({ queryKey: ['galleries'] });
       qc.invalidateQueries({ queryKey: ['gallery-detail', data.id] });
@@ -728,6 +698,7 @@ function GalleryDetail({ gallery, close }: { gallery: GallerySummary; close: () 
       qc.invalidateQueries({ queryKey: ['galleries'] });
       qc.invalidateQueries({ queryKey: ['gallery-detail', data.id] });
     },
+    onError: (error) => addToast(error instanceof Error ? error.message : 'Unable to sync Drive folder.', 'error'),
   });
 
   const [addonOpen, setAddonOpen] = useState(false);
@@ -755,16 +726,25 @@ function GalleryDetail({ gallery, close }: { gallery: GallerySummary; close: () 
 
   if (detail.isLoading) {
     return (
-      <Modal title="Gallery details" close={close}>
-        <div className="flex justify-center py-16">
-          <Loader2 className="animate-spin text-[var(--accent)]" />
+      <Modal title={gallery.title} close={close}>
+        <div role="status" aria-label="Loading gallery details" className="flex min-h-[60dvh] items-center justify-center gap-2 text-sm text-[var(--text-muted)]">
+          <Loader2 size={18} className="animate-spin" /> Loading gallery...
         </div>
       </Modal>
     );
   }
 
+  if (detail.isError && !detail.data) {
+    return <Modal title={gallery.title} close={close}><div role="alert" className="space-y-4 py-8 text-center text-sm"><p>Unable to load gallery details.</p><button type="button" onClick={() => void detail.refetch()} className="inline-flex h-11 items-center gap-2 rounded-md border border-[var(--border)] px-4"><RefreshCw size={16} /> Retry</button></div></Modal>;
+  }
+
   return (
-    <Modal title={data.title} close={close}>
+    <Modal title={data.title} close={close} busy={update.isPending || sync.isPending} footer={(
+      <button type="submit" form="edit-gallery-form" disabled={update.isPending || sync.isPending} className="inline-flex h-11 min-w-36 items-center justify-center gap-2 rounded-md bg-[var(--accent)] px-4 text-xs font-bold text-[var(--bg-deep)] disabled:opacity-50">
+        {update.isPending ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />}
+        {update.isPending ? 'Saving...' : 'Save changes'}
+      </button>
+    )}>
       <div className="space-y-5">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
@@ -778,16 +758,16 @@ function GalleryDetail({ gallery, close }: { gallery: GallerySummary; close: () 
           <div className="flex flex-wrap gap-2">
             <button
               type="button"
-              disabled={sync.isPending}
+              disabled={sync.isPending || update.isPending}
               onClick={() => sync.mutate(data.id)}
               className="inline-flex h-9 cursor-pointer items-center gap-1.5 rounded-lg border border-sky-500/30 bg-sky-500/10 px-3 text-[10px] font-bold text-sky-400 hover:bg-sky-500/15 focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400 disabled:cursor-not-allowed disabled:opacity-50"
             >
-              <FolderSync size={13} />
-              Sync
+              {sync.isPending ? <Loader2 size={13} className="animate-spin" /> : <FolderSync size={13} />}
+              {sync.isPending ? 'Syncing...' : 'Sync'}
             </button>
             <button
               type="button"
-              onClick={() => navigator.clipboard.writeText(link).then(() => addToast('Client link copied.', 'success'))}
+              onClick={() => { void navigator.clipboard.writeText(link).then(() => addToast('Client link copied.', 'success')).catch(() => addToast('Unable to copy the client link.', 'error')); }}
               className="inline-flex h-9 cursor-pointer items-center gap-1.5 rounded-lg border border-[var(--border)] px-3 text-[10px] font-bold hover:border-[var(--accent)]"
             >
               <Clipboard size={13} />
@@ -807,24 +787,28 @@ function GalleryDetail({ gallery, close }: { gallery: GallerySummary; close: () 
             <button
               key={option.status}
               type="button"
-              disabled={update.isPending || data.status === option.status}
+              disabled={update.isPending || sync.isPending || data.status === option.status}
+              aria-pressed={data.status === option.status}
               onClick={() => update.mutate({ id: data.id, status: option.status })}
               className={clsx(
                 'inline-flex h-9 cursor-pointer items-center justify-center gap-1.5 rounded-lg border text-[10px] font-bold uppercase hover:border-[var(--accent)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)] disabled:cursor-not-allowed disabled:opacity-45',
                 data.status === option.status ? statusTone(option.status) : 'border-[var(--border)] text-[var(--text-muted)] hover:text-[var(--text-primary)]'
               )}
             >
-              {option.icon}
+              {update.isPending && update.variables?.status === option.status ? <Loader2 size={13} className="animate-spin" /> : option.icon}
               {option.status}
             </button>
           ))}
         </div>
 
-        {/* Memasang key={data.updatedAt || data.id} memastikan form ter-refresh jika data server berubah */}
-        <div key={`${data.id}-${data.updatedAt}-${data.maxSelections}-${data.selectionDurationHours}-${data.additionalLimit}-${data.addonStatus}-${data.tutorialBeforeDriveFileId}-${data.tutorialAfterDriveFileId}-${data.tutorialBefore2DriveFileId}-${data.tutorialAfter2DriveFileId}-${data.tutorialBefore3DriveFileId}-${data.tutorialAfter3DriveFileId}`} className="space-y-4 rounded-xl border border-[var(--border)] p-4">
+        <div className="space-y-4 border-t border-[var(--border)] pt-4">
           <form
+            ref={editFormRef}
+            id="edit-gallery-form"
+            aria-busy={update.isPending}
             onSubmit={(event) => {
               event.preventDefault();
+              if (update.isPending || sync.isPending) return;
               const form = new FormData(event.currentTarget);
               const nextMasterLimit = Math.min(500, Math.max(0, Number(form.get('master-limit')) || 0));
               const nextDurationHours = Math.min(8760, Math.max(1, Number(form.get('selection-duration')) || 72));
@@ -859,9 +843,8 @@ function GalleryDetail({ gallery, close }: { gallery: GallerySummary; close: () 
               <Field label="Google Drive folder URL">
                 <input name="driveFolderUrl" required defaultValue={driveUrl} className={inputClass} />
               </Field>
-              <div className="border-t border-[var(--border)] pt-4">
-                <p className="label-xs text-[var(--accent)]">BEFORE / EDITED PREVIEW</p>
-                <p className="mt-1 text-[10px] leading-4 text-[var(--text-muted)]">Optional sample pairs shown in the client&apos;s Choose with confidence guide. Paste Google Drive file links or IDs.</p>
+              <details className="border-y border-[var(--border)] py-4">
+                <summary className="cursor-pointer text-xs font-semibold text-[var(--text-secondary)]">Before / edited preview <span className="font-normal text-[var(--text-muted)]">(optional)</span></summary>
                 <div className="mt-3 space-y-2">
                   {[1, 2, 3].map((slot) => {
                     const suffix = slot === 1 ? '' : String(slot);
@@ -880,7 +863,7 @@ function GalleryDetail({ gallery, close }: { gallery: GallerySummary; close: () 
                     );
                   })}
                 </div>
-              </div>
+              </details>
               <div className="grid gap-4 sm:grid-cols-3">
                 <Field label="Client PIN">
                   <input name="pin" minLength={4} placeholder="Set a new PIN (optional)" className={inputClass} />
@@ -896,12 +879,6 @@ function GalleryDetail({ gallery, close }: { gallery: GallerySummary; close: () 
                 </Field>
               </div>
             </div>
-            <div className="flex justify-end border-t border-[var(--border)] pt-4">
-              <button disabled={update.isPending} className="inline-flex h-10 cursor-pointer items-center gap-2 rounded-lg bg-[var(--accent)] px-4 text-[10px] font-black uppercase text-[var(--bg-deep)] disabled:cursor-not-allowed disabled:opacity-50">
-                {update.isPending && <Loader2 size={13} className="animate-spin" />}
-                Save master
-              </button>
-            </div>
           </form>
 
           <div className="border-t border-[var(--border)] pt-4">
@@ -916,6 +893,7 @@ function GalleryDetail({ gallery, close }: { gallery: GallerySummary; close: () 
               <form
                 onSubmit={(event) => {
                   event.preventDefault();
+                  if (update.isPending || sync.isPending) return;
                   const form = new FormData(event.currentTarget);
                   const nextAddonLimit = Math.min(500, Math.max(0, Number(form.get('addon-limit')) || 0));
                   const nextAddonPrice = Math.max(0, parseIdr(form.get('addon-price')));
@@ -1001,7 +979,7 @@ function GalleryDetail({ gallery, close }: { gallery: GallerySummary; close: () 
                   </div>
                 </dl>
                 <div className="mt-4 flex justify-end border-t border-[var(--border)] pt-4">
-                  <button disabled={update.isPending} className="inline-flex h-10 cursor-pointer items-center gap-2 rounded-lg bg-[var(--accent)] px-4 text-[10px] font-black uppercase text-[var(--bg-deep)] disabled:cursor-not-allowed disabled:opacity-50">
+                  <button disabled={update.isPending || sync.isPending} className="inline-flex h-10 cursor-pointer items-center gap-2 rounded-lg bg-[var(--accent)] px-4 text-[10px] font-black uppercase text-[var(--bg-deep)] disabled:cursor-not-allowed disabled:opacity-50">
                     {update.isPending && <Loader2 size={13} className="animate-spin" />}
                     Save add-on
                   </button>
@@ -1037,7 +1015,7 @@ function GalleryDetail({ gallery, close }: { gallery: GallerySummary; close: () 
                       <td className="px-4 py-3 font-semibold text-[var(--text-primary)]">{selectionClientLabel(selection, data.title, index)}</td>
                       <td className="max-w-[220px] truncate px-4 py-3" title={selection.selectedFilename}>{selection.selectedFilename}</td>
                       <td className="max-w-[220px] truncate px-4 py-3 font-mono text-[10px]" title={selection.selectedDriveFileId}>{selection.selectedDriveFileId}</td>
-                      <td className="px-4 py-3 text-[var(--text-muted)]">{dateFormat.format(new Date(selection.submittedAt))}</td>
+                      <td className="px-4 py-3 text-[var(--text-muted)]">{formatDateValue(selection.submittedAt, dateFormat)}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -1061,7 +1039,8 @@ export default function ClientGalleries() {
   const debouncedSearch = useDebouncedValue(search);
   const [filter, setFilter] = useState<'all' | GalleryStatus>('all');
   const [page, setPage] = useState(1);
-  const [selectedId, setSelectedId] = useState<number | null>(null);
+  const [selected, setSelected] = useState<GallerySummary | null>(null);
+  const selectedId = selected?.id ?? null;
   const [createOpen, setCreateOpen] = useState(false);
   const [contactOpen, setContactOpen] = useState(false);
   const query = useQuery({
@@ -1085,14 +1064,13 @@ export default function ClientGalleries() {
 
   const currentPage = Math.min(page, totalPages);
   const pageItems = galleries;
-  const selected = galleries.find((gallery) => gallery.id === selectedId);
 
   const create = useMutation({
     mutationFn: createGallery,
     onSuccess: (gallery) => {
       addToast('Gallery created.', 'success');
       setCreateOpen(false);
-      setSelectedId(gallery.id);
+      setSelected(gallery);
       qc.invalidateQueries({ queryKey: ['galleries'] });
     },
     onError: (error) => addToast(error instanceof Error ? error.message : 'Unable to create gallery.', 'error'),
@@ -1117,7 +1095,7 @@ export default function ClientGalleries() {
     mutationFn: deleteGallery,
     onSuccess: (_, id) => {
       addToast('Gallery deleted.', 'success');
-      setSelectedId((current) => (current === id ? null : current));
+      setSelected((current) => (current?.id === id ? null : current));
       qc.invalidateQueries({ queryKey: ['galleries'] });
     },
     onError: (error) => addToast(error instanceof Error ? error.message : 'Unable to delete gallery.', 'error'),
@@ -1126,13 +1104,13 @@ export default function ClientGalleries() {
   const changeSearch = (value: string) => {
     setSearch(value);
     setPage(1);
-    setSelectedId(null);
+    setSelected(null);
   };
 
   const changeFilter = (value: 'all' | GalleryStatus) => {
     setFilter(value);
     setPage(1);
-    setSelectedId(null);
+    setSelected(null);
   };
 
   const resetFilters = () => {
@@ -1219,7 +1197,7 @@ export default function ClientGalleries() {
             <GalleryTable
               galleries={pageItems}
               selectedId={selectedId}
-              onSelect={setSelectedId}
+              onSelect={(id) => setSelected(galleries.find((gallery) => gallery.id === id) ?? null)}
               onStatusChange={(id, status) => statusUpdate.mutate({ id, status })}
               onResetPin={(id) => resetPin.mutate(id)}
               onDelete={(gallery) => {
@@ -1238,7 +1216,7 @@ export default function ClientGalleries() {
 
       {contactOpen && <ContactSettings close={() => setContactOpen(false)} />}
       {createOpen && <CreateGalleryModal close={() => setCreateOpen(false)} pending={create.isPending} submit={(input) => create.mutate(input)} />}
-      {selected && <GalleryDetail gallery={selected} close={() => setSelectedId(null)} />}
+      {selected && <GalleryDetail key={selected.id} gallery={selected} close={() => setSelected(null)} />}
     </div>
   );
 }

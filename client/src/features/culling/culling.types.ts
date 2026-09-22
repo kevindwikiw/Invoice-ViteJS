@@ -123,3 +123,9 @@ export interface PublicGalleryPhotos {
     selectedDriveFileIds?: string[];
     selectedPhotos: Array<GalleryPhoto & { note?: string | null }>;
 }
+
+export interface PublicGalleryPhotoManifest {
+    gallery: PublicGallery;
+    photos: GalleryPhoto[];
+    total: number;
+}

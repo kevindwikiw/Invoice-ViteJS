@@ -12,6 +12,8 @@ export type DrivePhoto = {
     thumbnailLink?: string;
     webViewLink?: string;
     size?: string;
+    md5Checksum?: string;
+    modifiedTime?: string;
     width?: number | null;
     height?: number | null;
 };
@@ -123,7 +125,7 @@ export async function listDrivePhotos(folderId: string): Promise<DrivePhoto[]> {
             q: driveSearchQuery(folderId),
             pageSize: "1000",
             orderBy: "name_natural",
-            fields: "nextPageToken,files(id,name,mimeType,thumbnailLink,webViewLink,size,imageMediaMetadata(width,height))",
+            fields: "nextPageToken,files(id,name,mimeType,thumbnailLink,webViewLink,size,md5Checksum,modifiedTime,imageMediaMetadata(width,height))",
             supportsAllDrives: "true",
             includeItemsFromAllDrives: "true",
         });
@@ -147,6 +149,8 @@ export async function listDrivePhotos(folderId: string): Promise<DrivePhoto[]> {
                 thumbnailLink: file.thumbnailLink,
                 webViewLink: file.webViewLink,
                 size: file.size,
+                md5Checksum: file.md5Checksum,
+                modifiedTime: file.modifiedTime,
                 width: file.imageMediaMetadata?.width ?? null,
                 height: file.imageMediaMetadata?.height ?? null,
             });

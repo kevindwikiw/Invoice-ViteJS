@@ -95,6 +95,7 @@ type InvoiceDetailData = InvoiceListItem & {
 }
 
 const EMPTY_INVOICES: InvoiceListItem[] = []
+const DOWNLOAD_URL_REVOKE_DELAY_MS = 60_000
 
 function asRecord(value: unknown): Record<string, unknown> {
     return typeof value === 'object' && value !== null ? value as Record<string, unknown> : {}
@@ -326,7 +327,7 @@ export default function InvoiceHistory() {
                     if (!res.ok) throw new Error('Failed to fetch invoice')
                     return res.json()
                 },
-                staleTime: 5 * 60 * 1000,
+                staleTime: 0,
             })
             const proofs = parsePaymentProofs(invoice.paymentProofs ?? invoice.payment_proofs)
             const pdfProofs = await resolveProofDataUrls(proofs)
@@ -345,7 +346,7 @@ export default function InvoiceHistory() {
             document.body.appendChild(link)
             link.click()
             link.remove()
-            window.setTimeout(() => URL.revokeObjectURL(url), 0)
+            window.setTimeout(() => URL.revokeObjectURL(url), DOWNLOAD_URL_REVOKE_DELAY_MS)
             addToast('Invoice PDF downloaded', 'success')
         } catch (error) {
             addToast(error instanceof Error ? error.message : 'Failed to download invoice', 'error')

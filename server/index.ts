@@ -11,12 +11,13 @@ import sequencesRoutes from "./routes/sequences";
 import { feedbackAdminRoutes, publicFeedbackRoutes } from "./routes/feedback";
 import { adminGalleriesRouter, publicGalleriesRouter } from "./routes/galleries";
 import { authMiddleware } from "./middleware/auth";
-import { galleryPinRateLimiter, loginRateLimiter } from "./middleware/rate-limit";
+import { faceSearchRateLimiter, galleryPinRateLimiter, loginRateLimiter } from "./middleware/rate-limit";
 import { ensureUserPermissionsTable, hasFeaturePermission } from "./permissions";
 import { databaseDriver, sqlite } from "./db/runtime";
 import { feedbackStorageDriver } from "./db/feedback";
 import { galleryStorageDriver } from "./db/galleries";
 import { rateLimitStorageDriver } from "./db/rate-limit";
+import { faceIndexRouter } from "./routes/face-index";
 
 type AuthUser = {
     sub: number;
@@ -160,7 +161,12 @@ app.use("/api/auth/me", authMiddleware);
 app.route("/api/auth", authRoutes);
 app.route("/api/public/feedback", publicFeedbackRoutes);
 app.use("/api/public/galleries/:id/verify", galleryPinRateLimiter);
+app.use("/api/public/galleries/:id/face-search", faceSearchRateLimiter);
 app.route("/api/public/galleries", publicGalleriesRouter);
+
+app.use("/api/internal/face-index/jobs", authMiddleware);
+app.use("/api/internal/face-index/jobs/:id", authMiddleware);
+app.route("/api/internal/face-index", faceIndexRouter);
 
 for (const path of [
     "/api/packages",

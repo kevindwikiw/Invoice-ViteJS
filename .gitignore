@@ -33,6 +33,12 @@ server/uploads/
 .eslintcache
 .cache
 *.tsbuildinfo
+__pycache__/
+*.py[cod]
+.venv/
+.venv-ml/
+/worker/face-recognition/models/
+/worker/face-recognition/.evaluation/
 
 # IntelliJ based IDEs
 .idea

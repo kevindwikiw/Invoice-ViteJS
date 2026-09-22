@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useState, useCallback } from 'react';
 import { useParams } from '@tanstack/react-router';
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { AlertCircle, Check, CheckSquare, ChevronLeft, ChevronRight, HelpCircle, ImageIcon, Instagram, Loader2, Lock, Send } from 'lucide-react';
+import { AlertCircle, Check, CheckSquare, ChevronLeft, ChevronRight, HelpCircle, ImageIcon, Instagram, Loader2, Lock, ScanFace, Send } from 'lucide-react';
 import clsx from 'clsx';
 
 import {
@@ -46,6 +46,8 @@ import { PhotoTile } from '../features/culling/client-gallery/PhotoTile';
 import { GalleryLockedScreen, PinGate } from '../features/culling/client-gallery/AccessScreens';
 import { RequestMoreModal, SubmitConfirmationModal, TutorialModal } from '../features/culling/client-gallery/Modals';
 import { Lightbox } from '../features/culling/client-gallery/Lightbox';
+import { FaceSearchModal } from '../features/culling/client-gallery/FaceSearchModal';
+import { getFaceSearchStatus } from '../features/culling/client-gallery/face-search';
 import type {
     GalleryContactSettings,
     GalleryTheme,
@@ -74,6 +76,9 @@ export default function ClientCullingGallery() {
     const [showSubmitConfirm, setShowSubmitConfirm] = useState(false);
     const [knownPhotosById, setKnownPhotosById] = useState<Record<string, GalleryPhoto>>({});
     const [pendingLightboxPageMove, setPendingLightboxPageMove] = useState<'first' | 'last' | null>(null);
+    const [showFaceSearch, setShowFaceSearch] = useState(false);
+    const [faceFilteredPhotos, setFaceFilteredPhotos] = useState<GalleryPhoto[] | null>(null);
+    const [faceFilterTotal, setFaceFilterTotal] = useState(0);
     const selectedIds = selectionDraft.selectedIds;
     const selectedPhotoMetaById = selectionDraft.photoMetaById;
     const shouldIncludeSelections = !showSelected && !selectionTouched && selectedIds.size === 0 && page === 1;
@@ -85,6 +90,14 @@ export default function ClientCullingGallery() {
         retry: false,
         placeholderData: keepPreviousData,
         staleTime: 5 * 60 * 1000,
+    });
+    const faceSearchStatusQuery = useQuery({
+        queryKey: ['public-gallery-face-search-status', galleryId, token],
+        queryFn: ({ signal }) => getFaceSearchStatus(galleryId, token, signal),
+        enabled: !!token,
+        retry: false,
+        staleTime: 10_000,
+        refetchInterval: (query) => query.state.data?.available ? 30_000 : 5_000,
     });
     const photos = useMemo(() => photosQuery.data?.photos || [], [photosQuery.data?.photos]);
     const submittedPhotos = useMemo(() => photosQuery.data?.selectedPhotos || [], [photosQuery.data?.selectedPhotos]);
@@ -121,15 +134,24 @@ export default function ClientCullingGallery() {
                 return (selectionOrder.get(left.driveFileId) ?? 0) - (selectionOrder.get(right.driveFileId) ?? 0);
             });
     }, [knownPhotosById, selectedPhotoMetaMap, selectionList, submittedPhotos]);
-    const visiblePhotos = showSelected ? pickedPhotos : photos;
+    const isFaceFilterActive = faceFilteredPhotos !== null;
+    const faceSearchAvailable = faceSearchStatusQuery.data?.available === true;
+    const faceSearchControlVisible = faceSearchAvailable || isFaceFilterActive;
+    const visiblePhotos = isFaceFilterActive ? faceFilteredPhotos : showSelected ? pickedPhotos : photos;
     const displayGallery = photosQuery.data?.gallery || unlockedGallery;
     const countdown = useSelectionCountdown(displayGallery?.selectionDeadlineAt, displayGallery?.serverTime);
     const galleryError = photosQuery.error as (Error & { code?: string; contactUrl?: string | null }) | null;
     const galleryLockCode = galleryError?.code === 'GALLERY_EXPIRED' || galleryError?.code === 'GALLERY_CLOSED' ? galleryError.code : null;
     const totalPages = photosQuery.data?.totalPages || 0;
-    const totalPhotos = photosQuery.data?.total || visiblePhotos.length;
-    const hasPreviousGalleryPage = !showSelected && totalPages > 0 && page > 1;
-    const hasNextGalleryPage = !showSelected && totalPages > 0 && page < totalPages;
+    const totalPhotos = isFaceFilterActive ? visiblePhotos.length : photosQuery.data?.total || visiblePhotos.length;
+    const hasPreviousGalleryPage = !showSelected && !isFaceFilterActive && totalPages > 0 && page > 1;
+    const hasNextGalleryPage = !showSelected && !isFaceFilterActive && totalPages > 0 && page < totalPages;
+
+    const resetFaceFilter = useCallback(() => {
+        setFaceFilteredPhotos(null);
+        setFaceFilterTotal(0);
+        setLightboxPhotoId(null);
+    }, []);
 
     const goToGalleryPage = useCallback((nextPage: number) => {
         const clampedPage = totalPages ? Math.min(totalPages, Math.max(1, nextPage)) : Math.max(1, nextPage);
@@ -239,7 +261,7 @@ export default function ClientCullingGallery() {
     }, [galleryId]);
 
     useEffect(() => {
-        const incomingPhotos = [...photos, ...submittedPhotos];
+        const incomingPhotos = [...photos, ...submittedPhotos, ...(faceFilteredPhotos || [])];
         if (!incomingPhotos.length) return;
 
         // eslint-disable-next-line react-hooks/set-state-in-effect -- Keep a local photo cache so picked selections survive pagination and reloads.
@@ -271,7 +293,7 @@ export default function ClientCullingGallery() {
 
             return changed ? { ...current, photoMetaById: nextMetaById } : current;
         });
-    }, [photos, submittedPhotos]);
+    }, [faceFilteredPhotos, photos, submittedPhotos]);
 
     useEffect(() => {
         const selectedFromServer = selectedDriveFileIds.length
@@ -425,7 +447,7 @@ export default function ClientCullingGallery() {
                 </div>
             </header>
 
-            <div data-testid="gallery-toolbar" className="sticky top-11 z-30 border-b border-[var(--border)] bg-[var(--bg-deep)]/95 px-2.5 py-1.5 backdrop-blur sm:top-[56px] sm:px-8 sm:py-2">
+            <div data-testid="gallery-toolbar" className="sticky top-11 z-30 border-b border-[var(--border)] bg-[var(--bg-deep)]/95 px-2 py-1.5 backdrop-blur sm:top-[56px] sm:px-8 sm:py-2">
                 <div className="no-scrollbar mx-auto flex max-w-[1600px] items-center justify-between gap-1.5 overflow-x-auto sm:gap-2">
                     
                     <div className="flex shrink-0 items-center gap-1.5 sm:gap-2">
@@ -433,6 +455,7 @@ export default function ClientCullingGallery() {
                         <button
                             type="button"
                             onClick={() => {
+                                resetFaceFilter();
                                 setShowSelected((current) => !current);
                                 setLightboxPhotoId(null);
                             }}
@@ -462,6 +485,25 @@ export default function ClientCullingGallery() {
                                 )}
                             </span>
                         </button>
+
+                        {faceSearchControlVisible && <button
+                            type="button"
+                            aria-label={isFaceFilterActive ? `Face (${faceFilteredPhotos.length})` : 'Filter by selfie'}
+                            title={isFaceFilterActive ? `${faceFilteredPhotos.length} face matches` : 'Filter by selfie'}
+                            onClick={() => setShowFaceSearch(true)}
+                            className={clsx(
+                                'relative inline-grid h-7 grid-cols-1 grid-rows-1 items-center justify-center whitespace-nowrap rounded-md border px-2 text-[9px] font-bold uppercase tracking-[0.1em] transition-colors sm:h-8 sm:px-2.5 sm:text-[10px] sm:tracking-[0.12em]',
+                                isFaceFilterActive
+                                    ? 'border-[var(--accent)] bg-[var(--accent)] text-[var(--bg-deep)]'
+                                    : 'border-[var(--border)] bg-[var(--bg-card)] text-[var(--text-secondary)] hover:border-[var(--accent)]'
+                            )}
+                        >
+                            <span className="flex items-center justify-center gap-1.5">
+                                <ScanFace size={12} />
+                                <span className="sm:hidden">{isFaceFilterActive ? `Face (${faceFilteredPhotos.length})` : 'Selfie'}</span>
+                                <span className="hidden sm:inline">{isFaceFilterActive ? `Face (${faceFilteredPhotos.length})` : 'Filter by selfie'}</span>
+                            </span>
+                        </button>}
 
                         <span
                             className={clsx(
@@ -539,14 +581,21 @@ export default function ClientCullingGallery() {
                     </div>
                 ) : !visiblePhotos.length ? (
                     <div className="flex min-h-[60vh] flex-col items-center justify-center text-center">
-                        {showSelected ? <CheckSquare size={30} className="mb-4 text-[var(--text-muted)]" /> : <ImageIcon size={30} className="mb-4 text-[var(--text-muted)]" />}
-                        <p className="font-display text-2xl text-[var(--text-primary)]">{showSelected ? 'No picked photos' : 'No photos synced yet'}</p>
-                        <p className="mt-2 max-w-sm text-sm leading-6 text-[var(--text-muted)]">{showSelected ? 'Select photos from the gallery to see them here before submitting.' : 'The studio needs to sync this Drive folder before selection opens.'}</p>
+                        {isFaceFilterActive ? <ScanFace size={30} className="mb-4 text-[var(--text-muted)]" /> : showSelected ? <CheckSquare size={30} className="mb-4 text-[var(--text-muted)]" /> : <ImageIcon size={30} className="mb-4 text-[var(--text-muted)]" />}
+                        <p className="font-display text-2xl text-[var(--text-primary)]">{isFaceFilterActive ? 'No face matches found' : showSelected ? 'No picked photos' : 'No photos synced yet'}</p>
+                        <p className="mt-2 max-w-sm text-sm leading-6 text-[var(--text-muted)]">
+                            {isFaceFilterActive ? 'Try a brighter front-facing selfie or use Wide sensitivity.' : showSelected ? 'Select photos from the gallery to see them here before submitting.' : 'The studio needs to sync this Drive folder before selection opens.'}
+                        </p>
+                        {isFaceFilterActive && (
+                            <button type="button" onClick={resetFaceFilter} className="mt-6 flex h-9 items-center justify-center rounded-lg border border-[var(--border)] px-4 text-[10px] font-bold uppercase tracking-wider text-[var(--text-secondary)] transition-colors hover:border-[var(--accent)] hover:text-[var(--text-primary)]">
+                                Back to all photos
+                            </button>
+                        )}
                     </div>
                 ) : (
                     <div data-testid="gallery-grid" className="grid grid-cols-2 gap-1.5 sm:grid-cols-3 sm:gap-2 md:grid-cols-4 md:gap-3 xl:grid-cols-5 2xl:grid-cols-6">
                         {visiblePhotos.map((photo, index) => {
-                            const fallbackIndex = showSelected ? index : (page - 1) * GALLERY_PAGE_SIZE + index;
+                            const fallbackIndex = showSelected || isFaceFilterActive ? index : (page - 1) * GALLERY_PAGE_SIZE + index;
                             return (
                                 <PhotoTile
                                     key={photo.driveFileId}
@@ -566,7 +615,7 @@ export default function ClientCullingGallery() {
                     </div>
                 )}
                 
-                {!showSelected && !photosQuery.isLoading && !photosQuery.isError && photosQuery.data && totalPages > 1 && (
+                {!showSelected && !isFaceFilterActive && !photosQuery.isLoading && !photosQuery.isError && photosQuery.data && totalPages > 1 && (
                     <nav className="mt-8 flex items-center justify-center gap-4" aria-label="Gallery pages">
                         <button type="button" disabled={page === 1} onClick={() => goToGalleryPage(page - 1)} className="flex h-9 items-center gap-2 rounded-lg border border-[var(--border)] px-4 text-[10px] font-bold uppercase tracking-wider text-[var(--text-secondary)] disabled:opacity-35"><ChevronLeft size={14} /> Previous</button>
                         <span className="text-xs text-[var(--text-muted)]">Page {page} of {totalPages}</span>
@@ -621,6 +670,24 @@ export default function ClientCullingGallery() {
                     error={submitMutation.isError ? (submitMutation.error instanceof Error ? submitMutation.error.message : 'Unable to submit selections.') : undefined}
                     onConfirm={() => submitMutation.mutate()}
                     onClose={() => { submitMutation.reset(); setShowSubmitConfirm(false); }}
+                />
+            )}
+
+            {showFaceSearch && faceSearchControlVisible && (
+                <FaceSearchModal
+                    theme={theme}
+                    galleryId={galleryId}
+                    token={token}
+                    activeCount={faceFilteredPhotos?.length || 0}
+                    activeTotal={faceFilterTotal}
+                    onApply={(matchedPhotos, total) => {
+                        setFaceFilteredPhotos(matchedPhotos);
+                        setFaceFilterTotal(total);
+                        setShowSelected(false);
+                        setLightboxPhotoId(null);
+                    }}
+                    onReset={resetFaceFilter}
+                    onClose={() => setShowFaceSearch(false)}
                 />
             )}
             

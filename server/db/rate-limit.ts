@@ -42,6 +42,10 @@ async function ensureRateLimitStorage(): Promise<void> {
     if (turso) {
         try {
             await turso.execute({ sql: schema, args: [] });
+            const columns = await turso.execute("PRAGMA table_info(rate_limits)");
+            if (!columns.rows.some((column) => column.name === "rate_key") && columns.rows.some((column) => column.name === "key")) {
+                await turso.execute('ALTER TABLE rate_limits RENAME COLUMN "key" TO rate_key');
+            }
             await turso.execute({ sql: index, args: [] });
         } catch (error) {
             console.error("Rate limit storage initialization failed.", error);
@@ -50,6 +54,10 @@ async function ensureRateLimitStorage(): Promise<void> {
         return;
     }
     fallbackSqlite.prepare(schema).run();
+    const columns = fallbackSqlite.query<{ name: string }, []>("PRAGMA table_info(rate_limits)").all();
+    if (!columns.some((column) => column.name === "rate_key") && columns.some((column) => column.name === "key")) {
+        fallbackSqlite.prepare('ALTER TABLE rate_limits RENAME COLUMN "key" TO rate_key').run();
+    }
     fallbackSqlite.prepare(index).run();
 }
 

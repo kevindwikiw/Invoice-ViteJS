@@ -99,6 +99,42 @@ const GALLERY_SCHEMA = [
         submitted_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
         UNIQUE(gallery_id, selected_drive_file_id)
     )`,
+    `CREATE TABLE IF NOT EXISTS face_index_jobs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        gallery_id INTEGER NOT NULL REFERENCES galleries(id) ON DELETE CASCADE,
+        status TEXT NOT NULL DEFAULT 'queued' CHECK(status IN ('queued', 'running', 'completed', 'failed', 'cancelled')),
+        model_version TEXT NOT NULL,
+        source_version TEXT NOT NULL DEFAULT '',
+        total INTEGER NOT NULL DEFAULT 0,
+        processed INTEGER NOT NULL DEFAULT 0,
+        error TEXT,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        started_at TEXT,
+        completed_at TEXT,
+        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )`,
+    "CREATE INDEX IF NOT EXISTS idx_face_index_jobs_gallery_status ON face_index_jobs(gallery_id, status, created_at DESC)",
+    `CREATE TABLE IF NOT EXISTS face_embeddings (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        gallery_id INTEGER NOT NULL REFERENCES galleries(id) ON DELETE CASCADE,
+        drive_file_id TEXT NOT NULL,
+        face_index INTEGER NOT NULL DEFAULT 0,
+        embedding TEXT NOT NULL,
+        bounding_box TEXT,
+        source_version TEXT NOT NULL,
+        model_version TEXT NOT NULL,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(gallery_id, drive_file_id, face_index, model_version)
+    )`,
+    "CREATE INDEX IF NOT EXISTS idx_face_embeddings_gallery_file ON face_embeddings(gallery_id, drive_file_id)",
+    `CREATE TABLE IF NOT EXISTS face_index_photos (
+        gallery_id INTEGER NOT NULL REFERENCES galleries(id) ON DELETE CASCADE,
+        drive_file_id TEXT NOT NULL,
+        source_version TEXT NOT NULL,
+        model_version TEXT NOT NULL,
+        PRIMARY KEY (gallery_id, drive_file_id, model_version)
+    )`,
     `CREATE TABLE IF NOT EXISTS gallery_edit_requests (id INTEGER PRIMARY KEY AUTOINCREMENT, gallery_id INTEGER NOT NULL REFERENCES galleries(id) ON DELETE CASCADE, requested_additional_count INTEGER NOT NULL, pricing_mode TEXT NOT NULL, package_id INTEGER, unit_price INTEGER, quoted_total INTEGER, status TEXT NOT NULL DEFAULT 'pending', client_note TEXT, admin_note TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)`,
     "CREATE INDEX IF NOT EXISTS idx_gallery_selections_gallery ON gallery_selections(gallery_id, selected_filename)",
 ];
@@ -124,13 +160,42 @@ const GALLERY_REQUIRED_COLUMNS: Array<readonly [string, string]> = [
     ["selection_duration_hours", "INTEGER NOT NULL DEFAULT 72"],
     ["selection_deadline_at", "TEXT"],
     ["access_version", "INTEGER NOT NULL DEFAULT 1"],
+    ["face_source_version", "TEXT"],
+    ["face_source_revision", "INTEGER NOT NULL DEFAULT 0"],
+];
+
+const FACE_SOURCE_SCHEMA = [
+    "CREATE INDEX IF NOT EXISTS idx_face_jobs_source ON face_index_jobs(gallery_id, model_version, source_version, id)",
+    `CREATE TRIGGER IF NOT EXISTS face_source_insert AFTER INSERT ON gallery_photos BEGIN
+        UPDATE galleries SET face_source_revision = face_source_revision + 1, face_source_version = NULL WHERE id = NEW.gallery_id;
+    END`,
+    `CREATE TRIGGER IF NOT EXISTS face_source_delete AFTER DELETE ON gallery_photos BEGIN
+        UPDATE galleries SET face_source_revision = face_source_revision + 1, face_source_version = NULL WHERE id = OLD.gallery_id;
+    END`,
+    `CREATE TRIGGER IF NOT EXISTS face_source_update AFTER UPDATE ON gallery_photos
+    WHEN OLD.gallery_id IS NOT NEW.gallery_id OR OLD.drive_file_id IS NOT NEW.drive_file_id
+        OR OLD.source_version IS NOT NEW.source_version
+        OR (COALESCE(NEW.source_version, '') = '' AND (OLD.created_at IS NOT NEW.created_at OR OLD.width IS NOT NEW.width OR OLD.height IS NOT NEW.height))
+    BEGIN
+        UPDATE galleries SET face_source_revision = face_source_revision + 1, face_source_version = NULL WHERE id IN (OLD.gallery_id, NEW.gallery_id);
+    END`,
 ];
 
 const GALLERY_SELECTION_REQUIRED_COLUMNS: Array<readonly [string, string]> = [
     ["note", "TEXT"],
 ];
 
-async function ensureTursoColumns(tableName: "galleries" | "gallery_selections", columns: Array<readonly [string, string]>): Promise<void> {
+const GALLERY_PHOTO_REQUIRED_COLUMNS: Array<readonly [string, string]> = [
+    ["source_version", "TEXT NOT NULL DEFAULT ''"],
+];
+
+const FACE_INDEX_JOB_REQUIRED_COLUMNS: Array<readonly [string, string]> = [
+    ["source_version", "TEXT NOT NULL DEFAULT ''"],
+];
+
+type GalleryTableWithMigrations = "galleries" | "gallery_selections" | "gallery_photos" | "face_index_jobs";
+
+async function ensureTursoColumns(tableName: GalleryTableWithMigrations, columns: Array<readonly [string, string]>): Promise<void> {
     if (!galleryTurso) return;
     const tableInfo = await galleryTurso.execute(`PRAGMA table_info(${tableName})`);
     const existingColumns = new Set(tableInfo.rows.map((row) => String((row as Record<string, unknown>).name)));
@@ -141,7 +206,7 @@ async function ensureTursoColumns(tableName: "galleries" | "gallery_selections",
     }
 }
 
-async function ensureSqliteColumns(tableName: "galleries" | "gallery_selections", columns: Array<readonly [string, string]>): Promise<void> {
+async function ensureSqliteColumns(tableName: GalleryTableWithMigrations, columns: Array<readonly [string, string]>): Promise<void> {
     const tableInfo = await all<{ name: string }>(`PRAGMA table_info(${tableName})`);
     const existingColumns = new Set(tableInfo.map((row) => row.name));
     for (const [columnName, columnDefinition] of columns) {
@@ -161,6 +226,9 @@ async function initializeGalleryStorage(): Promise<void> {
         await ensureTursoColumns("galleries", GALLERY_REQUIRED_COLUMNS);
         await galleryTurso.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_galleries_public_key ON galleries(public_key)");
         await ensureTursoColumns("gallery_selections", GALLERY_SELECTION_REQUIRED_COLUMNS);
+        await ensureTursoColumns("gallery_photos", GALLERY_PHOTO_REQUIRED_COLUMNS);
+        await ensureTursoColumns("face_index_jobs", FACE_INDEX_JOB_REQUIRED_COLUMNS);
+        await galleryTurso.batch(FACE_SOURCE_SCHEMA, "write");
         const counterBackfill = await galleryTurso.execute({
             sql: "SELECT value FROM gallery_settings WHERE key = ?",
             args: [GALLERY_COUNTER_BACKFILL_KEY],
@@ -204,6 +272,9 @@ async function initializeGalleryStorage(): Promise<void> {
     await ensureSqliteColumns("galleries", GALLERY_REQUIRED_COLUMNS);
     await run("CREATE UNIQUE INDEX IF NOT EXISTS idx_galleries_public_key ON galleries(public_key)");
     await ensureSqliteColumns("gallery_selections", GALLERY_SELECTION_REQUIRED_COLUMNS);
+    await ensureSqliteColumns("gallery_photos", GALLERY_PHOTO_REQUIRED_COLUMNS);
+    await ensureSqliteColumns("face_index_jobs", FACE_INDEX_JOB_REQUIRED_COLUMNS);
+    for (const query of FACE_SOURCE_SCHEMA) await run(query);
     const counterBackfill = await one<{ value: string }>("SELECT value FROM gallery_settings WHERE key = ?", [GALLERY_COUNTER_BACKFILL_KEY]);
     if (!counterBackfill) {
         await run(GALLERY_COUNTER_BACKFILL_SQL);
