@@ -93,6 +93,7 @@ export default function ClientCullingGallery() {
         retry: false,
         placeholderData: keepPreviousData,
         staleTime: 5 * 60 * 1000,
+        refetchOnWindowFocus: 'always',
     });
     const faceSearchStatusQuery = useQuery({
         queryKey: ['public-gallery-face-search-status', galleryId, token],
@@ -442,7 +443,10 @@ export default function ClientCullingGallery() {
                         {requestMoreUrl && shouldShowRequestMore && (
                             <button
                                 type="button"
-                                onClick={() => setShowRequestMore(true)}
+                                onClick={() => {
+                                    setShowRequestMore(true);
+                                    void photosQuery.refetch();
+                                }}
                                 className="flex h-7 items-center justify-center rounded-md border border-[var(--border)] bg-[var(--bg-card)] px-1.5 text-[9px] font-bold uppercase tracking-[0.1em] text-[var(--text-primary)] transition-colors hover:border-[var(--accent)] sm:h-8 sm:px-2.5 sm:text-[10px] sm:tracking-[0.12em]"
                             >
                                 <span className="hidden sm:inline">Request More</span>

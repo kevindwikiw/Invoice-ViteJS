@@ -196,7 +196,6 @@ async function fulfillPayment(tx: any) {
                     `UPDATE galleries
                      SET additional_selection_limit = additional_selection_limit + ?,
                          edit_addon_status = 'paid',
-                         access_version = access_version + 1,
                          updated_at = CURRENT_TIMESTAMP
                      WHERE id = ?`,
                     [additionalCount, tx.entity_id]

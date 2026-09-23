@@ -190,6 +190,49 @@ test('opens photo 101 on page 2 by driveFileId and keeps the full frame above th
     await expectLightboxFrame(page, 1);
 });
 
+test('request more refreshes QRIS availability without requiring a new gallery session', async ({ page }) => {
+    const id = 'qris-refresh-gallery';
+    await installSession(page, id);
+
+    let qrisEnabled = false;
+    let photoRequests = 0;
+    await page.route(`**/api/public/galleries/${id}/contact`, (route) => route.fulfill({
+        json: { contactWhatsappUrl: '+628123456789', requestMoreMessage: 'Request {{requested_count}} photos for {{gallery_title}}' },
+    }));
+    await page.route(`**/api/public/galleries/${id}/photos?*`, (route) => {
+        photoRequests += 1;
+        return route.fulfill({
+            json: {
+                gallery: {
+                    ...gallery('2026-09-05T03:00:00.000Z'),
+                    maxSelections: 1,
+                    addon: { enabled: false, qrisEnabled, additionalLimit: 0, unitPrice: 10000, status: 'none' },
+                },
+                photos: [photo(1)],
+                page: 1,
+                pageSize: 54,
+                total: 1,
+                totalPages: 1,
+                selectedDriveFileIds: [],
+                selectedPhotos: [],
+            },
+        });
+    });
+    await page.route(`**/api/public/galleries/${id}/photos/*/thumbnail?*`, (route) => fulfillImage(route, 320, 320));
+
+    await page.goto(`/culling/${id}`);
+    const requestMore = page.getByRole('button', { name: 'Request More' });
+    await expect(requestMore).toBeVisible();
+
+    qrisEnabled = true;
+    await requestMore.click();
+
+    const dialog = page.getByRole('dialog', { name: 'Request more edited photos' });
+    await expect(dialog).toBeVisible();
+    await expect(dialog.getByRole('button', { name: 'Bayar Instan via QRIS' })).toBeVisible();
+    expect(photoRequests).toBeGreaterThanOrEqual(2);
+});
+
 test('continues the lightbox across page boundaries', async ({ page }) => {
     const id = 'cross-page-lightbox-gallery';
     await page.setViewportSize({ width: 1440, height: 900 });
