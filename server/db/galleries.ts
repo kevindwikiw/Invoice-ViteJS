@@ -55,6 +55,7 @@ const GALLERY_SCHEMA = [
         edit_addon_status TEXT NOT NULL DEFAULT 'none',
         edit_addon_pricing_mode TEXT NOT NULL DEFAULT 'per_photo',
         edit_addon_price INTEGER NOT NULL DEFAULT 10000,
+        qris_enabled INTEGER NOT NULL DEFAULT 0,
          edit_addon_package_id INTEGER,
          drive_folder_id TEXT NOT NULL,
          tutorial_before_drive_file_id TEXT,
@@ -137,6 +138,22 @@ const GALLERY_SCHEMA = [
     )`,
     `CREATE TABLE IF NOT EXISTS gallery_edit_requests (id INTEGER PRIMARY KEY AUTOINCREMENT, gallery_id INTEGER NOT NULL REFERENCES galleries(id) ON DELETE CASCADE, requested_additional_count INTEGER NOT NULL, pricing_mode TEXT NOT NULL, package_id INTEGER, unit_price INTEGER, quoted_total INTEGER, status TEXT NOT NULL DEFAULT 'pending', client_note TEXT, admin_note TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)`,
     "CREATE INDEX IF NOT EXISTS idx_gallery_selections_gallery ON gallery_selections(gallery_id, selected_filename)",
+    `CREATE TABLE IF NOT EXISTS payment_transactions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        order_id TEXT UNIQUE NOT NULL,
+        entity_type TEXT NOT NULL,
+        entity_id INTEGER NOT NULL,
+        gross_amount INTEGER NOT NULL,
+        payment_type TEXT NOT NULL DEFAULT 'qris',
+        transaction_status TEXT NOT NULL DEFAULT 'pending',
+        qr_string TEXT,
+        qr_url TEXT,
+        expiry_time TEXT,
+        metadata TEXT,
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )`,
+    "CREATE INDEX IF NOT EXISTS idx_payment_transactions_order ON payment_transactions(order_id)",
 ];
 
 const GALLERY_REQUIRED_COLUMNS: Array<readonly [string, string]> = [
@@ -146,6 +163,7 @@ const GALLERY_REQUIRED_COLUMNS: Array<readonly [string, string]> = [
     ["edit_addon_status", "TEXT NOT NULL DEFAULT 'none'"],
     ["edit_addon_pricing_mode", "TEXT NOT NULL DEFAULT 'per_photo'"],
     ["edit_addon_price", "INTEGER NOT NULL DEFAULT 10000"],
+    ["qris_enabled", "INTEGER NOT NULL DEFAULT 0"],
     ["edit_addon_package_id", "INTEGER"],
     ["contact_whatsapp_url", "TEXT"],
     ["tutorial_before_drive_file_id", "TEXT"],

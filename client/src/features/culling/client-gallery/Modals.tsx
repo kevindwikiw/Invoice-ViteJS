@@ -1,30 +1,54 @@
 import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type SyntheticEvent } from 'react';
-import { AlertCircle, Check, CheckSquare, ChevronLeft, ChevronRight, GripVertical, ImageOff, Loader2, MessageCircle, Send, X } from 'lucide-react';
+import { AlertCircle, Check, CheckSquare, ChevronLeft, ChevronRight, GripVertical, ImageOff, Loader2, MessageCircle, QrCode, Send, X } from 'lucide-react';
 import clsx from 'clsx';
 
-import { calculateAddonQuote, cullingTutorialImageUrl } from '../culling.public';
+import { calculateAddonQuote, cullingTutorialImageUrl, createQrisPayment, type QrisPaymentResponse } from '../culling.public';
 import type { DiscountRule } from '../culling.types';
 
 import { idrFormat } from './constants';
+import { QrisModal } from './QrisModal';
 
 export function RequestMoreModal({
+    galleryId,
     requestedCount,
     selectedCount,
     unitPrice,
     discountRules,
+    qrisEnabled,
     requestUrl,
     onChange,
     onClose,
+    onPaymentSuccess,
 }: {
+    galleryId?: string | number;
     requestedCount: number;
     selectedCount: number;
     unitPrice: number;
     discountRules?: DiscountRule[];
+    qrisEnabled?: boolean;
     requestUrl: string;
     onChange: (count: number) => void;
     onClose: () => void;
+    onPaymentSuccess?: () => void;
 }) {
     const quote = calculateAddonQuote(requestedCount, unitPrice, discountRules);
+    const [qrisLoading, setQrisLoading] = useState(false);
+    const [qrisError, setQrisError] = useState<string | null>(null);
+    const [qrisPayment, setQrisPayment] = useState<QrisPaymentResponse | null>(null);
+
+    const handlePayQris = async () => {
+        if (!galleryId) return;
+        try {
+            setQrisLoading(true);
+            setQrisError(null);
+            const res = await createQrisPayment(galleryId, requestedCount);
+            setQrisPayment(res);
+        } catch (err: unknown) {
+            setQrisError(err instanceof Error ? err.message : 'Gagal memproses pembayaran QRIS');
+        } finally {
+            setQrisLoading(false);
+        }
+    };
 
     useEffect(() => {
         const handleKeyDown = (event: KeyboardEvent) => {
@@ -82,11 +106,46 @@ export function RequestMoreModal({
                     <div className="flex items-center justify-between py-3"><dt className="text-[var(--text-muted)]">Estimated total</dt><dd className="flex items-center gap-2 font-bold tabular-nums">{quote.discountPercent > 0 && <span className="font-normal text-[var(--text-muted)] line-through">{idrFormat.format(quote.normalTotal)}</span>}{idrFormat.format(quote.total)}</dd></div>
                 </dl>
 
-                <a href={requestUrl} target="_blank" rel="noreferrer" onClick={onClose} className="mt-5 flex h-10 w-full items-center justify-center gap-2 rounded-lg bg-[var(--accent)] text-[10px] font-black uppercase tracking-[0.12em] text-[var(--bg-deep)] transition-opacity hover:opacity-85">
-                    <MessageCircle size={14} /> Request via WhatsApp
+                {galleryId && qrisEnabled ? (
+                    <button
+                        type="button"
+                        disabled={qrisLoading}
+                        onClick={handlePayQris}
+                        className="mt-5 flex h-11 w-full items-center justify-center gap-2 rounded-xl bg-[var(--accent)] text-xs font-black uppercase tracking-wider text-[var(--bg-deep)] transition-all hover:opacity-90 shadow-md active:scale-[0.99] disabled:opacity-50"
+                    >
+                        {qrisLoading ? <Loader2 size={15} className="animate-spin" /> : <QrCode size={16} />}
+                        <span>Bayar Instan via QRIS</span>
+                    </button>
+                ) : null}
+
+                {qrisError && (
+                    <p className="mt-2 text-center text-xs text-rose-400">{qrisError}</p>
+                )}
+
+                <a
+                    href={requestUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    onClick={onClose}
+                    className="mt-2 flex h-9 w-full items-center justify-center gap-2 rounded-xl border border-[var(--border)] text-[10px] font-bold uppercase tracking-wider text-[var(--text-secondary)] transition-colors hover:border-[var(--accent)] hover:text-white"
+                >
+                    <MessageCircle size={13} /> Pesan Manual via WhatsApp
                 </a>
-                <p className="mt-3 text-center text-[10px] leading-4 text-[var(--text-muted)]">The additional quota becomes active after Orbit confirms payment.</p>
+                <p className="mt-2.5 text-center text-[10px] leading-4 text-[var(--text-muted)]">
+                    {qrisEnabled ? 'Pembayaran via QRIS otomatis membuka kuota seketika tanpa perlu konfirmasi manual.' : 'QRIS belum aktif untuk gallery ini, jadi request tambahan dikirim manual via WhatsApp.'}
+                </p>
             </section>
+
+            {qrisPayment && (
+                <QrisModal
+                    payment={qrisPayment}
+                    onPaymentSuccess={() => {
+                        onPaymentSuccess?.();
+                        onClose();
+                    }}
+                    onClose={() => setQrisPayment(null)}
+                />
+            )}
         </div>
     );
 }

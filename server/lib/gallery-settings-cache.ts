@@ -15,8 +15,8 @@ let pending: { generation: number; promise: Promise<GallerySettings> } | null = 
 
 async function loadGallerySettings(): Promise<GallerySettings> {
     const rows = await galleryAll<{ key: string; value: string }>(
-        "SELECT key, value FROM gallery_settings WHERE key IN (?, ?, ?)",
-        ["contact_whatsapp_url", "contact_whatsapp_message", "request_more_whatsapp_message"],
+        "SELECT key, value FROM gallery_settings WHERE key IN (?, ?, ?, ?)",
+        ["contact_whatsapp_url", "contact_whatsapp_message", "request_more_whatsapp_message", "addon_discount_rules"],
     );
     return Object.fromEntries(rows.map((row) => [String(row.key), String(row.value)]));
 }

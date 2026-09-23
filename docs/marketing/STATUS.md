@@ -1,6 +1,6 @@
 # Marketing Implementation Status
 
-Last Updated: 2026-09-10
+Last Updated: 2026-09-22
 
 ## Architecture Version
 
@@ -10,23 +10,34 @@ This file supersedes the earlier custom Bun + `react-dom/server` prerender plan.
 
 ## Current Sprint
 
-Sprint 1 — Foundation & Architecture
+Sprint 3 - Marketing Pages
 
 ## Current Gate
 
-G1 — Architecture Ready
+G3 - Marketing Feature Complete
 
 ## Current Task
 
-MKT-202 — Implement TanStack Start File-Based Marketing Routes
+MKT-306 - Wedding Photographer Jakarta
 
 ## Completed
+
+- MKT-205 - Optimize Marketing Media
+- MKT-301 - Global Marketing Layout
+- MKT-302 - Hero Showreel
+- MKT-303 - Bento Portfolio Grid
+- MKT-304 - Portfolio Lightbox
+- MKT-305 - Reusable Service/Location Template
 
 - MKT-101 — Initialize TanStack Start Marketing Workspace
 - MKT-102 — Configure TanStack Start + Rsbuild + React + Tailwind
 - MKT-103 — Add Root Workspace Scripts
 - MKT-104 — Separate Environment Configuration
+- MKT-105 — Define Portfolio Media Delivery Strategy
 - MKT-201 — Centralize LANDING_CONFIG
+- MKT-202 — Implement TanStack Start File-Based Marketing Routes
+- MKT-203 — Implement Typed File-Based Content Layer
+- MKT-204 — Curate Production Portfolio Media
 
 ## In Progress
 
@@ -38,15 +49,7 @@ None.
 
 ## Next Recommended Task
 
-MKT-202 — Implement TanStack Start File-Based Marketing Routes
-
-## Deferred / Planned Spike
-
-- MKT-105 — Define Portfolio Media Delivery Strategy
-  - Type: Spike
-  - Execute after MKT-203 and before MKT-204.
-  - This ticket is not part of the G1 critical path.
-  - Its output should define the production media-delivery approach before portfolio assets are curated and optimized in Sprint 2.
+MKT-306 - Wedding Photographer Jakarta.
 
 ## Current Architecture Decisions
 
@@ -77,7 +80,23 @@ MKT-202 — Implement TanStack Start File-Based Marketing Routes
 - MKT-304 lightbox is optional for launch.
 - MKT-602 remains the production cutover/convergence milestone.
 - Sprint 1 implementation order for solo development is: MKT-201 → MKT-202 → MKT-203 → MKT-105.
-- MKT-105 is a media-strategy spike and should be completed after the G1 architecture work, but before MKT-204 starts.
+- MKT-105 selected a hybrid media strategy: Cloudflare Pages static assets for
+  optimized phase-1 images and OG/schema images, with hero/showreel video kept
+  out of the repository and lazy-loaded from an external video host or future
+  R2/Cloudinary setup only if justified.
+- MKT-204 curated approved real The Orbit Photo production media from the
+  shared marketing Drive structure into `marketing/public/media/hero`,
+  `marketing/public/media/portfolio`, `marketing/public/media/services`, and
+  `marketing/public/media/og`. Typed content now maps the curated hero,
+  portfolio, service, OG/schema, and video-poster still assets. The 108 MB
+  showreel MP4 remains out of Git per the MKT-105 media strategy. The Drive
+  `04-og` folder was empty, so the current real OG image is copied from the
+  approved hero set until MKT-205 created a dedicated optimized derivative.
+- MKT-305 added a reusable data-driven service/location template for the four
+  initial service routes. The template resolves service, location, portfolio,
+  package, FAQ, testimonial, and curated media data from the typed content layer
+  and keeps the phase-1 pages compatible with later route `head` and schema
+  work.
 
 ## Important Implementation Note
 
@@ -96,6 +115,31 @@ TanStack Start + Rsbuild may produce multiple build outputs. MKT-601 must inspec
 - Large photo/video assets can hurt LCP.
 - Duplicate route metadata systems can drift; use route-native head.
 - Supabase/Turso responsibilities must not be guessed.
+
+## Latest Validation
+
+2026-09-22:
+
+```bash
+bun --cwd marketing typecheck
+bun --cwd marketing build
+```
+
+Passed.
+
+Local SSR smoke checks passed for:
+
+- `/wedding-photographer-jakarta`
+- `/prewedding-bali`
+- `/wedding-videographer-jakarta`
+
+Global validation still has unrelated blockers outside MKT-305:
+
+- `bun --cwd client build` fails in
+  `client/src/features/culling/client-gallery/Modals.tsx` because of a syntax
+  error around line 150.
+- `bun run typecheck` fails before reaching marketing because `routes/payments.ts`
+  passes `string | undefined` where `DiscountRule[] | undefined` is expected.
 
 ## Baseline Validation
 
@@ -121,18 +165,19 @@ bun --cwd marketing check:seo
 - [x] MKT-102
 - [x] MKT-103
 - [x] MKT-104
+- [x] MKT-105
 - [x] MKT-201
-- [ ] MKT-202
-- [ ] MKT-203
+- [x] MKT-202
+- [x] MKT-203
 
 ### G2
 
-- [ ] MKT-204
-- [ ] MKT-205
-- [ ] MKT-301
-- [ ] MKT-302
-- [ ] MKT-303
-- [ ] MKT-305
+- [x] MKT-204
+- [x] MKT-205
+- [x] MKT-301
+- [x] MKT-302
+- [x] MKT-303
+- [x] MKT-305
 
 ### G3
 
@@ -143,7 +188,7 @@ bun --cwd marketing check:seo
 - [ ] MKT-310
 - [ ] MKT-311
 - [ ] MKT-312
-- [ ] MKT-304 optional
+- [x] MKT-304 optional
 
 ### G4
 
@@ -181,35 +226,33 @@ bun --cwd marketing check:seo
 
 - [ ] MKT-609
 
-## Codex Prompt — Current Ticket
+## Codex Prompt - Current Ticket
 
 ```text
 Read AGENTS.md, docs/marketing/PRD.md,
 docs/marketing/PLAN.md, docs/marketing/STATUS.md,
 and docs/marketing/WORKFLOW.md.
 
-We are implementing MKT-201.
+We are implementing MKT-306.
 
 Before modifying code:
 1. inspect the current repository state,
-2. verify MKT-101 through MKT-104 are complete,
-3. inspect any existing business/landing configuration already present,
-4. identify all duplicated business metadata currently used by the app or landing-related code,
+2. verify MKT-305 is complete,
+3. inspect the reusable service/location template,
+4. inspect wedding photography content, media, package, FAQ, and testimonial data,
 5. identify the smallest set of files that need to change.
 
-Then implement MKT-201 only.
+Then implement MKT-306 only.
 
-MKT-201 scope:
-- centralize marketing business configuration in LANDING_CONFIG,
-- include production marketing URL and app URL,
-- support business contact information,
-- support social information,
-- support OG/schema defaults,
-- preserve existing client/server behavior.
+MKT-306 scope:
+- complete the Wedding Photographer Jakarta route content,
+- use relevant real curated images,
+- keep the CTA working,
+- add FAQ where applicable,
+- avoid placeholders.
 
-Do not start MKT-202 or later tickets.
+Do not start MKT-307 or later tickets.
 Do not modify Hono, Supabase, or Turso.
-Do not introduce placeholder production business data if real values are not available.
 Do not refactor unrelated code.
 
 After implementation:
@@ -218,8 +261,8 @@ After implementation:
 - report changed files,
 - report validation results,
 - update STATUS.md,
-- mark MKT-201 completed,
-- set MKT-202 as the next recommended task,
+- mark MKT-306 completed,
+- set MKT-307 as the next recommended task,
 - stop.
 ```
 

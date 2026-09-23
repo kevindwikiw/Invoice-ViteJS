@@ -11,6 +11,11 @@ export default defineConfig({
     // resolving image sources. Provide the browser implementation at bundle
     // time instead of leaking a global into the application runtime.
     rspack: {
+      resolve: {
+        fallback: {
+          fs: false,
+        },
+      },
       plugins: [
         new rspack.ProvidePlugin({
           Buffer: ['buffer', 'Buffer'],

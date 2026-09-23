@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useState, useCallback } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, useCallback } from 'react';
 import { useParams } from '@tanstack/react-router';
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { AlertCircle, Check, CheckSquare, ChevronLeft, ChevronRight, HelpCircle, ImageIcon, Instagram, Loader2, Lock, ScanFace, Send } from 'lucide-react';
@@ -81,6 +81,9 @@ export default function ClientCullingGallery() {
     const [faceFilterTotal, setFaceFilterTotal] = useState(0);
     const selectedIds = selectionDraft.selectedIds;
     const selectedPhotoMetaById = selectionDraft.photoMetaById;
+    // Ref so the photos-cache effect can read current selection without adding it as a dep
+    const selectedIdsRef = useRef(selectedIds);
+    selectedIdsRef.current = selectedIds;
     const shouldIncludeSelections = !showSelected && !selectionTouched && selectedIds.size === 0 && page === 1;
     
     const photosQuery = useQuery({
@@ -208,6 +211,7 @@ export default function ClientCullingGallery() {
     const overLimitCount = selectionLimit ? Math.max(0, selectedCount - selectionLimit) : 0;
     const isOverLimit = overLimitCount > 0;
     const addonUnitPrice = Math.max(0, Number(displayGallery?.addon?.unitPrice ?? 10_000));
+    const qrisEnabled = Boolean(displayGallery?.addon?.qrisEnabled);
     const discountRules = displayGallery?.addon?.discountRules?.length ? displayGallery.addon.discountRules : DEFAULT_ADDON_DISCOUNT_RULES;
     const addonQuote = useMemo(() => {
         return calculateAddonQuote(requestedCount, addonUnitPrice, discountRules);
@@ -267,12 +271,25 @@ export default function ClientCullingGallery() {
         // eslint-disable-next-line react-hooks/set-state-in-effect -- Keep a local photo cache so picked selections survive pagination and reloads.
         setKnownPhotosById((current) => {
             let changed = false;
-            const next = { ...current };
+            // Only retain currently-selected photos — prevents unbounded RAM growth across pages.
+            // selectedIdsRef.current is always up-to-date without being a dep.
+            const activeIds = selectedIdsRef.current;
+            const next: Record<string, GalleryPhoto> = {};
+
+            // Carry over existing selected entries
+            for (const id of activeIds) {
+                if (current[id]) next[id] = current[id];
+            }
+            if (Object.keys(current).length !== Object.keys(next).length) changed = true;
+
+            // Update/add from incoming batch (only for selected photos)
             for (const photo of incomingPhotos) {
+                if (!activeIds.has(photo.driveFileId)) continue;
                 if (next[photo.driveFileId] === photo) continue;
                 next[photo.driveFileId] = photo;
                 changed = true;
             }
+
             return changed ? next : current;
         });
 
@@ -653,13 +670,18 @@ export default function ClientCullingGallery() {
 
             {showRequestMore && requestMoreUrl && (
                 <RequestMoreModal
+                    galleryId={galleryId}
                     requestedCount={requestedCount}
                     selectedCount={selectedCount}
                     unitPrice={addonUnitPrice}
                     discountRules={discountRules}
+                    qrisEnabled={qrisEnabled}
                     requestUrl={requestMoreUrl}
                     onChange={setRequestedCount}
                     onClose={() => setShowRequestMore(false)}
+                    onPaymentSuccess={() => {
+                        void photosQuery.refetch();
+                    }}
                 />
             )}
 

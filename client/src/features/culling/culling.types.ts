@@ -37,6 +37,7 @@ export interface GallerySummary {
     additionalLimit?: number;
     addon?: { 
         enabled: boolean; 
+        qrisEnabled?: boolean;
         additionalLimit: number; 
         pricingMode?: string | null; 
         unitPrice?: number | null; 
@@ -104,6 +105,7 @@ export interface PublicGallery {
     additionalLimit?: number;
     addon?: { 
         enabled: boolean; 
+        qrisEnabled?: boolean;
         additionalLimit: number; 
         pricingMode?: string | null; 
         unitPrice?: number | null; 

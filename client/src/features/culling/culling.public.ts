@@ -22,12 +22,12 @@ export async function parseError(response: Response, fallback: string): Promise<
 // 2. Logika Diskon yang Dinamis
 export function calculateAddonQuote(count: number, unitPrice: number, rules?: DiscountRule[]) {
     let discountPercent = 0;
-    
+
     // Jika backend mengirimkan aturan diskon, cari diskon terbesar yang memenuhi syarat jumlah foto (count)
     if (rules && rules.length > 0) {
         // Urutkan dari jumlah foto terbanyak ke paling sedikit
         const sortedRules = [...rules].sort((a, b) => b.minCount - a.minCount);
-        
+
         for (const rule of sortedRules) {
             if (count >= rule.minCount) {
                 discountPercent = rule.discountPercent;
@@ -103,4 +103,39 @@ export function galleryPreviewUrl(galleryId: string | number, driveFileId: strin
 export function cullingTutorialImageUrl(galleryId: string | number, token: string, slot: number, variant: 'before' | 'after'): string {
     const params = new URLSearchParams({ token });
     return apiUrl(`/public/galleries/${galleryId}/tutorial/${slot}/${variant}?${params.toString()}`);
+}
+
+export interface QrisPaymentResponse {
+    success: boolean;
+    orderId: string;
+    grossAmount: number;
+    requestedCount: number;
+    qrString?: string;
+    qrUrl?: string;
+    expiryTime?: string;
+    isSimulated?: boolean;
+}
+
+export async function createQrisPayment(galleryId: string | number, requestedCount: number): Promise<QrisPaymentResponse> {
+    const response = await apiFetch('/payments/qris/create', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ galleryId: String(galleryId), requestedCount }),
+    });
+    if (!response.ok) throw await parseError(response, 'Unable to create QRIS payment.');
+    return response.json();
+}
+
+export async function checkPaymentStatus(orderId: string): Promise<{ orderId: string; status: string; grossAmount: number }> {
+    const response = await apiFetch(`/payments/status/${encodeURIComponent(orderId)}`);
+    if (!response.ok) throw await parseError(response, 'Unable to check payment status.');
+    return response.json();
+}
+
+export async function simulatePaymentSuccess(orderId: string): Promise<{ success: boolean; message: string }> {
+    const response = await apiFetch(`/payments/simulate-success/${encodeURIComponent(orderId)}`, {
+        method: 'POST',
+    });
+    if (!response.ok) throw await parseError(response, 'Unable to simulate payment.');
+    return response.json();
 }

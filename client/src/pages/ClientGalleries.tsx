@@ -40,7 +40,6 @@ import {
 } from '../constants/uiContract';
 
 import type {
-  GallerySelection,
   GalleryStatus,
   GallerySummary
 } from '../features/culling/culling.types';
@@ -83,12 +82,6 @@ function deadlineLabel(gallery: Pick<GallerySummary, 'selectionDeadlineAt' | 'is
   if (!gallery.selectionDeadlineAt) return 'Not set';
   if (gallery.isExpired) return 'Expired';
   return formatDateValue(gallery.selectionDeadlineAt, dateFormat, 'Not set');
-}
-
-function selectionClientLabel(selection: Pick<GallerySelection, 'clientLabel' | 'displayOrder'>, galleryTitle: string, index: number): string {
-  const displayOrder = Number(selection.displayOrder);
-  const displayIndex = Number.isFinite(displayOrder) && displayOrder >= 0 ? displayOrder : index;
-  return selection.clientLabel || `${galleryTitle.trim() || 'Photo'} ${String(displayIndex + 1).padStart(2, '0')}`;
 }
 
 const Unlimited = () => (
@@ -179,7 +172,7 @@ function CreateGalleryModal({
 }: {
   close: () => void;
   pending: boolean;
-  submit: (input: { title: string; driveFolderUrl: string; pin: string; status: GalleryStatus; maxSelections: number; selectionDurationHours: number; tutorialBeforeDriveFileId?: string; tutorialAfterDriveFileId?: string; tutorialBefore2DriveFileId?: string; tutorialAfter2DriveFileId?: string; tutorialBefore3DriveFileId?: string; tutorialAfter3DriveFileId?: string }) => void;
+  submit: (input: { title: string; driveFolderUrl: string; pin: string; status: GalleryStatus; maxSelections: number; selectionDurationHours: number; qrisEnabled?: boolean; tutorialBeforeDriveFileId?: string; tutorialAfterDriveFileId?: string; tutorialBefore2DriveFileId?: string; tutorialAfter2DriveFileId?: string; tutorialBefore3DriveFileId?: string; tutorialAfter3DriveFileId?: string }) => void;
 }) {
   return (
     <Modal title="Create gallery" close={close} busy={pending} widthClass="max-w-lg" maxHeightClass="max-h-[min(90dvh,620px)]" footer={(
@@ -206,6 +199,7 @@ function CreateGalleryModal({
             status: 'draft',
             maxSelections: Math.min(500, Math.max(0, Number(data.get('limit')) || 0)),
             selectionDurationHours: Math.min(8760, Math.max(1, Number(data.get('duration')) || 72)),
+            qrisEnabled: data.get('qrisEnabled') === 'on',
             tutorialBeforeDriveFileId: String(data.get('tutorialBeforeDriveFileId') || '').trim(),
             tutorialAfterDriveFileId: String(data.get('tutorialAfterDriveFileId') || '').trim(),
             tutorialBefore2DriveFileId: String(data.get('tutorialBefore2DriveFileId') || '').trim(),
@@ -258,6 +252,13 @@ function CreateGalleryModal({
           </div>
           <span className="block text-[10px] leading-4 text-[var(--text-muted)]">Use 0 for unlimited selections.</span>
         </Field>
+        <label className="flex cursor-pointer items-start gap-3 rounded-lg border border-[var(--border)] bg-[var(--bg-elevated)]/35 p-3 transition-colors hover:border-[var(--accent)]/45">
+          <input name="qrisEnabled" type="checkbox" className="mt-0.5 h-4 w-4 rounded border-[var(--border)] accent-[var(--accent)]" />
+          <span className="min-w-0">
+            <span className="block text-xs font-semibold text-[var(--text-primary)]">Butuh QRIS self-service?</span>
+            <span className="mt-1 block text-[10px] leading-4 text-[var(--text-muted)]">Client bisa bayar tambahan foto langsung lewat QRIS. Kalau mati, tombol request tetap lewat WhatsApp manual.</span>
+          </span>
+        </label>
       </form>
     </Modal>
   );
@@ -292,7 +293,15 @@ function GalleryFilters({ filter, setFilter }: { filter: 'all' | GalleryStatus; 
   );
 }
 
-function DownloadMenu({ gallery }: { gallery: GallerySummary }) {
+function DownloadMenu({
+  gallery,
+  className,
+  direction = 'up',
+}: {
+  gallery: GallerySummary;
+  className?: string;
+  direction?: 'up' | 'down';
+}) {
   const [open, setOpen] = useState(false);
   const menuRef = useDismissableMenu(open, () => setOpen(false));
   const disabled = !gallery.selectionCount;
@@ -305,12 +314,21 @@ function DownloadMenu({ gallery }: { gallery: GallerySummary }) {
         aria-label={`Download ${gallery.title} selections`}
         aria-expanded={open}
         onClick={() => setOpen((value) => !value)}
-        className="inline-flex h-8 w-8 cursor-pointer items-center justify-center rounded-lg border border-[var(--border)] hover:border-[var(--accent)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)] disabled:cursor-not-allowed disabled:opacity-40"
+        className={
+          className ||
+          'inline-flex h-8 w-8 cursor-pointer items-center justify-center rounded-lg border border-[var(--border)] hover:border-[var(--accent)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)] disabled:cursor-not-allowed disabled:opacity-40'
+        }
       >
         <Download size={13} />
+        {className && <span>Download</span>}
       </button>
       {open && !disabled && (
-        <div className="absolute bottom-full right-0 mb-1 z-30 min-w-32 rounded-lg border border-[var(--border)] bg-[var(--bg-card)] p-1 text-left shadow-xl">
+        <div
+          className={clsx(
+            'absolute right-0 z-30 min-w-32 rounded-lg border border-[var(--border)] bg-[var(--bg-card)] p-1 text-left shadow-xl',
+            direction === 'down' ? 'top-full mt-1' : 'bottom-full mb-1'
+          )}
+        >
           <button
             type="button"
             onClick={() => {
@@ -705,13 +723,15 @@ function GalleryDetail({ gallery, close }: { gallery: GallerySummary; close: () 
   const [paymentStatus, setPaymentStatus] = useState<'unpaid' | 'paid'>(data.addonStatus === 'paid' ? 'paid' : 'unpaid');
   const [addonDraftLimit, setAddonDraftLimit] = useState(() => Number(data.additionalLimit || 0));
   const [addonUnitPrice, setAddonUnitPrice] = useState(() => Number(data.addon?.unitPrice ?? 10_000));
+  const [qrisEnabled, setQrisEnabled] = useState(() => Boolean(data.addon?.qrisEnabled));
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- Refresh the local add-on draft from newly fetched gallery data.
     setPaymentStatus(data.addonStatus === 'paid' ? 'paid' : 'unpaid');
     setAddonDraftLimit(Number(data.additionalLimit || 0));
     setAddonUnitPrice(Number(data.addon?.unitPrice ?? 10_000));
-  }, [data.additionalLimit, data.addon?.unitPrice, data.addonStatus]);
+    setQrisEnabled(Boolean(data.addon?.qrisEnabled));
+  }, [data.additionalLimit, data.addon?.qrisEnabled, data.addon?.unitPrice, data.addonStatus]);
 
   const addonPaid = paymentStatus === 'paid';
   const masterLimit = Number(data.maxSelections || 0);
@@ -720,7 +740,6 @@ function GalleryDetail({ gallery, close }: { gallery: GallerySummary; close: () 
   const discountRules = data.addon?.discountRules;
   const addonEstimatedTotal = calculateAddonQuote(addonDraftLimit, addonUnitPrice, discountRules).total;
   const submittedCount = Number(data.selectionCount || 0);
-  const selectionRows = detail.data?.selections || [];
   const link = publicUrl(data);
   const driveUrl = data.driveFolderId.startsWith('http') ? data.driveFolderId : `https://drive.google.com/drive/folders/${data.driveFolderId}`;
 
@@ -773,6 +792,11 @@ function GalleryDetail({ gallery, close }: { gallery: GallerySummary; close: () 
               <Clipboard size={13} />
               Copy link
             </button>
+            <DownloadMenu
+              gallery={data}
+              direction="down"
+              className="inline-flex h-9 cursor-pointer items-center gap-1.5 rounded-lg border border-[var(--border)] px-3 text-[10px] font-bold hover:border-[var(--accent)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)] disabled:cursor-not-allowed disabled:opacity-40"
+            />
           </div>
         </div>
 
@@ -904,7 +928,7 @@ function GalleryDetail({ gallery, close }: { gallery: GallerySummary; close: () 
                     return;
                   }
                   if (!window.confirm('Save Orbit add-on changes? The add-on quota becomes active for the client only when payment is marked Paid.')) return;
-                  update.mutate({ id: data.id, additionalSelectionLimit: nextAddonLimit, editAddonPrice: nextAddonPrice, editAddonPricingMode: 'per_photo', editAddonStatus: nextAddonStatus });
+                  update.mutate({ id: data.id, additionalSelectionLimit: nextAddonLimit, editAddonPrice: nextAddonPrice, editAddonPricingMode: 'per_photo', editAddonStatus: nextAddonStatus, qrisEnabled });
                 }}
                 className="mt-4"
               >
@@ -915,6 +939,13 @@ function GalleryDetail({ gallery, close }: { gallery: GallerySummary; close: () 
                   </span>
                 </div>
                 <div className="grid gap-3 sm:grid-cols-2">
+                  <label className="flex cursor-pointer items-start gap-3 rounded-lg border border-[var(--border)] bg-[var(--bg-elevated)]/35 p-3 transition-colors hover:border-[var(--accent)]/45 sm:col-span-2">
+                    <input type="checkbox" checked={qrisEnabled} onChange={(event) => setQrisEnabled(event.currentTarget.checked)} className="mt-0.5 h-4 w-4 rounded border-[var(--border)] accent-[var(--accent)]" />
+                    <span className="min-w-0">
+                      <span className="block text-xs font-semibold text-[var(--text-primary)]">Butuh QRIS self-service?</span>
+                      <span className="mt-1 block text-[10px] leading-4 text-[var(--text-muted)]">Aktifkan tombol bayar instan di modal request tambahan foto client.</span>
+                    </span>
+                  </label>
                   <Field label="Add-on edited photos">
                     <input name="addon-limit" type="number" min="0" max="500" value={addonDraftLimit} onChange={(event) => setAddonDraftLimit(Math.min(500, Math.max(0, Number(event.currentTarget.value) || 0)))} className={inputClass} />
                   </Field>
@@ -988,43 +1019,6 @@ function GalleryDetail({ gallery, close }: { gallery: GallerySummary; close: () 
             )}
           </div>
         </div>
-
-        <section className="border border-[var(--border)]">
-          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--border)] px-4 py-3">
-            <div>
-              <p className="label-xs text-[var(--accent)]">Selection mapping</p>
-              <p className="mt-1 text-xs text-[var(--text-muted)]">Client labels are paired with the original Google Drive filenames.</p>
-            </div>
-            <span className="text-[10px] font-bold uppercase tracking-[0.12em] text-[var(--text-muted)]">{selectionRows.length} selected</span>
-          </div>
-
-          {selectionRows.length ? (
-            <div className="overflow-x-auto">
-              <table className="w-full min-w-[760px] text-left text-xs">
-                <thead className="bg-[var(--bg-elevated)] text-[10px] uppercase tracking-[0.12em] text-[var(--text-muted)]">
-                  <tr>
-                    <th className="px-4 py-2.5">Client label</th>
-                    <th className="px-4 py-2.5">Google Drive filename</th>
-                    <th className="px-4 py-2.5">Drive file ID</th>
-                    <th className="px-4 py-2.5">Submitted</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-[var(--border)]">
-                  {selectionRows.map((selection, index) => (
-                    <tr key={selection.selectedDriveFileId} className="text-[var(--text-secondary)]">
-                      <td className="px-4 py-3 font-semibold text-[var(--text-primary)]">{selectionClientLabel(selection, data.title, index)}</td>
-                      <td className="max-w-[220px] truncate px-4 py-3" title={selection.selectedFilename}>{selection.selectedFilename}</td>
-                      <td className="max-w-[220px] truncate px-4 py-3 font-mono text-[10px]" title={selection.selectedDriveFileId}>{selection.selectedDriveFileId}</td>
-                      <td className="px-4 py-3 text-[var(--text-muted)]">{formatDateValue(selection.submittedAt, dateFormat)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          ) : (
-            <div className="px-4 py-8 text-center text-xs text-[var(--text-muted)]">No submitted selections yet.</div>
-          )}
-        </section>
       </div>
     </Modal>
   );

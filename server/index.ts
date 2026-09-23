@@ -18,6 +18,7 @@ import { feedbackStorageDriver } from "./db/feedback";
 import { galleryStorageDriver } from "./db/galleries";
 import { rateLimitStorageDriver } from "./db/rate-limit";
 import { faceIndexRouter } from "./routes/face-index";
+import paymentsRouter from "./routes/payments";
 
 type AuthUser = {
     sub: number;
@@ -189,6 +190,7 @@ app.route("/api/config", configRoutes);
 app.route("/api/analytics", analyticsRoutes);
 app.route("/api/sequences", sequencesRoutes);
 app.route("/api/galleries", adminGalleriesRouter);
+app.route("/api/payments", paymentsRouter);
 app.use("/api/feedback", async (c, next) => {
     const user = c.get("user");
     if (!await hasFeaturePermission(user, "view_feedback_inbox")) {
