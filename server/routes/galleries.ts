@@ -15,7 +15,7 @@ import {
 import { getGallerySettings, invalidateGallerySettingsCache } from "../lib/gallery-settings-cache";
 import { resetGalleryPinAttempts } from "../middleware/rate-limit";
 import { hasFeaturePermission } from "../permissions";
-import { handlePublicFaceSearch, handlePublicFaceSearchStatus, prepareGalleryFaceIndex } from "./face-index";
+import { faceSearchBodyLimit, handlePublicFaceSearch, handlePublicFaceSearchStatus, prepareGalleryFaceIndex } from "./face-index";
 import { getFaceSourceVersion } from "../lib/face-source";
 
 type Env = {
@@ -27,6 +27,7 @@ type Env = {
 
 const adminGalleriesRouter = new Hono<Env>();
 const publicGalleriesRouter = new Hono<Env>();
+publicGalleriesRouter.use("/:id/face-search", faceSearchBodyLimit);
 
 const GALLERY_TOKEN_TTL_SECONDS = 24 * 60 * 60;
 const PHOTO_TOKEN_TTL_SECONDS = 60 * 60;

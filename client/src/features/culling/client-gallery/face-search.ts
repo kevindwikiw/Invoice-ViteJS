@@ -1,6 +1,7 @@
 import { apiFetch } from '../../../lib/api';
 import { parseError } from '../culling.public';
 import type { GalleryPhoto } from '../culling.types';
+import { prepareSelfie } from './prepare-selfie';
 
 export type FaceSearchSensitivity = 'strict' | 'balanced' | 'wide';
 
@@ -61,7 +62,7 @@ export async function runFaceSearch(input: FaceSearchInput): Promise<FaceSearchR
     if (testHook) return testHook(input);
 
     const body = new FormData();
-    body.append('selfie', input.selfieFile, input.selfieFile.name || 'selfie.jpg');
+    body.append('selfie', await prepareSelfie(input.selfieFile, input.signal), 'selfie.jpg');
     body.append('sensitivity', input.sensitivity);
     const response = await apiFetch(`/public/galleries/${encodeURIComponent(input.galleryId)}/face-search`, {
         method: 'POST',

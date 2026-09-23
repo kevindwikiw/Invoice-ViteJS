@@ -482,6 +482,7 @@ test('filters immediately from a selfie and keeps selection submit working', asy
     let statusPolls = 0;
     let searchRequests = 0;
     let browserModelRequests = 0;
+    const uploadedSelfies: Array<{ width: number; height: number; type: string; size: number; top: number[] }> = [];
     await page.route(`**/api/public/galleries/${id}/face-search/status`, (route) => {
         if (!indexingStarted) return route.fulfill({ json: { available: true, status: 'not_indexed', processed: 0, total: 0 } });
         statusPolls += 1;
@@ -491,7 +492,23 @@ test('filters immediately from a selfie and keeps selection submit working', asy
                 : { available: true, status: 'ready', processed: 101, total: 101 },
         });
     });
-    await page.route(`**/api/public/galleries/${id}/face-search`, (route) => {
+    await page.route(`**/api/public/galleries/${id}/face-search`, async (route) => {
+        const body = await new Response(new Uint8Array(route.request().postDataBuffer()!), {
+            headers: { 'content-type': route.request().headers()['content-type'] },
+        }).formData();
+        const selfie = body.get('selfie') as File;
+        const pixels = await page.evaluate(async (bytes) => {
+            const bitmap = await createImageBitmap(new Blob([new Uint8Array(bytes)], { type: 'image/jpeg' }));
+            const canvas = document.createElement('canvas');
+            canvas.width = bitmap.width;
+            canvas.height = bitmap.height;
+            const context = canvas.getContext('2d')!;
+            context.drawImage(bitmap, 0, 0);
+            const result = { width: bitmap.width, height: bitmap.height, top: Array.from(context.getImageData(20, 20, 1, 1).data) };
+            bitmap.close();
+            return result;
+        }, Array.from(new Uint8Array(await selfie.arrayBuffer())));
+        uploadedSelfies.push({ ...pixels, type: selfie.type, size: selfie.size });
         searchRequests += 1;
         if (searchRequests === 1) {
             indexingStarted = true;
@@ -538,14 +555,33 @@ test('filters immediately from a selfie and keeps selection submit working', asy
     await expect(dialog.getByText('Selecting a selfie starts face matching.', { exact: false })).toBeVisible();
     await page.screenshot({ path: 'test-results/selfie-filter-mobile.png', animations: 'disabled' });
 
+    const jpeg = Buffer.from(await page.evaluate(() => {
+        const canvas = document.createElement('canvas');
+        canvas.width = 2400;
+        canvas.height = 1200;
+        const context = canvas.getContext('2d')!;
+        context.fillStyle = 'red';
+        context.fillRect(0, 0, 1200, 1200);
+        context.fillStyle = 'blue';
+        context.fillRect(1200, 0, 1200, 1200);
+        return canvas.toDataURL('image/jpeg', 1).split(',')[1];
+    }), 'base64');
+    // EXIF orientation 6: rotate the encoded landscape image clockwise to portrait.
+    const exif = Buffer.from('ffe1002245786966000049492a0008000000010012010300010000000600000000000000', 'hex');
     await dialog.locator('input[aria-label="Choose selfie"]').setInputFiles({
-        name: 'selfie.png',
-        mimeType: 'image/png',
-        buffer: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aM1sAAAAASUVORK5CYII=', 'base64'),
+        name: 'iphone-selfie.jpg', mimeType: 'image/jpeg',
+        buffer: Buffer.concat([jpeg.subarray(0, 2), exif, jpeg.subarray(2)]),
     });
     await expect(dialog.getByText('Preparing face search 55 / 101')).toBeVisible();
     await expect(dialog.getByText('2 photos found')).toBeVisible();
     expect(searchRequests).toBe(2);
+    expect(uploadedSelfies).toHaveLength(2);
+    for (const uploaded of uploadedSelfies) {
+        expect(uploaded).toMatchObject({ width: 640, height: 1280, type: 'image/jpeg' });
+        expect(uploaded.size).toBeLessThan(4 * 1024 * 1024);
+        expect(uploaded.top[0]).toBeGreaterThan(200);
+        expect(uploaded.top[2]).toBeLessThan(30);
+    }
     expect(browserModelRequests).toBe(0);
     await page.setViewportSize({ width: 1280, height: 800 });
     await page.screenshot({ path: 'test-results/selfie-filter-results-desktop.png', animations: 'disabled' });

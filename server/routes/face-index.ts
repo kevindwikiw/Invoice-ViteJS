@@ -1,6 +1,7 @@
 import { Hono, type Context } from "hono";
+import { bodyLimit } from "hono/body-limit";
 import { galleryAll, galleryBatch, galleryInsertReturningId, galleryOne, galleryRun } from "../db/galleries";
-import { fetchDriveFile } from "../lib/google-drive";
+import { fetchDriveFile, getDrivePhotoMetadata, getReadonlyDriveToken } from "../lib/google-drive";
 import { FACE_MODEL_VERSION, facePhotoVersion, faceSourceVersion } from "../lib/face-model";
 import { FaceSourceChanged, getFaceSourceVersion } from "../lib/face-source";
 
@@ -57,6 +58,23 @@ const STALE_JOB_MS = 2 * 60 * 1000;
 const pendingJobs = new Map<number, Promise<FaceIndexJob | null>>();
 
 export const faceIndexRouter = new Hono<Env>();
+const MAX_SELFIE_BYTES = 4 * 1024 * 1024;
+export const faceSearchBodyLimit = bodyLimit({
+    maxSize: MAX_SELFIE_BYTES + 64 * 1024,
+    onError: (c) => c.json({ error: "Selfie image is too large. Please choose a smaller image.", code: "selfie_too_large" }, 413),
+});
+faceIndexRouter.use("/search", faceSearchBodyLimit);
+
+faceIndexRouter.post("/drive-token", async (c) => {
+    c.header("Cache-Control", "no-store");
+    if (!internalAuthorized(c)) return jsonError(c, "Unauthorized.", 401);
+    try {
+        return c.json(await getReadonlyDriveToken(c.req.query("refresh") === "1"));
+    } catch {
+        console.warn("[face-index] code=drive_token_unavailable");
+        return jsonError(c, "Drive authorization is temporarily unavailable.", 503, "drive_token_unavailable");
+    }
+});
 
 function internalAuthorized(c: Context<Env>): boolean {
     return Boolean(INTERNAL_TOKEN && c.req.header("x-face-worker-token") === INTERNAL_TOKEN);
@@ -79,7 +97,7 @@ async function workerReadiness(): Promise<{ ready: boolean; code?: string }> {
         });
         const payload = await response.json().catch(() => null) as { code?: string; model?: string; capabilities?: string[] } | null;
         if (response.ok) return payload?.model === MODEL_VERSION
-            ? payload.capabilities?.includes("embedding-cache-v1") ? { ready: true } : { ready: false, code: "worker_update_required" }
+            ? ["embedding-cache-v1", "drive-direct-v1"].every((capability) => payload.capabilities?.includes(capability)) ? { ready: true } : { ready: false, code: "worker_update_required" }
             : { ready: false, code: "model_version_mismatch" };
         return { ready: false, code: payload?.code || "worker_not_ready" };
     } catch {
@@ -117,6 +135,8 @@ async function dispatchJob(jobId: number, galleryId: number, sourceVersion: stri
         await galleryRun("UPDATE face_index_jobs SET status = 'failed', error = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?", ["Face worker is not configured.", jobId]);
         return;
     }
+    const readiness = await workerReadiness();
+    if (!readiness.ready) throw new Error(readiness.code || "worker_not_ready");
 
     const origin = process.env.FACE_WORKER_CALLBACK_ORIGIN?.trim() || process.env.PUBLIC_API_ORIGIN?.trim() || "";
     if (!origin) {
@@ -149,8 +169,10 @@ async function dispatchJob(jobId: number, galleryId: number, sourceVersion: stri
             galleryId,
             modelVersion: MODEL_VERSION,
             sourceVersion,
+            photoSource: "drive",
             photos: photos.map((photo) => ({
                 driveFileId: photo.driveFileId,
+                thumbnailUrl: photo.thumbnailUrl || null,
                 filename: photo.filename,
                 mimeType: photo.mimeType,
                 displayOrder: photo.displayOrder,
@@ -443,10 +465,10 @@ faceIndexRouter.get("/indexes/:jobId", async (c) => {
 });
 
 // The worker uses this endpoint when no local rclone-mounted file is
-// available. It returns a thumbnail only and is never exposed without the
-// worker token.
+// available during rolling upgrades. Disabled by default; remove after old jobs drain.
 faceIndexRouter.get("/assets/galleries/:galleryId/photos/:fileId", async (c) => {
     if (!internalAuthorized(c)) return jsonError(c, "Unauthorized.", 401);
+    if (process.env.FACE_WORKER_LEGACY_ASSET_PROXY !== "1") return c.json({ error: "Legacy photo proxy disabled.", code: "legacy_proxy_disabled" }, 410);
     const galleryId = Number(c.req.param("galleryId"));
     const fileId = c.req.param("fileId");
     const photo = await galleryOne<GalleryPhoto>(`
@@ -455,7 +477,37 @@ faceIndexRouter.get("/assets/galleries/:galleryId/photos/:fileId", async (c) => 
         FROM gallery_photos WHERE gallery_id = ? AND drive_file_id = ?
     `, [galleryId, fileId]);
     if (!photo) return jsonError(c, "Photo not found.", 404);
-    const response = await fetchDriveFile(photo.driveFileId, photo.thumbnailUrl || undefined, 1280, true);
+    let response: Response;
+    try {
+        response = await fetchDriveFile(photo.driveFileId, photo.thumbnailUrl || undefined, 1280, true);
+    } catch {
+        let refreshedThumbnail: string | undefined;
+        try {
+            const refreshed = await getDrivePhotoMetadata(photo.driveFileId);
+            refreshedThumbnail = refreshed.thumbnailLink || undefined;
+            await galleryRun(`
+                UPDATE gallery_photos SET thumbnail_url = ?, web_view_url = ?
+                WHERE gallery_id = ? AND drive_file_id = ?
+            `, [refreshed.thumbnailLink || null, refreshed.webViewLink || null, galleryId, photo.driveFileId]);
+        } catch {
+            refreshedThumbnail = undefined;
+        }
+
+        try {
+            response = await fetchDriveFile(photo.driveFileId, refreshedThumbnail, 1280, true);
+        } catch (error) {
+            try {
+                response = await fetchDriveFile(photo.driveFileId);
+            } catch {
+                console.error("Face index asset fetch failed", {
+                    galleryId,
+                    fileId: photo.driveFileId,
+                    code: error instanceof Error ? "drive_fetch_failed" : "drive_fetch_unknown",
+                });
+                return jsonError(c, "Photo source is temporarily unavailable.", 502, "photo_source_unavailable");
+            }
+        }
+    }
     return new Response(response.body, { headers: { "Content-Type": response.headers.get("Content-Type") || photo.mimeType || "image/jpeg", "Cache-Control": "private, max-age=300" } });
 });
 
@@ -501,7 +553,14 @@ export async function handlePublicFaceSearch(
     const readiness = await workerReadiness();
     if (!readiness.ready) return jsonError(c, "Face worker is not ready.", 503, readiness.code);
     const contentLength = Number(c.req.header("content-length") || 0);
-    if (contentLength > 12 * 1024 * 1024) return jsonError(c, "Selfie image is too large.", 413);
+    if (contentLength > MAX_SELFIE_BYTES + 64 * 1024) return jsonError(c, "Selfie image is too large.", 413, "selfie_too_large");
+    let form: FormData;
+    try { form = await c.req.formData(); }
+    catch { return jsonError(c, "Invalid selfie form.", 400, "invalid_selfie"); }
+    const selfie = form.get("selfie");
+    const sensitivity = String(form.get("sensitivity") || "balanced");
+    if (!(selfie instanceof File)) return jsonError(c, "Selfie image is required.");
+    if (selfie.size > MAX_SELFIE_BYTES) return jsonError(c, "Selfie image is too large.", 413, "selfie_too_large");
     let job: FaceIndexJob | null;
     try {
         job = await currentJob(galleryId);
@@ -513,10 +572,6 @@ export async function handlePublicFaceSearch(
         console.error(`[face-search] Unable to prepare index for gallery ${galleryId}:`, error);
         return jsonError(c, "Face search is temporarily unavailable.", 503);
     }
-    const form = await c.req.formData();
-    const selfie = form.get("selfie");
-    const sensitivity = String(form.get("sensitivity") || "balanced");
-    if (!(selfie instanceof File)) return jsonError(c, "Selfie image is required.");
     try {
         const response = await workerSearch(job, selfie, sensitivity);
         if (!response.ok) {
@@ -542,11 +597,14 @@ export async function handlePublicFaceSearch(
 faceIndexRouter.post("/search", async (c) => {
     if (!c.get("user")) return jsonError(c, "Not authenticated.", 401);
     if (!workerConfigured()) return jsonError(c, "Face worker is not configured.", 503);
-    const form = await c.req.formData();
+    let form: FormData;
+    try { form = await c.req.formData(); }
+    catch { return jsonError(c, "Invalid selfie form.", 400, "invalid_selfie"); }
     const galleryId = Number(form.get("galleryId"));
     const selfie = form.get("selfie");
     const sensitivity = String(form.get("sensitivity") || "balanced");
     if (!Number.isInteger(galleryId) || !(selfie instanceof File)) return jsonError(c, "galleryId and selfie are required.");
+    if (selfie.size > MAX_SELFIE_BYTES) return jsonError(c, "Selfie image is too large.", 413, "selfie_too_large");
     try {
         const job = await currentJob(galleryId);
         if (!job || job.status !== "completed") return jsonError(c, "Index is not ready.", 409, "index_changed");

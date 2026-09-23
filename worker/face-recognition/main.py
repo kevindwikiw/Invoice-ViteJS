@@ -7,7 +7,7 @@ import os
 import secrets
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import quote, urlparse
 
 import httpx
@@ -22,13 +22,20 @@ from pydantic import BaseModel, Field
 
 from engine import FaceEngine, MODEL_VERSION, sensitivity_threshold
 from embedding_cache import CacheCapacityError, EmbeddingCache, IndexKey, PreparedIndex, prepare_index
+from drive_source import DriveSource
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
 logger = logging.getLogger("orbit-face-worker")
+# HTTP request logs may contain signed thumbnail URLs.
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 WORKER_TOKEN = os.getenv("FACE_WORKER_TOKEN", "").strip()
 CALLBACK_ORIGIN = os.getenv("FACE_WORKER_CALLBACK_ORIGIN", "").strip().rstrip("/")
 CALLBACK_TOKEN = os.getenv("FACE_WORKER_CALLBACK_TOKEN", "").strip()
+PHOTO_SOURCE = os.getenv("FACE_WORKER_PHOTO_SOURCE", "callback").strip()
+if PHOTO_SOURCE not in {"drive", "callback"}:
+    raise RuntimeError("FACE_WORKER_PHOTO_SOURCE must be drive or callback")
 MEDIA_ROOT = Path(os.getenv("FACE_WORKER_MEDIA_ROOT", "").strip()).resolve() if os.getenv("FACE_WORKER_MEDIA_ROOT", "").strip() else None
 MODEL_NAME = MODEL_VERSION
 MODEL_DIR = Path(os.getenv("FACE_WORKER_MODEL_DIR", "").strip() or Path(__file__).parent / "models")
@@ -60,10 +67,12 @@ model_error_code: str | None = None
 job_tasks: dict[int, asyncio.Task[None]] = {}
 job_semaphore = asyncio.Semaphore(MAX_CONCURRENT)
 http_client: httpx.AsyncClient | None = None
+drive_source: DriveSource | None = None
 
 
 class PhotoInput(BaseModel):
     driveFileId: str
+    thumbnailUrl: str | None = None
     filename: str = ""
     mimeType: str = "image/jpeg"
     displayOrder: int = 0
@@ -76,6 +85,7 @@ class IndexJobInput(BaseModel):
     galleryId: int
     modelVersion: str
     sourceVersion: str = ""
+    photoSource: Literal["drive", "callback"] | None = None
     photos: list[PhotoInput] = Field(default_factory=list)
 
 
@@ -156,8 +166,9 @@ async def initialize_model() -> None:
 
 @app.on_event("startup")
 async def start_model_initialization() -> None:
-    global model_task, http_client, cache_cleanup_task
+    global model_task, http_client, cache_cleanup_task, drive_source
     http_client = httpx.AsyncClient(timeout=HTTP_TIMEOUT, limits=httpx.Limits(max_connections=8, max_keepalive_connections=8))
+    drive_source = DriveSource(http_client, CALLBACK_ORIGIN, CALLBACK_TOKEN, MAX_IMAGE_BYTES)
     model_task = asyncio.create_task(initialize_model())
     cache_cleanup_task = asyncio.create_task(expire_cache())
 
@@ -232,6 +243,11 @@ def local_candidates(gallery_id: int, photo: PhotoInput) -> list[Path]:
 
 
 async def fetch_photo(job: IndexJobInput, photo: PhotoInput) -> bytes:
+    if (job.photoSource or PHOTO_SOURCE) == "drive":
+        callback_config()
+        if drive_source is None:
+            raise RuntimeError("drive_source_not_started")
+        return await drive_source.fetch(photo.driveFileId, photo.thumbnailUrl, job.jobId)
     for candidate in local_candidates(job.galleryId, photo):
         try:
             resolved = candidate.resolve()
@@ -369,13 +385,15 @@ async def readyz(authorization: str | None = Header(default=None)) -> JSONRespon
             "state": model_state,
             "code": model_error_code or "model_loading",
         }, status_code=503)
-    return JSONResponse({"ok": True, "service": "orbit-face-worker", "state": "ready", "model": MODEL_NAME, "capabilities": ["embedding-cache-v1"]})
+    return JSONResponse({"ok": True, "service": "orbit-face-worker", "state": "ready", "model": MODEL_NAME, "capabilities": ["embedding-cache-v1", "drive-direct-v1"]})
 
 
 @app.post("/v1/index/jobs", status_code=202)
 async def create_index_job(payload: IndexJobInput, authorization: str | None = Header(default=None)) -> dict[str, Any]:
     require_worker_token(authorization)
     ready_model()
+    if PHOTO_SOURCE == "drive" and payload.photoSource == "callback":
+        raise HTTPException(status_code=409, detail="callback_source_disabled")
     if payload.modelVersion != MODEL_VERSION:
         raise HTTPException(status_code=409, detail="model_version_mismatch")
     if payload.jobId <= 0 or payload.galleryId <= 0:

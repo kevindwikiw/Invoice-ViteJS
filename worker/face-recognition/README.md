@@ -333,6 +333,87 @@ unit tests also passed. Production model concurrency remains unchanged.
 
 ## Ubuntu deployment
 
+### Direct Drive indexing (drive-direct-v1)
+
+New API jobs specify `photoSource: "drive"`. The worker downloads 1280 px
+thumbnails directly from Google, refreshes expired thumbnail links using Drive
+metadata, then falls back to the original directly from Drive (15 MiB limit).
+No image is proxied through Fly for these jobs, including on failure. A failed
+photo fails the job after the existing retry; the previous published index stays
+intact. Photos with unchanged cached faces do not download again.
+
+The worker requests `POST /api/internal/face-index/drive-token` using
+`x-face-worker-token` (`FACE_WORKER_CALLBACK_TOKEN` on Ubuntu,
+`FACE_WORKER_INTERNAL_TOKEN` on Fly). The response is
+`{ accessToken, expiresAt }`, where `expiresAt` is Unix time in **milliseconds**,
+and has `Cache-Control: no-store`. The backend issues a separate
+`https://www.googleapis.com/auth/drive.readonly` token; its normal gallery/upload
+token cache is separate. Tokens are cached only in worker RAM and refreshed five
+minutes before expiry, with concurrent refreshes coalesced. A Google 401 triggers
+one forced refresh via `?refresh=1`. Restart discards the token.
+
+Read-only scope permits reading files accessible to the service account, not
+just one gallery. The authenticated worker is trusted with that scope until
+expiry. The Google private key remains on Fly. Never paste the token endpoint
+response into logs, screenshots or support messages. Google documents
+[service-account authorization](https://developers.google.com/identity/protocols/oauth2/service-account)
+and the short lifetime of
+[thumbnailLink](https://developers.google.com/workspace/drive/api/reference/rest/v3/files).
+
+Downloads validate Google HTTPS hosts and redirects before sending authorization,
+stream with the configured byte limit, and log only job/file ID, source, bytes,
+duration and safe failure codes. HTTP client URL logging is disabled to avoid
+recording signed thumbnails. No Google SDK, private key, rclone mount or new
+Python dependency is needed for direct mode.
+
+Rolling deployment order:
+
+1. Update the worker code, including `drive_source.py`. Keep
+   `FACE_WORKER_PHOTO_SOURCE=callback` (the code default) while the old API is
+   running. Drain active jobs before restarting the service. Old payloads still
+   work with the old API; explicit `photoSource: "drive"` always uses Drive.
+2. Verify authenticated `/readyz` advertises both `embedding-cache-v1` and
+   `drive-direct-v1`. This checks model readiness/capability, not Drive access.
+3. Drain old jobs, then deploy the API and client together. The new API requires
+   `drive-direct-v1`, includes `thumbnailUrl` in each photo, and issues direct jobs.
+   Keep `FACE_WORKER_LEGACY_ASSET_PROXY=0` on Fly (also the default).
+4. Set `FACE_WORKER_PHOTO_SOURCE=drive` in `/etc/orbit-face-worker.env` and restart
+   the worker when idle. This also maps old payloads to direct mode and rejects
+   explicit callback jobs. No Google credentials are needed on Ubuntu.
+5. Retry an unindexed/failed evaluation gallery. Check journal output for
+   `source=drive`, `kind=thumbnail` / `refreshed_thumbnail` / `original`, byte
+   counts, and a completed callback. Fly must receive no `/assets/...` requests.
+   Warm searches should reuse the existing embedding cache.
+6. After production verification and the rollback window, remove the legacy
+   `/assets/galleries/:galleryId/photos/:fileId` route and its environment switch.
+   It is retained but returns 410 by default during this staged rollout. Only
+   explicitly setting `FACE_WORKER_LEGACY_ASSET_PROXY=1` permits old workers to
+   proxy photos and incur Fly egress; direct jobs never fall back to it.
+
+Selfies still pass through Fly. The browser applies EXIF orientation and sends a
+JPEG at quality 0.86 with maximum side 1280 px. The API limits the selfie file to
+4 MiB and multipart overhead to 64 KiB. Unsupported browser image formats show
+an error instead of silently uploading the original. Original and resized
+selfies remain in memory only during the request/modal lifecycle.
+
+Before considering deployment verified, compare a 20-50 photo evaluation gallery
+and then the full gallery against the previous index (file IDs and face counts).
+Also compare matching/non-matching real selfies before/after JPEG conversion;
+unit tests do not establish biometric accuracy or production bandwidth savings.
+This change does not alter photo delivery for normal gallery browsing, so that
+existing traffic can still pass through Fly.
+
+Local validation (2026-09-23): 44 worker tests, 32 backend tests and 18 Chromium
+gallery/admin smoke tests passed, as did client/server typechecks and the client
+build. The browser smoke test verifies EXIF orientation 6 becomes an upright
+640 x 1280 JPEG on the actual multipart request, including retry and submit.
+One supplied WhatsApp portrait was also evaluated with the actual browser
+conversion and OpenCV: 510,832 -> 128,602 bytes, one face detected in both,
+cosine distance 0.02418 between original/compressed embeddings (Balanced match).
+No selfie or embedding was written by that check. This single-image result is
+not verification of unchanged matches across a real gallery. Ubuntu deployment,
+20-50/full-gallery comparisons and production traffic verification remain pending.
+
 Copy this directory to the VM (exclude Windows venvs and local `.env`). Run
 `deploy/setup-ubuntu.sh`, then create `/etc/orbit-face-worker.env` with restrictive
 permissions. The script installs Python/venv/rclone, binary wheels, verified

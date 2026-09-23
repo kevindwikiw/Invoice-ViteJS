@@ -51,7 +51,7 @@ for (const legacy of [true, false]) {
             process.env.FACE_WORKER_URL = 'http://worker.test';
             process.env.FACE_WORKER_TOKEN = 'test';
             const { FACE_MODEL_VERSION } = await import('./lib/face-model');
-            globalThis.fetch = async () => Response.json({ model: FACE_MODEL_VERSION, capabilities: ['embedding-cache-v1'] });
+            globalThis.fetch = async () => Response.json({ model: FACE_MODEL_VERSION, capabilities: ['embedding-cache-v1', 'drive-direct-v1'] });
             const { publicFaceSearchStatus } = await import('./routes/face-index');
             const status = await publicFaceSearchStatus(1);
             assert.equal(status.available, true);

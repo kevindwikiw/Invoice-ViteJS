@@ -23,7 +23,9 @@ const DRIVE_TOKEN_URL = "https://oauth2.googleapis.com/token";
 const DRIVE_API_BASE = "https://www.googleapis.com/drive/v3";
 const DRIVE_UPLOAD_BASE = "https://www.googleapis.com/upload/drive/v3";
 
-let tokenCache: DriveToken | null = null;
+const READONLY_SCOPE = "https://www.googleapis.com/auth/drive.readonly";
+const tokenCache = new Map<string, DriveToken>();
+const pendingTokens = new Map<string, Promise<DriveToken>>();
 
 function base64Url(input: string | ArrayBuffer): string {
     const buffer = typeof input === "string" ? Buffer.from(input) : Buffer.from(input);
@@ -66,13 +68,13 @@ async function importPrivateKey(privateKey: string): Promise<CryptoKey> {
     );
 }
 
-async function createServiceAccountAssertion(): Promise<string> {
+async function createServiceAccountAssertion(scope: string): Promise<string> {
     const { clientEmail, privateKey } = serviceAccountConfig();
     const now = Math.floor(Date.now() / 1000);
     const header = base64Url(JSON.stringify({ alg: "RS256", typ: "JWT" }));
     const claim = base64Url(JSON.stringify({
         iss: clientEmail,
-        scope: DRIVE_SCOPE,
+        scope,
         aud: DRIVE_TOKEN_URL,
         exp: now + 3600,
         iat: now,
@@ -84,11 +86,27 @@ async function createServiceAccountAssertion(): Promise<string> {
 }
 
 export async function getDriveAccessToken(): Promise<string> {
-    if (tokenCache && tokenCache.expiresAt > Date.now() + 60_000) {
-        return tokenCache.accessToken;
-    }
+    return (await scopedDriveToken(DRIVE_SCOPE)).accessToken;
+}
 
-    const assertion = await createServiceAccountAssertion();
+export async function getReadonlyDriveToken(forceRefresh = false): Promise<DriveToken> {
+    if (forceRefresh) tokenCache.delete(READONLY_SCOPE);
+    return scopedDriveToken(READONLY_SCOPE);
+}
+
+async function scopedDriveToken(scope: string): Promise<DriveToken> {
+    const cached = tokenCache.get(scope);
+    if (cached && cached.expiresAt > Date.now() + 300_000) return cached;
+    const pending = pendingTokens.get(scope);
+    if (pending) return pending;
+    const operation = issueDriveToken(scope);
+    pendingTokens.set(scope, operation);
+    try { return await operation; }
+    finally { pendingTokens.delete(scope); }
+}
+
+async function issueDriveToken(scope: string): Promise<DriveToken> {
+    const assertion = await createServiceAccountAssertion(scope);
     const response = await fetch(DRIVE_TOKEN_URL, {
         method: "POST",
         headers: { "Content-Type": "application/x-www-form-urlencoded" },
@@ -96,6 +114,7 @@ export async function getDriveAccessToken(): Promise<string> {
             grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer",
             assertion,
         }),
+        signal: AbortSignal.timeout(10_000),
     });
 
     const data = await response.json().catch(() => ({})) as { access_token?: string; expires_in?: number; error_description?: string; error?: string };
@@ -103,11 +122,12 @@ export async function getDriveAccessToken(): Promise<string> {
         throw new Error(data.error_description || data.error || "Unable to authenticate with Google Drive.");
     }
 
-    tokenCache = {
+    const token = {
         accessToken: data.access_token,
         expiresAt: Date.now() + Number(data.expires_in || 3600) * 1000,
     };
-    return tokenCache.accessToken;
+    tokenCache.set(scope, token);
+    return token;
 }
 
 function driveSearchQuery(folderId: string): string {

@@ -13,14 +13,84 @@ process.env.FACE_WORKER_CALLBACK_ORIGIN = "http://api.test";
 const { galleryRun, galleryAll, ensureGalleryStorage } = await import("../db/galleries");
 const { sqlite } = await import("../db/runtime");
 const { getFaceSourceVersion, FaceSourceChanged } = await import("../lib/face-source");
-const { createOrReuseJob, currentJob, faceIndexRouter, MODEL_VERSION, publicFaceSearchStatus, handlePublicFaceSearch, prepareGalleryFaceIndex } = await import("./face-index");
+const { createOrReuseJob, currentJob, faceIndexRouter, MODEL_VERSION, publicFaceSearchStatus, handlePublicFaceSearch, prepareGalleryFaceIndex, faceSearchBodyLimit } = await import("./face-index");
+const capabilities = ["embedding-cache-v1", "drive-direct-v1"];
+
+test("direct dispatch requires capability and includes source and thumbnail", async () => {
+    await galleryRun("UPDATE gallery_photos SET thumbnail_url = 'https://lh3.googleusercontent.com/test=s220'");
+    await createOrReuseJob(1);
+    expect(dispatched[0]).toMatchObject({ photoSource: "drive", photos: [{ driveFileId: "a", thumbnailUrl: "https://lh3.googleusercontent.com/test=s220" }] });
+    fetchMock.mockImplementation(async () => Response.json({ model: MODEL_VERSION, capabilities: ["embedding-cache-v1"] }));
+    expect(await publicFaceSearchStatus(1)).toMatchObject({ available: false, code: "worker_update_required" });
+});
+
+test("Drive token auth, scope isolation, expiry and refresh never expose issuer failures", async () => {
+    const headers = { "x-face-worker-token": "test-internal" };
+    const denied = await faceIndexRouter.request("/drive-token", { method: "POST", headers: { "x-face-worker-token": "wrong" } });
+    expect(denied.status).toBe(401);
+    expect(denied.headers.get("cache-control")).toBe("no-store");
+    const { generateKeyPairSync } = await import("node:crypto");
+    const { privateKey } = generateKeyPairSync("rsa", { modulusLength: 2048, privateKeyEncoding: { type: "pkcs8", format: "pem" }, publicKeyEncoding: { type: "spki", format: "pem" } });
+    const saved = process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
+    process.env.GOOGLE_SERVICE_ACCOUNT_JSON = JSON.stringify({ client_email: "test@example.invalid", private_key: privateKey });
+    const scopes: string[] = [];
+    fetchMock.mockImplementation(async (_input, init) => {
+        const assertion = new URLSearchParams(String(init?.body)).get("assertion")!;
+        scopes.push(JSON.parse(Buffer.from(assertion.split(".")[1]!, "base64url").toString()).scope);
+        return Response.json({ access_token: `temporary-${scopes.length}`, expires_in: 3600 });
+    });
+    try {
+        const responses = await Promise.all(Array.from({ length: 3 }, () => faceIndexRouter.request("/drive-token", { method: "POST", headers })));
+        expect(scopes).toEqual(["https://www.googleapis.com/auth/drive.readonly"]);
+        for (const response of responses) {
+            expect(response.headers.get("cache-control")).toBe("no-store");
+            expect(await response.json()).toMatchObject({ accessToken: "temporary-1", expiresAt: expect.any(Number) });
+        }
+        const { getDriveAccessToken } = await import("../lib/google-drive");
+        expect(await getDriveAccessToken()).toBe("temporary-2");
+        expect(scopes[1]).toContain("https://www.googleapis.com/auth/drive.file");
+        expect((await faceIndexRouter.request("/drive-token?refresh=1", { method: "POST", headers })).status).toBe(200);
+        expect(scopes[2]).toBe("https://www.googleapis.com/auth/drive.readonly");
+        fetchMock.mockImplementation(async () => { throw new Error("PRIVATE GOOGLE DETAIL"); });
+        const failed = await faceIndexRouter.request("/drive-token?refresh=1", { method: "POST", headers });
+        expect(failed.status).toBe(503);
+        expect(await failed.text()).not.toContain("PRIVATE GOOGLE DETAIL");
+    } finally {
+        if (saved === undefined) delete process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
+        else process.env.GOOGLE_SERVICE_ACCOUNT_JSON = saved;
+    }
+});
+
+test("legacy photo proxy is disabled by default", async () => {
+    const saved = process.env.FACE_WORKER_LEGACY_ASSET_PROXY;
+    delete process.env.FACE_WORKER_LEGACY_ASSET_PROXY;
+    try {
+        const result = await faceIndexRouter.request("/assets/galleries/1/photos/a", { headers: { "x-face-worker-token": "test-internal" } });
+        expect(result.status).toBe(410);
+        expect(await result.json()).toMatchObject({ code: "legacy_proxy_disabled" });
+    } finally {
+        if (saved !== undefined) process.env.FACE_WORKER_LEGACY_ASSET_PROXY = saved;
+    }
+});
+
+test("selfie limit rejects oversized files and chunked bodies", async () => {
+    await complete((await createOrReuseJob(1))!);
+    const app = new Hono<{ Variables: { user?: { sub: number; email: string; name: string; role: string } } }>();
+    app.use("/search", faceSearchBodyLimit);
+    app.post("/search", (c) => handlePublicFaceSearch(c, 1));
+    const body = new FormData();
+    body.set("selfie", new File([new Uint8Array(4 * 1024 * 1024 + 1)], "selfie.jpg"));
+    expect((await app.request("/search", { method: "POST", body })).status).toBe(413);
+    const stream = new ReadableStream({ start(controller) { controller.enqueue(new Uint8Array(5 * 1024 * 1024)); controller.close(); } });
+    expect((await app.request("/search", { method: "POST", body: stream })).status).toBe(413);
+});
 await ensureGalleryStorage();
 const originalFetch = globalThis.fetch;
 const dispatched: any[] = [];
 let ready = true;
 const fetchMock = mock(async (input: string | URL | Request, _init?: RequestInit) => {
     const url = String(input);
-    if (url.endsWith("/readyz")) return Response.json({ model: MODEL_VERSION, capabilities: ["embedding-cache-v1"], code: "model_loading" }, { status: ready ? 200 : 503 });
+    if (url.endsWith("/readyz")) return Response.json({ model: MODEL_VERSION, capabilities, code: "model_loading" }, { status: ready ? 200 : 503 });
     return Response.json({ accepted: true });
 });
 globalThis.fetch = fetchMock as unknown as typeof fetch;
@@ -30,7 +100,7 @@ beforeEach(async () => {
     ready = true;
     dispatched.length = 0;
     fetchMock.mockImplementation(async (input, init?: RequestInit) => {
-        if (String(input).endsWith("/readyz")) return Response.json({ model: MODEL_VERSION, capabilities: ["embedding-cache-v1"], code: "model_loading" }, { status: ready ? 200 : 503 });
+        if (String(input).endsWith("/readyz")) return Response.json({ model: MODEL_VERSION, capabilities, code: "model_loading" }, { status: ready ? 200 : 503 });
         if (String(input).endsWith("/v1/index/jobs")) dispatched.push(JSON.parse(String(init?.body)));
         if (String(input).endsWith("/v1/search")) return Response.json({ matches: [{ driveFileId: "a" }, { driveFileId: "b" }] });
         return Response.json({ accepted: true });
@@ -106,7 +176,7 @@ test("source changes reject old callbacks without deleting the published index",
 
 test("concurrent requests dispatch once and complete before dispatch returns safely", async () => {
     fetchMock.mockImplementation(async (input, init?: RequestInit) => {
-        if (String(input).endsWith("/readyz")) return Response.json({ model: MODEL_VERSION, capabilities: ["embedding-cache-v1"] });
+        if (String(input).endsWith("/readyz")) return Response.json({ model: MODEL_VERSION, capabilities });
         const body = JSON.parse(String(init?.body));
         dispatched.push(body);
         const job = (await currentJob(1))!;
@@ -163,7 +233,7 @@ test("worker search errors use safe codes and messages without echoing private d
     try {
         for (const item of cases) {
             fetchMock.mockImplementation(async (input) => String(input).endsWith("/readyz")
-                ? Response.json({ model: MODEL_VERSION, capabilities: ["embedding-cache-v1"] })
+                ? Response.json({ model: MODEL_VERSION, capabilities })
                 : Response.json({ detail: item.detail }, { status: item.workerStatus }));
             const form = new FormData();
             form.set("selfie", new File(["test"], "selfie.jpg", { type: "image/jpeg" }));
@@ -309,7 +379,7 @@ test("search rechecks source and access after inference, and old workers are una
     expect((await search()).status).toBe(401);
     revoke = false;
     fetchMock.mockImplementation(async (input) => {
-        if (String(input).endsWith("/readyz")) return Response.json({ model: MODEL_VERSION, capabilities: ["embedding-cache-v1"] });
+        if (String(input).endsWith("/readyz")) return Response.json({ model: MODEL_VERSION, capabilities });
         await addPhoto("new");
         return Response.json({ matches: [{ driveFileId: "a" }] });
     });
