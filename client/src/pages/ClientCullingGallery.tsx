@@ -151,6 +151,17 @@ export default function ClientCullingGallery() {
     const hasPreviousGalleryPage = !showSelected && !isFaceFilterActive && totalPages > 0 && page > 1;
     const hasNextGalleryPage = !showSelected && !isFaceFilterActive && totalPages > 0 && page < totalPages;
 
+    useEffect(() => {
+        const previousTitle = document.title;
+        document.title = displayGallery?.title?.trim()
+            ? `${displayGallery.title.trim()} | The Orbit Photo`
+            : 'The Orbit Photo';
+
+        return () => {
+            document.title = previousTitle;
+        };
+    }, [displayGallery?.title]);
+
     const resetFaceFilter = useCallback(() => {
         setFaceFilteredPhotos(null);
         setFaceFilterTotal(0);
