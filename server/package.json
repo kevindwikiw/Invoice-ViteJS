@@ -14,7 +14,7 @@
     "write-excel-file": "^4.1.1"
   },
   "devDependencies": {
-    "@types/bun": "latest",
+    "@types/bun": "1.4.2",
     "drizzle-kit": "^0.31.8",
     "typescript": "^5"
   }
