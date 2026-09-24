@@ -406,9 +406,9 @@ export function TutorialModal({ galleryId, token, tutorialSampleSlots, onClose }
                             <p className="mx-auto max-w-md text-center text-sm leading-6 text-[var(--text-secondary)]">Your job is to choose the moments. Orbit receives the filenames and prepares the final edited delivery.</p>
                             <ol className="mt-5 divide-y divide-[var(--border)] border-y border-[var(--border)]">
                                 {[
-                                    { icon: <Check size={15} />, title: 'Choose favorites', text: 'Tap the check button on the photos you love.' },
-                                    { icon: <CheckSquare size={15} />, title: 'Review Picked', text: 'Open Picked to see your current choices together.' },
-                                    { icon: <Send size={15} />, title: 'Submit when ready', text: 'Confirm the final count. You can revise and submit again later.' },
+                                    { icon: <Check size={15} />, title: 'Choose Favorites', text: 'Tap the check button on the photos you love.' },
+                                    { icon: <CheckSquare size={15} />, title: 'Review Picked', text: 'Open picked to see your current choices together.' },
+                                    { icon: <Send size={15} />, title: 'Submit When Ready', text: 'Confirm the final count. You can revise and submit again later.' },
                                 ].map((item, index) => (
                                     <li key={item.title} className="flex gap-3 py-3.5">
                                         <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-[var(--border)] text-[var(--text-primary)]">{item.icon}</span>
@@ -422,7 +422,7 @@ export function TutorialModal({ galleryId, token, tutorialSampleSlots, onClose }
                     {activeStep.id === 'ready' && (
                         <div data-testid="tutorial-ready-step" className="py-4 text-center">
                             <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full border border-[var(--accent)] text-[var(--accent)]"><Check size={22} /></div>
-                            <p className="mt-5 font-display text-2xl">Ready when you are.</p>
+                            <p className="mt-5 font-display text-2xl">Ready When You Are.</p>
                             <p className="mx-auto mt-3 max-w-sm text-sm leading-6 text-[var(--text-secondary)]">Take your time, trust your eye, and pick the moments you want Orbit to finish beautifully.</p>
                         </div>
                     )}
@@ -433,7 +433,7 @@ export function TutorialModal({ galleryId, token, tutorialSampleSlots, onClose }
                     {activeStep.id === 'ready' ? (
                         <button type="button" onClick={onClose} className="flex h-10 flex-1 items-center justify-center rounded-md bg-[var(--accent)] text-[10px] font-black uppercase tracking-[0.12em] text-[var(--bg-deep)] transition-opacity hover:opacity-85">Start selecting</button>
                     ) : activeStep.id === 'submit' ? (
-                        <button type="button" onClick={() => goToStep(safeStepIndex + 1)} className="flex h-10 items-center gap-1 rounded-md bg-[var(--accent)] px-3 text-[10px] font-black uppercase tracking-[0.1em] text-[var(--bg-deep)]">Ready to choose <ChevronRight size={14} /></button>
+                        <button type="button" onClick={() => goToStep(safeStepIndex + 1)} className="flex h-10 items-center gap-1 rounded-md bg-[var(--accent)] px-3 text-[10px] font-black uppercase tracking-[0.1em] text-[var(--bg-deep)]">Ready To Choose <ChevronRight size={14} /></button>
                     ) : null}
                 </footer>
             </section>

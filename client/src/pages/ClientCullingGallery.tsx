@@ -457,7 +457,7 @@ export default function ClientCullingGallery() {
                         <button
                             type="button"
                             onClick={() => setShowTutorial(true)}
-                            title="How to submit"
+                            title="How to Submit"
                             className="flex h-7 w-7 items-center justify-center rounded-md border border-[var(--border)] bg-[var(--bg-card)] text-[var(--text-secondary)] transition-colors hover:border-[var(--accent)] hover:text-[var(--text-primary)] sm:h-8 sm:w-auto sm:gap-1 sm:px-2.5 sm:text-[10px] sm:font-bold sm:uppercase sm:tracking-[0.12em]"
                         >
                             <HelpCircle size={13} />
@@ -522,7 +522,7 @@ export default function ClientCullingGallery() {
                             <span className="flex items-center justify-center gap-1.5">
                                 <ScanFace size={12} />
                                 <span className="sm:hidden">{isFaceFilterActive ? `Face (${faceFilteredPhotos.length})` : 'Selfie'}</span>
-                                <span className="hidden sm:inline">{isFaceFilterActive ? `Face (${faceFilteredPhotos.length})` : 'Filter by selfie'}</span>
+                                <span className="hidden sm:inline">{isFaceFilterActive ? `Face (${faceFilteredPhotos.length})` : 'Filter by Selfie'}</span>
                             </span>
                         </button>}
 
@@ -603,7 +603,7 @@ export default function ClientCullingGallery() {
                 ) : !visiblePhotos.length ? (
                     <div className="flex min-h-[60vh] flex-col items-center justify-center text-center">
                         {isFaceFilterActive ? <ScanFace size={30} className="mb-4 text-[var(--text-muted)]" /> : showSelected ? <CheckSquare size={30} className="mb-4 text-[var(--text-muted)]" /> : <ImageIcon size={30} className="mb-4 text-[var(--text-muted)]" />}
-                        <p className="font-display text-2xl text-[var(--text-primary)]">{isFaceFilterActive ? 'No face matches found' : showSelected ? 'No picked photos' : 'No photos synced yet'}</p>
+                        <p className="font-display text-2xl text-[var(--text-primary)]">{isFaceFilterActive ? 'No face matches found' : showSelected ? 'No Picked Photos' : 'No photos synced yet'}</p>
                         <p className="mt-2 max-w-sm text-sm leading-6 text-[var(--text-muted)]">
                             {isFaceFilterActive ? 'Try a brighter front-facing selfie or use Wide sensitivity.' : showSelected ? 'Select photos from the gallery to see them here before submitting.' : 'The studio needs to sync this Drive folder before selection opens.'}
                         </p>
