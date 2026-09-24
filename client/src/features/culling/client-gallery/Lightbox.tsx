@@ -10,7 +10,6 @@ import { isPreviewImageReady, preloadPreviewImage } from './preview-cache';
 
 export const Lightbox = memo(function Lightbox({
     galleryId,
-    galleryTitle,
     token,
     photos,
     displayStartIndex,
@@ -26,7 +25,6 @@ export const Lightbox = memo(function Lightbox({
     onToggle,
 }: {
     galleryId: string;
-    galleryTitle?: string | null;
     token: string;
     photos: GalleryPhoto[];
     displayStartIndex: number;
@@ -46,7 +44,7 @@ export const Lightbox = memo(function Lightbox({
     const selected = photo ? selectedIds.has(photo.driveFileId) : false;
     const currentUrl = photo ? galleryPreviewUrl(galleryId, photo.driveFileId, token, photo.photoToken) : '';
     const placeholderUrl = photo ? galleryThumbnailUrl(galleryId, photo.driveFileId, token, photo.photoToken) : '';
-    const displayLabel = photo ? displayPhotoLabel(galleryTitle, photoDisplayIndex(photo, displayStartIndex + currentIndex)) : '';
+    const displayLabel = photo ? displayPhotoLabel(photo, photoDisplayIndex(photo, displayStartIndex + currentIndex)) : '';
     const [loadedUrl, setLoadedUrl] = useState('');
     const [failedUrl, setFailedUrl] = useState('');
     const moveRequestRef = useRef(0);
@@ -223,7 +221,7 @@ export const Lightbox = memo(function Lightbox({
                 
                 <footer data-testid="gallery-lightbox-footer" className="relative z-20 flex shrink-0 flex-col gap-2 border-t border-white/10 bg-black/80 px-3 py-3 backdrop-blur sm:flex-row sm:items-center sm:justify-between sm:gap-3 sm:px-5 sm:py-4">
                     <div className="min-w-0">
-                        <p title={photo.filename} className="truncate text-xs font-semibold sm:text-sm">{displayLabel}</p>
+                        <p title={displayLabel} className="truncate text-xs font-semibold sm:text-sm">{displayLabel}</p>
                         <p className="mt-0.5 text-[9px] uppercase tracking-[0.14em] text-white/50 sm:mt-1 sm:text-[10px]">{displayPosition} / {displayTotal}</p>
                     </div>
                     <div className="flex w-full flex-col gap-2 sm:w-auto sm:min-w-[220px]">

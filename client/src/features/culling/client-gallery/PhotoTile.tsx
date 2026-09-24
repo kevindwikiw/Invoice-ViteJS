@@ -12,7 +12,6 @@ export const PhotoTile = memo(function PhotoTile({
     selected,
     token,
     galleryId,
-    galleryTitle,
     displayIndex,
     thumbnailPriority,
     onOpen,
@@ -23,7 +22,6 @@ export const PhotoTile = memo(function PhotoTile({
     selected: boolean;
     token: string;
     galleryId: string;
-    galleryTitle?: string | null;
     displayIndex: number;
     thumbnailPriority?: boolean;
     onOpen: (driveFileId: string) => void;
@@ -32,7 +30,7 @@ export const PhotoTile = memo(function PhotoTile({
 }) {
     const [hasError, setHasError] = useState(false);
     const prefetchTimerRef = useRef<number | null>(null);
-    const displayLabel = displayPhotoLabel(galleryTitle, displayIndex);
+    const displayLabel = displayPhotoLabel(photo, displayIndex);
 
     const cancelScheduledPrefetch = () => {
         if (prefetchTimerRef.current == null) return;
@@ -72,7 +70,7 @@ export const PhotoTile = memo(function PhotoTile({
                         <img
                             src={galleryThumbnailUrl(galleryId, photo.driveFileId, token, photo.photoToken)}
                             alt={displayLabel}
-                            title={photo.filename}
+                            title={displayLabel}
                             loading={thumbnailPriority ? 'eager' : 'lazy'}
                             decoding="async"
                             fetchPriority={thumbnailPriority ? 'high' : 'auto'}
@@ -111,10 +109,9 @@ export const PhotoTile = memo(function PhotoTile({
                 </button>
             </div>
             <div className="flex h-7 items-center justify-between gap-2 border-t border-[var(--border)] px-2 text-[9px] text-[var(--text-secondary)] sm:h-8 sm:px-2.5 sm:text-[10px]">
-                <p title={photo.filename} className="min-w-0 truncate font-semibold">{displayLabel}</p>
+                <p title={displayLabel} className="min-w-0 truncate font-semibold">{displayLabel}</p>
                 <p className="shrink-0 font-bold uppercase tracking-[0.12em] text-[var(--text-muted)]">#{String(displayIndex + 1).padStart(3, '0')}</p>
             </div>
         </article>
     );
 });
-

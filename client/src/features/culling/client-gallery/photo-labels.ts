@@ -1,8 +1,7 @@
 import type { GalleryPhoto } from '../culling.types';
 
-export function displayPhotoLabel(galleryTitle: string | null | undefined, displayIndex: number): string {
-    const title = galleryTitle?.trim() || 'Photo';
-    return `${title} ${String(displayIndex + 1).padStart(2, '0')}`;
+export function displayPhotoLabel(photo: GalleryPhoto, displayIndex: number): string {
+    return photo.filename?.trim() || `Photo ${String(displayIndex + 1).padStart(2, '0')}`;
 }
 
 export function photoDisplayIndex(photo: GalleryPhoto, fallbackIndex: number): number {
@@ -11,4 +10,3 @@ export function photoDisplayIndex(photo: GalleryPhoto, fallbackIndex: number): n
         ? displayOrder
         : fallbackIndex;
 }
-

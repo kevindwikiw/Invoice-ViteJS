@@ -635,7 +635,6 @@ export default function ClientCullingGallery() {
                                     selected={effectiveSelectedIds.has(photo.driveFileId)}
                                     token={token}
                                     galleryId={galleryId}
-                                    galleryTitle={displayGallery?.title}
                                     displayIndex={photoDisplayIndex(photo, fallbackIndex)}
                                     thumbnailPriority={index < 10}
                                     onOpen={handleOpenLightbox}
@@ -667,7 +666,6 @@ export default function ClientCullingGallery() {
 
             <Lightbox
                 galleryId={galleryId}
-                galleryTitle={displayGallery?.title}
                 token={token}
                 photos={visiblePhotos}
                 displayStartIndex={showSelected ? 0 : (page - 1) * GALLERY_PAGE_SIZE}
