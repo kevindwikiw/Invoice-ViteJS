@@ -166,7 +166,8 @@ export const Lightbox = memo(function Lightbox({
             <div className="grid h-dvh grid-rows-[minmax(0,1fr)_auto] overflow-hidden">
                 <div
                     data-testid="gallery-lightbox-stage"
-                    className="relative flex min-h-0 touch-pan-y items-center justify-center px-10 py-2 sm:px-16 sm:py-5"
+                    className="relative flex min-h-0 touch-pan-y select-none items-center justify-center px-10 py-2 [-webkit-touch-callout:none] sm:px-16 sm:py-5"
+                    onContextMenu={(event) => event.preventDefault()}
                     onPointerDown={(event) => {
                         if (event.pointerType === 'touch') swipeStartXRef.current = event.clientX;
                     }}
@@ -185,6 +186,7 @@ export const Lightbox = memo(function Lightbox({
                             aria-hidden="true"
                             src={placeholderUrl}
                             alt=""
+                            draggable={false}
                             className={clsx(
                                 'pointer-events-none absolute z-0 block h-auto max-h-full w-auto max-w-full scale-[1.02] object-contain blur-[10px] transition-opacity duration-300',
                                 currentImageReady && failedUrl !== currentUrl ? 'opacity-0' : 'opacity-80'
@@ -208,6 +210,7 @@ export const Lightbox = memo(function Lightbox({
                         key={currentUrl}
                         src={currentUrl}
                         alt={photo.filename}
+                        draggable={false}
                         decoding="async"
                         fetchPriority="high"
                         className={clsx('z-10 block h-auto max-h-full w-auto max-w-full object-contain transition-opacity duration-150', currentImageReady && failedUrl !== currentUrl ? 'opacity-100' : 'opacity-0')}
@@ -215,6 +218,7 @@ export const Lightbox = memo(function Lightbox({
                             setFailedUrl('');
                             setLoadedUrl(currentUrl);
                         }}
+                        onDragStart={(event) => event.preventDefault()}
                         onError={() => setFailedUrl(currentUrl)}
                     />
                 </div>

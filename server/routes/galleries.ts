@@ -1354,6 +1354,9 @@ publicGalleriesRouter.get("/:id/photos/:fileId/thumbnail", async (c) => {
         headers: {
             "Content-Type": driveResponse.headers.get("Content-Type") || "image/jpeg",
             "Cache-Control": GALLERY_IMAGE_CACHE_CONTROL,
+            "Content-Disposition": "inline",
+            "X-Content-Type-Options": "nosniff",
+            "Referrer-Policy": "no-referrer",
         },
     });
 });
@@ -1393,6 +1396,9 @@ publicGalleriesRouter.get("/:id/photos/:fileId/preview", async (c) => {
         headers: {
             "Content-Type": driveResponse.headers.get("Content-Type") || "image/jpeg",
             "Cache-Control": GALLERY_IMAGE_CACHE_CONTROL,
+            "Content-Disposition": "inline",
+            "X-Content-Type-Options": "nosniff",
+            "Referrer-Policy": "no-referrer",
         },
     });
 });
@@ -1411,6 +1417,9 @@ publicGalleriesRouter.get("/:id/photos/:fileId/content", async (c) => {
         headers: {
             "Content-Type": driveResponse.headers.get("Content-Type") || photo.mimeType || "application/octet-stream",
             "Cache-Control": "private, max-age=3600, stale-while-revalidate=300",
+            "Content-Disposition": "inline",
+            "X-Content-Type-Options": "nosniff",
+            "Referrer-Policy": "no-referrer",
         },
     });
 });

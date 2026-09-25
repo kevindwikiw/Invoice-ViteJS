@@ -56,6 +56,7 @@ export const PhotoTile = memo(function PhotoTile({
                 <button
                     type="button"
                     onClick={() => !hasError && onOpen(photo.driveFileId)}
+                    onContextMenu={(event) => event.preventDefault()}
                     onFocus={() => !hasError && onPrefetch(photo)}
                     onPointerEnter={(event) => { if (event.pointerType === 'mouse' && !hasError) schedulePrefetch(); }}
                     onPointerLeave={cancelScheduledPrefetch}
@@ -63,7 +64,7 @@ export const PhotoTile = memo(function PhotoTile({
                         cancelScheduledPrefetch();
                         if (event.pointerType !== 'touch' && !hasError) onPrefetch(photo);
                     }}
-                    className="h-full w-full bg-[var(--bg-card)] text-left"
+                    className="h-full w-full select-none bg-[var(--bg-card)] text-left [-webkit-touch-callout:none]"
                     aria-label={`Open ${displayLabel}`}
                 >
                     {!hasError ? (
@@ -71,11 +72,13 @@ export const PhotoTile = memo(function PhotoTile({
                             src={galleryThumbnailUrl(galleryId, photo.driveFileId, token, photo.photoToken)}
                             alt={displayLabel}
                             title={displayLabel}
+                            draggable={false}
                             loading={thumbnailPriority ? 'eager' : 'lazy'}
                             decoding="async"
                             fetchPriority={thumbnailPriority ? 'high' : 'auto'}
                             className="h-full w-full object-cover opacity-0 transition-[opacity,transform] duration-200 group-hover:scale-[1.015]"
                             onLoad={(event) => event.currentTarget.classList.remove('opacity-0')}
+                            onDragStart={(event) => event.preventDefault()}
                             onError={() => setHasError(true)}
                         />
                     ) : (
