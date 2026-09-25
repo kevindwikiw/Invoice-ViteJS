@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type SyntheticEvent } from 'react';
-import { AlertCircle, Check, CheckSquare, ChevronLeft, ChevronRight, GripVertical, ImageOff, Loader2, MessageCircle, QrCode, Send, X } from 'lucide-react';
+import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type SyntheticEvent } from 'react';
+import { AlertCircle, Check, CheckSquare, ChevronLeft, ChevronRight, Images, ImageOff, Loader2, MessageCircle, MoveHorizontal, QrCode, ScanFace, Send, X } from 'lucide-react';
 import clsx from 'clsx';
 
 import { calculateAddonQuote, cullingTutorialImageUrl, createQrisPayment, type QrisPaymentResponse } from '../culling.public';
@@ -7,6 +7,30 @@ import type { DiscountRule } from '../culling.types';
 
 import { idrFormat } from './constants';
 import { QrisModal } from './QrisModal';
+
+const pendingTutorialImagePreloads = new Set<HTMLImageElement>();
+
+function preloadTutorialImage(url: string, priority: 'high' | 'low'): Promise<void> {
+    return new Promise<void>((resolve, reject) => {
+        const image = new Image();
+        pendingTutorialImagePreloads.add(image);
+        image.decoding = 'async';
+        image.fetchPriority = priority;
+        image.onload = () => {
+            pendingTutorialImagePreloads.delete(image);
+            if (typeof image.decode !== 'function') {
+                resolve();
+                return;
+            }
+            void image.decode().catch(() => undefined).finally(resolve);
+        };
+        image.onerror = () => {
+            pendingTutorialImagePreloads.delete(image);
+            reject(new Error('Unable to preload tutorial image.'));
+        };
+        image.src = url;
+    });
+}
 
 export function RequestMoreModal({
     galleryId,
@@ -211,10 +235,49 @@ export function SubmitConfirmationModal({
 }
 
 function BeforeAfterSlider({ galleryId, token, slot }: { galleryId: string; token: string; slot: number }) {
+    const mediaSlotRef = useRef<HTMLDivElement>(null);
     const stageRef = useRef<HTMLDivElement>(null);
+    const touchStartRef = useRef<{ pointerId: number; x: number; y: number } | null>(null);
     const [position, setPosition] = useState(50);
-    const [aspectRatio, setAspectRatio] = useState('4 / 3');
     const [failedAssets, setFailedAssets] = useState({ before: false, after: false });
+    const [loadedAssets, setLoadedAssets] = useState({ before: false, after: false });
+    const [placeholderUrl, setPlaceholderUrl] = useState('');
+    const [sourceAspectRatio, setSourceAspectRatio] = useState(4 / 3);
+    const [stageSize, setStageSize] = useState<{ width: number; height: number } | null>(null);
+    const beforeUrl = cullingTutorialImageUrl(galleryId, token, slot, 'before');
+    const afterUrl = cullingTutorialImageUrl(galleryId, token, slot, 'after');
+    const pairReady = loadedAssets.before && loadedAssets.after;
+
+    useLayoutEffect(() => {
+        const mediaSlot = mediaSlotRef.current;
+        if (!mediaSlot) return;
+
+        const fitStageToSlot = () => {
+            const bounds = mediaSlot.getBoundingClientRect();
+            if (bounds.width <= 0 || bounds.height <= 0) return;
+            const width = Math.min(bounds.width, bounds.height * sourceAspectRatio);
+            setStageSize({ width, height: width / sourceAspectRatio });
+        };
+
+        fitStageToSlot();
+        const observer = new ResizeObserver(fitStageToSlot);
+        observer.observe(mediaSlot);
+        return () => observer.disconnect();
+    }, [sourceAspectRatio]);
+
+    const handleAssetLoad = (asset: 'before' | 'after', event: SyntheticEvent<HTMLImageElement>) => {
+        const image = event.currentTarget;
+        const { naturalWidth, naturalHeight } = image;
+        if (naturalWidth > 0 && naturalHeight > 0) setSourceAspectRatio(naturalWidth / naturalHeight);
+        setPlaceholderUrl((current) => current || image.currentSrc || image.src);
+
+        const markDecoded = () => setLoadedAssets((current) => ({ ...current, [asset]: true }));
+        if (typeof image.decode !== 'function') {
+            markDecoded();
+            return;
+        }
+        void image.decode().catch(() => undefined).finally(markDecoded);
+    };
 
     const updatePosition = (clientX: number) => {
         const bounds = stageRef.current?.getBoundingClientRect();
@@ -223,12 +286,36 @@ function BeforeAfterSlider({ galleryId, token, slot }: { galleryId: string; toke
     };
 
     const handlePointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
+        if (event.pointerType === 'mouse') {
+            event.currentTarget.setPointerCapture(event.pointerId);
+            updatePosition(event.clientX);
+            return;
+        }
+
+        touchStartRef.current = { pointerId: event.pointerId, x: event.clientX, y: event.clientY };
+    };
+
+    const handlePointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
+        if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+            updatePosition(event.clientX);
+            return;
+        }
+
+        const start = touchStartRef.current;
+        if (!start || start.pointerId !== event.pointerId) return;
+        const deltaX = Math.abs(event.clientX - start.x);
+        const deltaY = Math.abs(event.clientY - start.y);
+        if (deltaX < 6 || deltaX <= deltaY) return;
+
         event.currentTarget.setPointerCapture(event.pointerId);
         updatePosition(event.clientX);
     };
 
-    const handlePointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
-        if (event.currentTarget.hasPointerCapture(event.pointerId)) updatePosition(event.clientX);
+    const finishPointer = (event: ReactPointerEvent<HTMLDivElement>) => {
+        if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+            event.currentTarget.releasePointerCapture(event.pointerId);
+        }
+        if (touchStartRef.current?.pointerId === event.pointerId) touchStartRef.current = null;
     };
 
     const handleKeyDown = (event: ReactKeyboardEvent<HTMLButtonElement>) => {
@@ -248,72 +335,87 @@ function BeforeAfterSlider({ galleryId, token, slot }: { galleryId: string; toke
         }
     };
 
-    const handleImageLoad = (event: SyntheticEvent<HTMLImageElement>) => {
-        const image = event.currentTarget;
-        if (image.naturalWidth > 0 && image.naturalHeight > 0) {
-            setAspectRatio(`${image.naturalWidth} / ${image.naturalHeight}`);
-        }
-    };
-
     return (
         <div>
-            <div
-                ref={stageRef}
-                data-testid="tutorial-before-after-slider"
-                className="relative mx-auto w-full max-w-[680px] touch-none overflow-hidden bg-black/15"
-                style={{ aspectRatio }}
-                onPointerDown={handlePointerDown}
-                onPointerMove={handlePointerMove}
-                onPointerUp={(event) => event.currentTarget.releasePointerCapture(event.pointerId)}
-                onPointerCancel={(event) => event.currentTarget.releasePointerCapture(event.pointerId)}
-            >
-                {!failedAssets.after && (
-                    <img
-                        src={cullingTutorialImageUrl(galleryId, token, slot, 'after')}
-                        alt="Edited result sample"
-                        className="absolute inset-0 h-full w-full object-contain"
-                        onLoad={handleImageLoad}
-                        onError={() => setFailedAssets((current) => ({ ...current, after: true }))}
-                    />
-                )}
-                {!failedAssets.before && (
-                    <img
-                        src={cullingTutorialImageUrl(galleryId, token, slot, 'before')}
-                        alt="Before editing sample"
-                        className="absolute inset-0 h-full w-full object-contain"
-                        style={{ clipPath: `inset(0 ${100 - position}% 0 0)` }}
-                        onLoad={handleImageLoad}
-                        onError={() => setFailedAssets((current) => ({ ...current, before: true }))}
-                    />
-                )}
-
-                {(failedAssets.before || failedAssets.after) && (
-                    <div className="absolute inset-0 flex flex-col items-center justify-center bg-[var(--bg-elevated)] px-6 text-center text-[var(--text-muted)]">
-                        <ImageOff size={24} className="mb-2 opacity-65" />
-                        <p className="text-[10px] font-bold uppercase tracking-[0.12em]">Tutorial photos unavailable</p>
-                        <p className="mt-1 max-w-xs text-[10px] leading-4">Set both sample files in this gallery&apos;s admin settings and share them with the Drive service account.</p>
-                    </div>
-                )}
-
-                <span className="pointer-events-none absolute left-2 top-2 z-10 bg-black/60 px-2 py-1 text-[9px] font-bold uppercase tracking-[0.12em] text-white backdrop-blur">Before</span>
-                <span className="pointer-events-none absolute right-2 top-2 z-10 bg-black/60 px-2 py-1 text-[9px] font-bold uppercase tracking-[0.12em] text-white backdrop-blur">Edited</span>
-                <div className="pointer-events-none absolute inset-y-0 z-10 w-px bg-white shadow-[0_0_0_1px_rgba(0,0,0,0.22)]" style={{ left: `${position}%` }} />
-                <button
-                    type="button"
-                    data-testid="tutorial-slider-handle"
-                    role="slider"
-                    aria-label="Compare before and edited photo"
-                    aria-valuemin={0}
-                    aria-valuemax={100}
-                    aria-valuenow={Math.round(position)}
-                    onKeyDown={handleKeyDown}
-                    className="absolute top-1/2 z-20 flex h-10 w-8 -translate-x-1/2 -translate-y-1/2 items-center justify-center border border-white/70 bg-black/55 text-white shadow-lg backdrop-blur transition-transform hover:scale-105 focus-visible:outline focus-visible:outline-2 focus-visible:outline-white"
-                    style={{ left: `${position}%` }}
+            <div ref={mediaSlotRef} data-testid="tutorial-media-slot" className="relative flex h-[clamp(20rem,58dvh,31rem)] w-full items-center justify-center overflow-hidden bg-black md:h-[min(60dvh,34rem)]">
+                <div
+                    ref={stageRef}
+                    data-testid="tutorial-before-after-slider"
+                    className="relative shrink-0 touch-pan-y overflow-hidden bg-black"
+                    style={stageSize ? { width: stageSize.width, height: stageSize.height } : { width: '100%', aspectRatio: sourceAspectRatio }}
+                    aria-busy={!pairReady && !failedAssets.before && !failedAssets.after}
+                    onPointerDown={handlePointerDown}
+                    onPointerMove={handlePointerMove}
+                    onPointerUp={finishPointer}
+                    onPointerCancel={finishPointer}
                 >
-                    <GripVertical size={16} />
-                </button>
+                    {!failedAssets.after && (
+                        <img
+                            src={afterUrl}
+                            alt="Edited result sample"
+                            loading="eager"
+                            decoding="async"
+                            fetchPriority="high"
+                            className={clsx('absolute inset-0 h-full w-full object-cover transition-opacity duration-150 ease-out motion-reduce:transition-none', pairReady ? 'opacity-100' : 'opacity-0')}
+                            onLoad={(event) => handleAssetLoad('after', event)}
+                            onError={() => setFailedAssets((current) => ({ ...current, after: true }))}
+                        />
+                    )}
+                    {!failedAssets.before && (
+                        <img
+                            src={beforeUrl}
+                            alt="Before editing sample"
+                            loading="eager"
+                            decoding="async"
+                            fetchPriority="high"
+                            className={clsx('absolute inset-0 h-full w-full object-cover transition-opacity duration-150 ease-out motion-reduce:transition-none', pairReady ? 'opacity-100' : 'opacity-0')}
+                            style={{ clipPath: `inset(0 ${100 - position}% 0 0)` }}
+                            onLoad={(event) => handleAssetLoad('before', event)}
+                            onError={() => setFailedAssets((current) => ({ ...current, before: true }))}
+                        />
+                    )}
+
+                    {!failedAssets.before && !failedAssets.after && !pairReady && (
+                        <div data-testid="tutorial-image-loading" className="pointer-events-none absolute inset-0 z-30 flex items-center justify-center overflow-hidden bg-black text-white/75" aria-label="Loading comparison photos">
+                            {placeholderUrl && <img data-testid="tutorial-image-placeholder" aria-hidden="true" src={placeholderUrl} alt="" className="absolute inset-0 h-full w-full scale-[1.04] object-cover opacity-70 blur-[12px]" />}
+                            <span className="absolute inset-0 bg-black/25" />
+                            <Loader2 size={20} className="relative animate-spin motion-reduce:animate-none" />
+                        </div>
+                    )}
+
+                    {(failedAssets.before || failedAssets.after) && (
+                        <div className="absolute inset-0 z-30 flex flex-col items-center justify-center bg-[var(--bg-elevated)] px-6 text-center text-[var(--text-muted)]">
+                            <ImageOff size={24} className="mb-2 opacity-65" />
+                            <p className="text-[10px] font-bold uppercase tracking-[0.12em]">Tutorial photos unavailable</p>
+                            <p className="mt-1 max-w-xs text-[10px] leading-4">Set both sample files in this gallery&apos;s admin settings and share them with the Drive service account.</p>
+                        </div>
+                    )}
+
+                    {pairReady && (
+                        <>
+                            <span className="pointer-events-none absolute left-2 top-2 z-10 border border-white/10 bg-black/75 px-2 py-1 text-[9px] font-bold uppercase tracking-[0.12em] text-white shadow-sm backdrop-blur-md">Before</span>
+                            <span className="pointer-events-none absolute right-2 top-2 z-10 border border-white/10 bg-black/75 px-2 py-1 text-[9px] font-bold uppercase tracking-[0.12em] text-white shadow-sm backdrop-blur-md">Edited</span>
+                            <span data-testid="tutorial-slider-divider" className="pointer-events-none absolute top-[calc(50%_-_3.25rem)] z-10 h-7 w-px bg-white/80 shadow-[0_0_0_1px_rgba(0,0,0,0.18)]" style={{ left: `${position}%` }} />
+                            <span data-testid="tutorial-slider-divider" className="pointer-events-none absolute bottom-[calc(50%_-_3.25rem)] z-10 h-7 w-px bg-white/80 shadow-[0_0_0_1px_rgba(0,0,0,0.18)]" style={{ left: `${position}%` }} />
+                            <button
+                                type="button"
+                                data-testid="tutorial-slider-handle"
+                                role="slider"
+                                aria-label="Compare before and edited photo"
+                                aria-valuemin={0}
+                                aria-valuemax={100}
+                                aria-valuenow={Math.round(position)}
+                                onKeyDown={handleKeyDown}
+                                className="absolute top-1/2 z-20 flex h-11 w-11 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border border-white/75 bg-black/60 text-white shadow-[0_4px_18px_rgb(0_0_0/0.28)] backdrop-blur-md transition-[transform,background-color] duration-150 ease-out hover:scale-105 hover:bg-black/75 active:scale-[0.96] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white motion-reduce:transition-none"
+                                style={{ left: `${position}%` }}
+                            >
+                                <MoveHorizontal size={17} strokeWidth={1.8} />
+                            </button>
+                        </>
+                    )}
+                </div>
             </div>
-            <p className="mt-2 text-center text-[10px] text-[var(--text-muted)]">Drag the handle or use the arrow keys to compare.</p>
+            <p className="mt-2 text-center text-[10px] text-[var(--text-muted)]">Drag to compare.</p>
         </div>
     );
 }
@@ -322,19 +424,36 @@ export function TutorialModal({ galleryId, token, tutorialSampleSlots, onClose }
     const hasSamples = tutorialSampleSlots.length > 0;
     const [stepIndex, setStepIndex] = useState(0);
     const [sampleIndex, setSampleIndex] = useState(0);
+    const scrollAreaRef = useRef<HTMLDivElement>(null);
 
     useEffect(() => {
-        const previousOverflow = document.body.style.overflow;
-        document.body.style.overflow = 'hidden';
+        const body = document.body;
+        const scrollY = window.scrollY;
+        const previous = { position: body.style.position, top: body.style.top, width: body.style.width, overflow: body.style.overflow };
+        body.style.position = 'fixed';
+        body.style.top = `-${scrollY}px`;
+        body.style.width = '100%';
+        body.style.overflow = 'hidden';
         const handleKeyDown = (event: KeyboardEvent) => {
             if (event.key === 'Escape') onClose();
         };
         document.addEventListener('keydown', handleKeyDown);
         return () => {
-            document.body.style.overflow = previousOverflow;
+            Object.assign(body.style, previous);
+            window.scrollTo(0, scrollY);
             document.removeEventListener('keydown', handleKeyDown);
         };
     }, [onClose]);
+
+    useEffect(() => {
+        const urls = tutorialSampleSlots.flatMap((slot) => [
+            cullingTutorialImageUrl(galleryId, token, slot, 'after'),
+            cullingTutorialImageUrl(galleryId, token, slot, 'before'),
+        ]);
+        urls.forEach((url, index) => {
+            void preloadTutorialImage(url, index < 2 ? 'high' : 'low').catch(() => undefined);
+        });
+    }, [galleryId, token, tutorialSampleSlots]);
 
     const wizardSteps = [
         ...(hasSamples ? [{ id: 'confidence', label: 'Choose' }] : []),
@@ -344,39 +463,43 @@ export function TutorialModal({ galleryId, token, tutorialSampleSlots, onClose }
     const safeStepIndex = Math.min(stepIndex, wizardSteps.length - 1);
     const activeStep = wizardSteps[safeStepIndex];
     const activeSampleSlot = tutorialSampleSlots[sampleIndex] || tutorialSampleSlots[0];
-    const stepTitle = activeStep.id === 'confidence' ? 'Choose with confidence' : activeStep.id === 'submit' ? 'How to submit' : 'Ready to choose';
+    const stepTitle = activeStep.id === 'confidence' ? 'Choose With Confidence' : activeStep.id === 'submit' ? 'How to Submit' : 'Ready to Choose';
+
+    useEffect(() => {
+        scrollAreaRef.current?.scrollTo({ top: 0 });
+    }, [safeStepIndex]);
 
     const goToStep = (nextIndex: number) => {
         setStepIndex(Math.min(wizardSteps.length - 1, Math.max(0, nextIndex)));
     };
 
     return (
-        <div className="fixed inset-0 z-[130] flex items-center justify-center bg-black/70 px-4 py-4" role="dialog" aria-modal="true" aria-label="How photo selection works" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
-            <section className="flex max-h-[calc(100dvh-2rem)] w-full max-w-lg flex-col overflow-hidden border border-[var(--border)] bg-[var(--bg-card)] text-[var(--text-primary)] shadow-2xl">
-                <header className="flex items-start justify-between gap-4 border-b border-[var(--border)] px-5 py-4">
+        <div className="fixed inset-0 z-[130] flex items-center justify-center overscroll-contain bg-black/70 px-2 py-2 sm:px-4 sm:py-4" role="dialog" aria-modal="true" aria-label="How photo selection works" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
+            <section data-testid="tutorial-panel" className="flex h-[calc(100dvh-1rem)] max-h-[calc(100dvh-1rem)] w-full max-w-lg flex-col overflow-hidden border border-[var(--border)] bg-[var(--bg-card)] text-[var(--text-primary)] shadow-2xl sm:h-[min(56rem,calc(100dvh-2rem))] sm:max-h-[calc(100dvh-2rem)] md:max-w-2xl">
+                <header className="flex shrink-0 items-start justify-between gap-4 border-b border-[var(--border)] px-4 py-3.5 sm:px-5 sm:py-4">
                     <div>
                         <p className="text-[9px] font-bold uppercase tracking-[0.14em] text-[var(--text-muted)]">ORBIT GUIDE</p>
                         <h2 className="mt-1 font-display text-xl">{stepTitle}</h2>
                     </div>
-                    <button type="button" onClick={onClose} aria-label="Close tutorial" className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-[var(--border)] transition-colors hover:border-[var(--accent)]"><X size={14} /></button>
+                    <button type="button" onClick={onClose} aria-label="Close tutorial" className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md border border-[var(--border)] transition-[transform,border-color] duration-150 ease-out hover:border-[var(--accent)] active:scale-[0.97] motion-reduce:transition-none"><X size={15} /></button>
                 </header>
 
-                <nav aria-label="Tutorial progress" className="grid border-b border-[var(--border)] px-5 py-3" style={{ gridTemplateColumns: `repeat(${wizardSteps.length}, minmax(0, 1fr))` }}>
+                <nav aria-label="Tutorial progress" className="grid shrink-0 border-b border-[var(--border)] px-3 py-2.5 sm:px-5 sm:py-3" style={{ gridTemplateColumns: `repeat(${wizardSteps.length}, minmax(0, 1fr))` }}>
                     {wizardSteps.map((step, index) => (
                         <button
                             key={step.id}
                             type="button"
                             onClick={() => goToStep(index)}
                             aria-current={safeStepIndex === index ? 'step' : undefined}
-                            className={clsx('flex items-center justify-center gap-1.5 text-[9px] font-bold uppercase tracking-[0.1em] transition-colors motion-reduce:transition-none', safeStepIndex === index ? 'text-[var(--text-primary)]' : index < safeStepIndex ? 'text-[var(--text-secondary)]' : 'text-[var(--text-muted)]')}
+                            className={clsx('flex min-w-0 items-center justify-center gap-1.5 text-[8px] font-bold uppercase tracking-[0.08em] transition-[transform,color] duration-150 ease-out active:scale-[0.98] motion-reduce:transition-none sm:text-[9px] sm:tracking-[0.1em]', safeStepIndex === index ? 'text-[var(--text-primary)]' : index < safeStepIndex ? 'text-[var(--text-secondary)]' : 'text-[var(--text-muted)]')}
                         >
                             <span className={clsx('flex h-5 w-5 items-center justify-center rounded-full border text-[9px]', safeStepIndex === index ? 'border-[var(--accent)] bg-[var(--accent)] text-[var(--bg-deep)]' : 'border-[var(--border)]')}>{index + 1}</span>
-                            <span className="hidden sm:inline">{step.label}</span>
+                            <span className="truncate">{step.label}</span>
                         </button>
                     ))}
                 </nav>
 
-                <div className="min-h-0 overflow-y-auto px-5 py-5">
+                <div ref={scrollAreaRef} data-testid="tutorial-scroll-area" className="min-h-0 flex-1 touch-pan-y overflow-y-auto overscroll-contain px-3 py-4 [-webkit-overflow-scrolling:touch] sm:px-5 sm:py-5">
                     {activeStep.id === 'confidence' && (
                         <div data-testid="tutorial-confidence-step">
                             <div className="flex items-center justify-between gap-3">
@@ -386,7 +509,7 @@ export function TutorialModal({ galleryId, token, tutorialSampleSlots, onClose }
                             <div className="mt-2">
                                 <BeforeAfterSlider key={activeSampleSlot} galleryId={galleryId} token={token} slot={activeSampleSlot} />
                             </div>
-                            <p className="mx-auto mt-4 max-w-md text-center text-xs leading-5 text-[var(--text-muted)]">Look for the feeling, connection, and story you want to keep. The edit is there to polish the moment, not change why it matters.</p>
+                            <p className="mx-auto mt-3 max-w-md text-center text-xs leading-5 text-[var(--text-muted)]">Pick the moments that mean the most. We’ll take care of making them into something lasting.</p>
                             {tutorialSampleSlots.length > 1 && (
                                 <div className="mt-4 flex items-center justify-center gap-2" aria-label="Tutorial samples">
                                     {tutorialSampleSlots.map((slot, index) => (
@@ -394,23 +517,21 @@ export function TutorialModal({ galleryId, token, tutorialSampleSlots, onClose }
                                     ))}
                                 </div>
                             )}
-                            <div className="mt-4 flex items-center justify-between gap-2">
-                                <button type="button" disabled={sampleIndex === 0} onClick={() => setSampleIndex((current) => Math.max(0, current - 1))} aria-label="Previous sample" className="flex h-9 items-center gap-1 rounded-md border border-[var(--border)] px-3 text-[10px] font-bold uppercase tracking-[0.1em] text-[var(--text-secondary)] disabled:opacity-35"><ChevronLeft size={14} /> Previous</button>
-                                <button type="button" onClick={() => sampleIndex < tutorialSampleSlots.length - 1 ? setSampleIndex((current) => current + 1) : goToStep(safeStepIndex + 1)} className="flex h-9 items-center gap-1 rounded-md bg-[var(--accent)] px-3 text-[10px] font-black uppercase tracking-[0.1em] text-[var(--bg-deep)]">{sampleIndex < tutorialSampleSlots.length - 1 ? 'Next sample' : 'How to submit'} <ChevronRight size={14} /></button>
-                            </div>
                         </div>
                     )}
 
                     {activeStep.id === 'submit' && (
                         <div data-testid="tutorial-submit-step">
-                            <p className="mx-auto max-w-md text-center text-sm leading-6 text-[var(--text-secondary)]">Your job is to choose the moments. Orbit receives the filenames and prepares the final edited delivery.</p>
-                            <ol className="mt-5 divide-y divide-[var(--border)] border-y border-[var(--border)]">
+                            <p className="mx-auto max-w-md text-center text-sm leading-6 text-[var(--text-secondary)]">Choose at your own pace. These five steps take you from the full gallery to a reviewed selection.</p>
+                            <ol data-testid="tutorial-submit-steps" className="mt-4 divide-y divide-[var(--border)] border-y border-[var(--border)]">
                                 {[
-                                    { icon: <Check size={15} />, title: 'Choose Favorites', text: 'Tap the check button on the photos you love.' },
-                                    { icon: <CheckSquare size={15} />, title: 'Review Picked', text: 'Open picked to see your current choices together.' },
-                                    { icon: <Send size={15} />, title: 'Submit When Ready', text: 'Confirm the final count. You can revise and submit again later.' },
+                                    { icon: <Images size={15} />, title: 'Browse the Gallery', text: 'Scroll through the gallery and open any photo for a closer look.' },
+                                    { icon: <ScanFace size={15} />, title: 'Filter by Selfie', text: 'Use a clear selfie to find your photos. Tap All Photos to return to the full gallery.' },
+                                    { icon: <Check size={15} />, title: 'Choose Favorites', text: 'Tap the check button on every photo you want to keep.' },
+                                    { icon: <CheckSquare size={15} />, title: 'Review Picked', text: 'Open Picked to compare your choices and remove anything before finalizing.' },
+                                    { icon: <Send size={15} />, title: 'Submit Your Selection', text: 'Confirm the final count. You can revise and submit again later.' },
                                 ].map((item, index) => (
-                                    <li key={item.title} className="flex gap-3 py-3.5">
+                                    <li key={item.title} className="flex gap-3 py-3.5 sm:py-4">
                                         <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-[var(--border)] text-[var(--text-primary)]">{item.icon}</span>
                                         <div className="min-w-0"><p className="text-xs font-semibold"><span className="mr-1.5 text-[var(--text-muted)]">{index + 1}.</span>{item.title}</p><p className="mt-1 text-xs leading-5 text-[var(--text-muted)]">{item.text}</p></div>
                                     </li>
@@ -420,20 +541,34 @@ export function TutorialModal({ galleryId, token, tutorialSampleSlots, onClose }
                     )}
 
                     {activeStep.id === 'ready' && (
-                        <div data-testid="tutorial-ready-step" className="py-4 text-center">
-                            <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full border border-[var(--accent)] text-[var(--accent)]"><Check size={22} /></div>
-                            <p className="mt-5 font-display text-2xl">Ready When You Are.</p>
-                            <p className="mx-auto mt-3 max-w-sm text-sm leading-6 text-[var(--text-secondary)]">Take your time, trust your eye, and pick the moments you want Orbit to finish beautifully.</p>
+                        <div data-testid="tutorial-ready-step" className="flex min-h-full flex-col justify-center py-3 text-center">
+                            <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full border border-[var(--accent)] text-[var(--accent)]"><Check size={24} /></div>
+                            <p className="mt-5 font-display text-2xl">Ready When You Are</p>
+                            <p className="mx-auto mt-3 max-w-sm text-sm leading-6 text-[var(--text-secondary)]">Take your time and trust your eye. There is no pressure to finish everything in one visit.</p>
+                            <div data-testid="tutorial-ready-checklist" className="mx-auto mt-7 w-full max-w-sm divide-y divide-[var(--border)] border-y border-[var(--border)] text-left">
+                                {[
+                                    ['Choose What Feels Meaningful', 'Keep the moments that tell your story, not only the technically perfect frames.'],
+                                    ['Review Before Submitting', 'Use Picked to see your selection together and check the final count.'],
+                                    ['Revise Whenever Needed', 'Your latest submission can be updated later while the gallery remains open.'],
+                                ].map(([title, text]) => (
+                                    <div key={title} className="flex gap-3 py-3.5">
+                                        <span className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-[var(--accent)] text-[var(--bg-deep)]"><Check size={13} strokeWidth={2.5} /></span>
+                                        <div><p className="text-xs font-semibold text-[var(--text-primary)]">{title}</p><p className="mt-1 text-xs leading-5 text-[var(--text-muted)]">{text}</p></div>
+                                    </div>
+                                ))}
+                            </div>
                         </div>
                     )}
                 </div>
 
-                <footer className="flex items-center justify-between gap-2 border-t border-[var(--border)] p-4">
-                    <button type="button" disabled={safeStepIndex === 0} onClick={() => goToStep(safeStepIndex - 1)} className="flex h-10 items-center gap-1 rounded-md border border-[var(--border)] px-3 text-[10px] font-bold uppercase tracking-[0.1em] text-[var(--text-secondary)] disabled:invisible"><ChevronLeft size={14} /> Back</button>
-                    {activeStep.id === 'ready' ? (
-                        <button type="button" onClick={onClose} className="flex h-10 flex-1 items-center justify-center rounded-md bg-[var(--accent)] text-[10px] font-black uppercase tracking-[0.12em] text-[var(--bg-deep)] transition-opacity hover:opacity-85">Start selecting</button>
+                <footer data-testid="tutorial-footer" className="flex shrink-0 items-center justify-between gap-2 border-t border-[var(--border)] bg-[var(--bg-card)] p-3.5 sm:p-4">
+                    <button type="button" disabled={activeStep.id === 'confidence' ? sampleIndex === 0 : safeStepIndex === 0} onClick={() => activeStep.id === 'confidence' ? setSampleIndex((current) => Math.max(0, current - 1)) : goToStep(safeStepIndex - 1)} className="flex h-10 items-center gap-1 rounded-md border border-[var(--border)] px-3 text-[10px] font-bold uppercase tracking-[0.1em] text-[var(--text-secondary)] transition-transform duration-150 ease-out active:scale-[0.97] disabled:invisible motion-reduce:transition-none"><ChevronLeft size={14} /> {activeStep.id === 'confidence' ? 'Previous' : 'Back'}</button>
+                    {activeStep.id === 'confidence' ? (
+                        <button type="button" onClick={() => sampleIndex < tutorialSampleSlots.length - 1 ? setSampleIndex((current) => current + 1) : goToStep(safeStepIndex + 1)} className="flex h-10 items-center gap-1 rounded-md bg-[var(--accent)] px-3 text-[10px] font-black uppercase tracking-[0.1em] text-[var(--bg-deep)] transition-transform duration-150 ease-out active:scale-[0.97] motion-reduce:transition-none">{sampleIndex < tutorialSampleSlots.length - 1 ? 'Next sample' : 'How to submit'} <ChevronRight size={14} /></button>
+                    ) : activeStep.id === 'ready' ? (
+                        <button type="button" onClick={onClose} className="flex h-10 flex-1 items-center justify-center rounded-md bg-[var(--accent)] text-[10px] font-black uppercase tracking-[0.12em] text-[var(--bg-deep)] transition-[transform,opacity] duration-150 ease-out hover:opacity-85 active:scale-[0.98] motion-reduce:transition-none">Start selecting</button>
                     ) : activeStep.id === 'submit' ? (
-                        <button type="button" onClick={() => goToStep(safeStepIndex + 1)} className="flex h-10 items-center gap-1 rounded-md bg-[var(--accent)] px-3 text-[10px] font-black uppercase tracking-[0.1em] text-[var(--bg-deep)]">Ready To Choose <ChevronRight size={14} /></button>
+                        <button type="button" onClick={() => goToStep(safeStepIndex + 1)} className="flex h-10 items-center gap-1 rounded-md bg-[var(--accent)] px-3 text-[10px] font-black uppercase tracking-[0.1em] text-[var(--bg-deep)] transition-transform duration-150 ease-out active:scale-[0.97] motion-reduce:transition-none">Ready To Choose <ChevronRight size={14} /></button>
                     ) : null}
                 </footer>
             </section>

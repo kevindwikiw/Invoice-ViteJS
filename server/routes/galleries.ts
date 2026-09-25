@@ -1178,13 +1178,16 @@ async function serveTutorialImage(c: Context<Env>, slot: number, variant: string
     if (!fileId) return c.json({ error: "Tutorial image is not configured." }, 404);
 
     try {
+        const metadata = await getDrivePhotoMetadata(fileId);
         let driveResponse: Response;
-        try {
-            driveResponse = await fetchDriveFile(fileId, undefined, 1600, true);
-        } catch {
-            const metadata = await getDrivePhotoMetadata(fileId);
-            if (!metadata.thumbnailLink) throw new Error("Google Drive did not return a thumbnail for this tutorial image.");
-            driveResponse = await fetchDriveFile(fileId, metadata.thumbnailLink, 1600, true);
+        if (metadata.thumbnailLink) {
+            try {
+                driveResponse = await fetchDriveFile(fileId, metadata.thumbnailLink, 1280, true);
+            } catch {
+                driveResponse = await fetchDriveFile(fileId);
+            }
+        } else {
+            driveResponse = await fetchDriveFile(fileId);
         }
         return new Response(driveResponse.body, {
             headers: {

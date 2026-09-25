@@ -96,7 +96,7 @@ async function expectMobileGalleryViewport(page: Page, width: number, height: nu
     const layout = await page.evaluate(() => {
         const grid = document.querySelector('[data-testid="gallery-grid"]')?.getBoundingClientRect();
         const submit = [...document.querySelectorAll('button')].find((button) => button.textContent?.trim() === 'Submit')?.getBoundingClientRect();
-        const visibleTiles = [...document.querySelectorAll('button[aria-label^="Open Full Frame Test Gallery"]')]
+        const visibleTiles = [...document.querySelectorAll('button[aria-label^="Open photo-"]')]
             .filter((node) => {
                 const rect = node.getBoundingClientRect();
                 return rect.width > 0 && rect.height > 0 && rect.top < window.innerHeight && rect.bottom > 0;
@@ -152,7 +152,7 @@ test('opens photo 101 on page 2 by driveFileId and keeps the full frame above th
     });
 
     await page.goto(`/culling/${galleryId}`);
-    await expect(page.getByRole('button', { name: /^Open Full Frame Test Gallery/ })).toHaveCount(54);
+    await expect(page.getByRole('button', { name: /^Open photo-/ })).toHaveCount(54);
     await expectMobileGalleryViewport(page, 375, 667);
     await expectMobileGalleryViewport(page, 390, 844);
     await expectMobileGalleryViewport(page, 414, 896);
@@ -162,14 +162,14 @@ test('opens photo 101 on page 2 by driveFileId and keeps the full frame above th
     await nextPage.click();
     await expect.poll(() => secondPageRequests).toBeGreaterThan(0);
     await expect(page.getByText('Page 2 of 2')).toBeVisible();
-    await expect(page.getByRole('button', { name: /^Open Full Frame Test Gallery/ })).toHaveCount(47);
+    await expect(page.getByRole('button', { name: /^Open photo-/ })).toHaveCount(47);
 
-    const lastPhoto = page.getByRole('button', { name: 'Open Full Frame Test Gallery 101' });
+    const lastPhoto = page.getByRole('button', { name: 'Open photo-101.jpg' });
     await lastPhoto.scrollIntoViewIfNeeded();
     await expect(lastPhoto).toBeVisible();
     await lastPhoto.click();
 
-    await expect(page.getByTestId('gallery-lightbox-footer').getByText('Full Frame Test Gallery 101', { exact: true })).toBeVisible();
+    await expect(page.getByTestId('gallery-lightbox-footer').getByText('photo-101.jpg', { exact: true })).toBeVisible();
     const image = page.getByTestId('gallery-lightbox-image');
     await expect(image).toHaveAttribute('src', /\/file-101\/preview\?/);
     await expectLightboxFrame(page, 1600 / 1067);
@@ -264,19 +264,19 @@ test('continues the lightbox across page boundaries', async ({ page }) => {
 
     await page.goto(`/culling/${id}`);
     await expect.poll(() => requestedPageSizes[0]).toBe('54');
-    await page.getByRole('button', { name: 'Open Full Frame Test Gallery 54' }).click();
-    await expect(page.getByTestId('gallery-lightbox-footer').getByText('Full Frame Test Gallery 54', { exact: true })).toBeVisible();
+    await page.getByRole('button', { name: 'Open photo-054.jpg' }).click();
+    await expect(page.getByTestId('gallery-lightbox-footer').getByText('photo-054.jpg', { exact: true })).toBeVisible();
 
     await page.getByRole('button', { name: 'Next photo' }).click();
-    await expect(page.getByTestId('gallery-lightbox-footer').getByText('Full Frame Test Gallery 55', { exact: true })).toBeVisible();
+    await expect(page.getByTestId('gallery-lightbox-footer').getByText('photo-055.jpg', { exact: true })).toBeVisible();
     await expect(page.getByTestId('gallery-lightbox-footer').getByText('55 / 101')).toBeVisible();
 
     await page.keyboard.press('ArrowLeft');
-    await expect(page.getByTestId('gallery-lightbox-footer').getByText('Full Frame Test Gallery 54', { exact: true })).toBeVisible();
+    await expect(page.getByTestId('gallery-lightbox-footer').getByText('photo-054.jpg', { exact: true })).toBeVisible();
     await expect(page.getByTestId('gallery-lightbox-footer').getByText('54 / 101')).toBeVisible();
 
     await page.keyboard.press('ArrowRight');
-    await expect(page.getByTestId('gallery-lightbox-footer').getByText('Full Frame Test Gallery 55', { exact: true })).toBeVisible();
+    await expect(page.getByTestId('gallery-lightbox-footer').getByText('photo-055.jpg', { exact: true })).toBeVisible();
 });
 
 test('locks an open gallery when its countdown reaches zero', async ({ page }) => {
@@ -306,7 +306,7 @@ test('locks an open gallery when its countdown reaches zero', async ({ page }) =
     await expect(page.getByText('The selection deadline has ended. Please contact the admin if you need more time.')).toBeVisible();
 });
 
-test('keeps long Google Drive filenames below the image and uses a short client label', async ({ page }) => {
+test('keeps long Google Drive filenames below the image without covering the photo', async ({ page }) => {
     const id = 'long-name-gallery';
     const longName = 'Copy of P150018-with-a-very-long-google-drive-duplicate-name-that-should-not-cover-the-photo-final-v2.jpg';
     await page.setViewportSize({ width: 375, height: 667 });
@@ -328,26 +328,30 @@ test('keeps long Google Drive filenames below the image and uses a short client 
     await page.route(`**/api/public/galleries/${id}/photos/*/thumbnail?*`, (route) => fulfillImage(route, 320, 320));
 
     await page.goto(`/culling/${id}`);
-    const opener = page.getByRole('button', { name: 'Open Kevin Prewedding 01' });
+    const opener = page.getByRole('button', { name: `Open ${longName}` });
     await expect(opener).toBeVisible();
-    await expect(page.getByText('Kevin Prewedding 01', { exact: true })).toBeVisible();
-    await expect(page.getByText(longName)).toHaveCount(0);
+    const filenameLabel = page.locator('p').filter({ hasText: longName }).first();
+    await expect(filenameLabel).toBeVisible();
+    await expect(filenameLabel).toHaveAttribute('title', longName);
 
-    const layout = await page.evaluate(() => {
-        const openerElement = document.querySelector('button[aria-label="Open Kevin Prewedding 01"]');
+    const layout = await page.evaluate((filename) => {
+        const openerElement = [...document.querySelectorAll('button')].find((node) => node.getAttribute('aria-label') === `Open ${filename}`);
         const tile = openerElement?.closest('article')?.getBoundingClientRect();
         const image = openerElement?.getBoundingClientRect();
-        const label = [...document.querySelectorAll('p')].find((node) => node.textContent === 'Kevin Prewedding 01')?.getBoundingClientRect();
+        const labelElement = [...document.querySelectorAll('p')].find((node) => node.textContent === filename);
+        const label = labelElement?.getBoundingClientRect();
         return {
             imageBottom: image?.bottom ?? 0,
             imageHeight: image?.height ?? 0,
             labelTop: label?.top ?? 0,
             tileHeight: tile?.height ?? 0,
+            labelIsTruncated: Boolean(labelElement && labelElement.scrollWidth > labelElement.clientWidth),
         };
-    });
+    }, longName);
 
     expect(layout.labelTop).toBeGreaterThanOrEqual(layout.imageBottom - 1);
     expect(layout.tileHeight).toBeGreaterThan(layout.imageHeight);
+    expect(layout.labelIsTruncated).toBe(true);
 });
 
 test('keeps draft selections through reload and clears the unsaved status after submit', async ({ page }) => {
@@ -373,11 +377,11 @@ test('keeps draft selections through reload and clears the unsaved status after 
     }));
 
     await page.goto(`/culling/${id}`);
-    await page.getByRole('button', { name: 'Select Full Frame Test Gallery 01' }).click();
+    await page.getByRole('button', { name: 'Select photo-001.jpg' }).click();
     await expect(page.getByText('Not submitted')).toBeVisible();
 
     await page.reload();
-    await expect(page.getByRole('button', { name: 'Remove Full Frame Test Gallery 01' })).toHaveAttribute('aria-pressed', 'true');
+    await expect(page.getByRole('button', { name: 'Remove photo-001.jpg' })).toHaveAttribute('aria-pressed', 'true');
     await expect(page.getByText('Not submitted')).toBeVisible();
 
     await page.getByRole('button', { name: 'Submit', exact: true }).click();
@@ -405,6 +409,9 @@ test('shows the before and edited tutorial slider with pointer and keyboard cont
     const id = 'tutorial-slider-gallery';
     await page.setViewportSize({ width: 390, height: 844 });
     await installSession(page, id);
+    const tutorialRequests = new Set<string>();
+    let releaseFirstBefore!: () => void;
+    const firstBeforeGate = new Promise<void>((resolve) => { releaseFirstBefore = resolve; });
 
     await page.route(`**/api/public/galleries/${id}/contact`, (route) => route.fulfill({ json: {} }));
     await page.route(`**/api/public/galleries/${id}/photos?*`, (route) => route.fulfill({
@@ -420,21 +427,59 @@ test('shows the before and edited tutorial slider with pointer and keyboard cont
         },
     }));
     await page.route(`**/api/public/galleries/${id}/photos/*/thumbnail?*`, (route) => fulfillImage(route, 320, 320));
-    await page.route(`**/api/public/galleries/${id}/tutorial/*/before?*`, (route) => fulfillImage(route, 1600, 1067));
-    await page.route(`**/api/public/galleries/${id}/tutorial/*/after?*`, (route) => fulfillImage(route, 1600, 1067));
+    await page.route(`**/api/public/galleries/${id}/tutorial/*/before?*`, (route) => {
+        const slot = Number(new URL(route.request().url()).pathname.match(/\/tutorial\/(\d+)\/before$/)?.[1] || 1);
+        tutorialRequests.add(`${slot}:before`);
+        return (async () => {
+            if (slot === 1) await firstBeforeGate;
+            if (slot === 2) return fulfillImage(route, 1067, 1600);
+            if (slot === 3) return fulfillImage(route, 1200, 1200);
+            return fulfillImage(route, 1600, 1067);
+        })();
+    });
+    await page.route(`**/api/public/galleries/${id}/tutorial/*/after?*`, (route) => {
+        const slot = Number(new URL(route.request().url()).pathname.match(/\/tutorial\/(\d+)\/after$/)?.[1] || 1);
+        tutorialRequests.add(`${slot}:after`);
+        if (slot === 2) return fulfillImage(route, 1067, 1600);
+        if (slot === 3) return fulfillImage(route, 1200, 1200);
+        return fulfillImage(route, 1600, 1067);
+    });
 
     await page.goto(`/culling/${id}`);
     await page.getByRole('button', { name: 'How to submit' }).click();
     await expect(page.getByTestId('tutorial-confidence-step')).toBeVisible();
     await expect(page.getByText('Sample 01 / 03')).toBeVisible();
-    await expect(page.getByAltText('Before editing sample')).toBeVisible();
-    await expect(page.getByAltText('Edited result sample')).toBeVisible();
+    const beforeImage = page.getByAltText('Before editing sample');
+    const afterImage = page.getByAltText('Edited result sample');
+    await expect(page.getByTestId('tutorial-image-placeholder')).toBeVisible();
+    await expect(beforeImage).toHaveCSS('opacity', '0');
+    await expect(afterImage).toHaveCSS('opacity', '0');
+    await expect(page.getByTestId('tutorial-slider-handle')).toHaveCount(0);
+    releaseFirstBefore();
+    await expect(page.getByTestId('tutorial-image-loading')).toHaveCount(0);
+    await expect(beforeImage).toHaveCSS('opacity', '1');
+    await expect(afterImage).toHaveCSS('opacity', '1');
+    await expect.poll(() => tutorialRequests.size).toBe(6);
 
+    const panel = page.getByTestId('tutorial-panel');
+    const initialPanelBox = await panel.boundingBox();
+    expect(initialPanelBox).not.toBeNull();
     const handle = page.getByTestId('tutorial-slider-handle');
     await expect(handle).toHaveAttribute('aria-valuenow', '50');
+    const mediaSlot = page.getByTestId('tutorial-media-slot');
+    const initialMediaSlotBox = await mediaSlot.boundingBox();
     const slider = page.getByTestId('tutorial-before-after-slider');
+    await expect.poll(async () => {
+        const box = await slider.boundingBox();
+        return (box?.width ?? 0) / (box?.height ?? 1);
+    }).toBeCloseTo(1600 / 1067, 1);
     const sliderBox = await slider.boundingBox();
     expect(sliderBox).not.toBeNull();
+    expect(initialMediaSlotBox).not.toBeNull();
+    await expect(slider).toHaveCSS('touch-action', 'pan-y');
+    const dividers = page.getByTestId('tutorial-slider-divider');
+    await expect(dividers).toHaveCount(2);
+    expect((await dividers.nth(0).boundingBox())?.height).toBeLessThan((sliderBox?.height ?? 0) / 2);
     await page.mouse.move((sliderBox?.x ?? 0) + (sliderBox?.width ?? 0) * 0.25, (sliderBox?.y ?? 0) + (sliderBox?.height ?? 0) / 2);
     await page.mouse.down();
     await page.mouse.move((sliderBox?.x ?? 0) + (sliderBox?.width ?? 0) * 0.75, (sliderBox?.y ?? 0) + (sliderBox?.height ?? 0) / 2);
@@ -447,17 +492,81 @@ test('shows the before and edited tutorial slider with pointer and keyboard cont
 
     await page.getByRole('button', { name: 'Next sample' }).click();
     await expect(page.getByText('Sample 02 / 03')).toBeVisible();
+    await expect(page.getByAltText('Before editing sample')).toBeVisible();
+    await expect.poll(async () => {
+        const box = await slider.boundingBox();
+        return (box?.width ?? 0) / (box?.height ?? 1);
+    }).toBeCloseTo(1067 / 1600, 1);
+    const portraitSliderBox = await slider.boundingBox();
+    const portraitMediaSlotBox = await mediaSlot.boundingBox();
+    expect(portraitMediaSlotBox?.width).toBeCloseTo(initialMediaSlotBox?.width ?? 0, 0);
+    expect(portraitMediaSlotBox?.height).toBeCloseTo(initialMediaSlotBox?.height ?? 0, 0);
+    expect(portraitSliderBox?.height ?? 0).toBeGreaterThan((sliderBox?.height ?? 0) * 1.35);
     await page.getByRole('button', { name: 'Next sample' }).click();
     await expect(page.getByText('Sample 03 / 03')).toBeVisible();
+    await expect(page.getByAltText('Before editing sample')).toBeVisible();
+    await expect.poll(async () => {
+        const box = await slider.boundingBox();
+        return (box?.width ?? 0) / (box?.height ?? 1);
+    }).toBeCloseTo(1, 1);
+    const squareSliderBox = await slider.boundingBox();
+    const squareMediaSlotBox = await mediaSlot.boundingBox();
+    expect(squareMediaSlotBox?.width).toBeCloseTo(initialMediaSlotBox?.width ?? 0, 0);
+    expect(squareMediaSlotBox?.height).toBeCloseTo(initialMediaSlotBox?.height ?? 0, 0);
+    expect(squareSliderBox?.height ?? 0).toBeGreaterThan(sliderBox?.height ?? 0);
+
+    await page.setViewportSize({ width: 1440, height: 900 });
+    const desktopPanelBox = await panel.boundingBox();
+    const desktopMediaSlotBox = await mediaSlot.boundingBox();
+    const desktopFooterBox = await page.getByTestId('tutorial-footer').boundingBox();
+    expect(desktopPanelBox?.width).toBeCloseTo(672, 0);
+    expect(desktopPanelBox?.height).toBeCloseTo(868, 0);
+    expect(desktopMediaSlotBox?.height).toBeCloseTo(540, 0);
+    expect((desktopFooterBox?.y ?? 0) + (desktopFooterBox?.height ?? 0)).toBeLessThanOrEqual(900);
+    await page.getByRole('button', { name: 'Previous' }).click();
+    await expect(page.getByText('Sample 02 / 03')).toBeVisible();
+    await expect.poll(async () => {
+        const box = await slider.boundingBox();
+        return (box?.width ?? 0) / (box?.height ?? 1);
+    }).toBeCloseTo(1067 / 1600, 1);
+    const desktopPortraitSliderBox = await slider.boundingBox();
+    expect(desktopPortraitSliderBox?.height ?? 0).toBeGreaterThan((portraitSliderBox?.height ?? 0) * 1.08);
+    await page.getByRole('button', { name: 'Next sample' }).click();
+    await expect(page.getByText('Sample 03 / 03')).toBeVisible();
+
+    await page.setViewportSize({ width: 320, height: 568 });
+    const compactPanelBox = await panel.boundingBox();
+    const compactFooterBox = await page.getByTestId('tutorial-footer').boundingBox();
+    expect(compactPanelBox).not.toBeNull();
+    expect(compactPanelBox?.height).toBeCloseTo(552, 0);
+    expect((compactFooterBox?.y ?? 0) + (compactFooterBox?.height ?? 0)).toBeLessThanOrEqual(568);
+    const scrollMetrics = await page.getByTestId('tutorial-scroll-area').evaluate((element) => {
+        element.scrollTop = element.scrollHeight;
+        return { clientHeight: element.clientHeight, scrollHeight: element.scrollHeight, scrollTop: element.scrollTop };
+    });
+    expect(scrollMetrics.scrollHeight).toBeGreaterThan(scrollMetrics.clientHeight);
+    expect(scrollMetrics.scrollTop).toBeGreaterThan(0);
+
     await page.getByRole('button', { name: 'How to submit', exact: true }).last().click();
     await expect(page.getByTestId('tutorial-submit-step')).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'How to Submit' })).toBeVisible();
+    await expect(page.getByTestId('tutorial-submit-steps').getByRole('listitem')).toHaveCount(5);
+    await expect.poll(async () => page.getByTestId('tutorial-scroll-area').evaluate((element) => element.scrollTop)).toBe(0);
+    const selfieStep = page.getByTestId('tutorial-submit-steps').getByRole('listitem').filter({ hasText: 'Filter by Selfie' });
+    await expect(selfieStep).toHaveCount(1);
+    await expect(selfieStep).toContainText('Tap All Photos');
+    await selfieStep.scrollIntoViewIfNeeded();
+    await expect(selfieStep).toBeVisible();
+    expect((await panel.boundingBox())?.height).toBeCloseTo(compactPanelBox?.height ?? 0, 0);
     await page.getByRole('button', { name: 'Ready to choose' }).click();
     await expect(page.getByTestId('tutorial-ready-step')).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Ready to Choose' })).toBeVisible();
+    await expect(page.getByTestId('tutorial-ready-checklist').locator(':scope > div')).toHaveCount(3);
+    expect((await panel.boundingBox())?.height).toBeCloseTo(compactPanelBox?.height ?? 0, 0);
 
     const dialog = page.getByRole('dialog', { name: 'How photo selection works' });
-    const dialogBox = await dialog.boundingBox();
-    expect(dialogBox).not.toBeNull();
-    expect((dialogBox?.y ?? 0) + (dialogBox?.height ?? 0)).toBeLessThanOrEqual(844);
+    const finalFooterBox = await page.getByTestId('tutorial-footer').boundingBox();
+    expect((finalFooterBox?.y ?? 0) + (finalFooterBox?.height ?? 0)).toBeLessThanOrEqual(568);
 
     await page.getByRole('button', { name: 'Start selecting' }).click();
     await expect(dialog).toHaveCount(0);
@@ -589,7 +698,7 @@ test('filters immediately from a selfie and keeps selection submit working', asy
     }));
 
     await page.goto(`/culling/${id}`);
-    await expect(page.getByRole('button', { name: /^Open Full Frame Test Gallery/ })).toHaveCount(54);
+    await expect(page.getByRole('button', { name: /^Open photo-/ })).toHaveCount(54);
     await page.getByRole('button', { name: 'Filter by selfie' }).click();
     const dialog = page.getByRole('dialog', { name: 'Filter by selfie' });
     await expect(dialog).toBeVisible();
@@ -640,20 +749,18 @@ test('filters immediately from a selfie and keeps selection submit working', asy
     await page.setViewportSize({ width: 390, height: 844 });
 
     await expect(page.getByRole('button', { name: 'Face (2)' })).toBeVisible();
-    await expect(page.getByRole('button', { name: /^Open Full Frame Test Gallery/ })).toHaveCount(2);
+    await expect(page.getByRole('button', { name: /^Open photo-/ })).toHaveCount(2);
     await expect(page.getByRole('button', { name: 'Next' })).toHaveCount(0);
 
-    await page.getByRole('button', { name: 'Select Full Frame Test Gallery 02' }).click();
+    await page.getByRole('button', { name: 'Select photo-002.jpg' }).click();
+    await page.getByRole('button', { name: 'All Photos', exact: true }).click();
+    await expect(page.getByRole('button', { name: 'Filter by selfie' })).toBeVisible();
+    await expect(page.getByRole('button', { name: /^Open photo-/ })).toHaveCount(54);
+    await expect(page.getByRole('button', { name: 'Next' })).toBeVisible();
     await expect(page.getByText('Not submitted')).toBeVisible();
     await page.getByRole('button', { name: 'Submit', exact: true }).click();
     await page.getByRole('button', { name: 'Submit 1' }).click();
     await expect(page.getByText('Selection saved. 1 filenames submitted.')).toBeVisible();
-
-    await page.getByRole('button', { name: 'Face (2)' }).click();
-    await dialog.getByRole('button', { name: 'Reset' }).click();
-    await dialog.getByRole('button', { name: 'Close', exact: true }).click();
-    await expect(page.getByRole('button', { name: 'Filter by selfie' })).toBeVisible();
-    await expect(page.getByRole('button', { name: 'Next' })).toBeVisible();
 
     const layout = await page.evaluate(() => ({
         scrollWidth: document.documentElement.scrollWidth,
@@ -825,7 +932,7 @@ test('hides selfie filtering offline and reveals its mobile label when the worke
     await page.goto(`/culling/${id}`);
     await expect.poll(() => statusRequests).toBeGreaterThan(0);
     await expect(page.getByRole('button', { name: 'Filter by selfie' })).toHaveCount(0);
-    await expect(page.getByRole('button', { name: /^Open Full Frame Test Gallery/ })).toHaveCount(1);
+    await expect(page.getByRole('button', { name: /^Open photo-/ })).toHaveCount(1);
     ready = true;
     const filter = page.getByRole('button', { name: 'Filter by selfie' });
     await expect(filter).toBeVisible({ timeout: 8_000 });

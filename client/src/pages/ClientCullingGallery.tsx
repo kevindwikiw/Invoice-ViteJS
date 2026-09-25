@@ -487,8 +487,12 @@ export default function ClientCullingGallery() {
                         <button
                             type="button"
                             onClick={() => {
-                                resetFaceFilter();
-                                setShowSelected((current) => !current);
+                                if (isFaceFilterActive) {
+                                    resetFaceFilter();
+                                    setShowSelected(false);
+                                } else {
+                                    setShowSelected((current) => !current);
+                                }
                                 setLightboxPhotoId(null);
                             }}
                             className={clsx(
