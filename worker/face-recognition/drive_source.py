@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections import deque
 import json
 import logging
 import math
@@ -49,6 +50,16 @@ class DriveSource:
         self._token = ""
         self._expires_at = 0.0
         self._lock = asyncio.Lock()
+        self._metadata_first_jobs: set[int] = set()
+        self._metadata_first_job_order: deque[int] = deque()
+
+    def _prefer_fresh_metadata(self, job_id: int) -> None:
+        if job_id in self._metadata_first_jobs:
+            return
+        if len(self._metadata_first_job_order) >= 64:
+            self._metadata_first_jobs.discard(self._metadata_first_job_order.popleft())
+        self._metadata_first_job_order.append(job_id)
+        self._metadata_first_jobs.add(job_id)
 
     async def token(self, rejected: str | None = None) -> str:
         async with self._lock:
@@ -122,19 +133,23 @@ class DriveSource:
     async def fetch(self, file_id: str, thumbnail: str | None, job_id: int) -> bytes:
         started = time.perf_counter()
         base = f"https://www.googleapis.com/drive/v3/files/{quote(file_id, safe='')}"
-        if thumbnail:
+        metadata_first = job_id in self._metadata_first_jobs
+        if thumbnail and not metadata_first:
             try:
                 payload = await self.thumbnail(thumbnail)
                 return self._result(payload, file_id, job_id, "thumbnail", started)
             except DriveError as error:
-                if error.code not in {"drive_fetch_failed", "drive_network_failed"}:
+                if error.code == "drive_fetch_failed":
+                    self._prefer_fresh_metadata(job_id)
+                elif error.code != "drive_network_failed":
                     raise
         try:
             metadata = json.loads(await self.get(f"{base}?supportsAllDrives=true&fields=id,thumbnailLink", 64 * 1024))
             fresh = metadata.get("thumbnailLink")
             if fresh:
                 payload = await self.thumbnail(fresh)
-                return self._result(payload, file_id, job_id, "refreshed_thumbnail", started)
+                kind = "metadata_thumbnail" if metadata_first else "refreshed_thumbnail"
+                return self._result(payload, file_id, job_id, kind, started)
         except (ValueError, TypeError, AttributeError):
             raise DriveError("drive_metadata_invalid") from None
         except DriveError as error:

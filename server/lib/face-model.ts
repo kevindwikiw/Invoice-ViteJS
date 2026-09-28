@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 
-export const FACE_MODEL_VERSION = "opencv-yunet-2023mar-sface-2021dec-1";
+// Keep in sync with worker/face-recognition/engine.py, including detection settings.
+export const FACE_MODEL_VERSION = "opencv-yunet-2023mar-sface-2021dec-nanodet-2022nov-4";
 
 export type FaceSourcePhoto = {
     driveFileId: string;

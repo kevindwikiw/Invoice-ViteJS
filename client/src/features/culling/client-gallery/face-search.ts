@@ -36,6 +36,7 @@ type FaceSearchInput = {
     token: string;
     selfieFile: File;
     sensitivity: FaceSearchSensitivity;
+    soloOnly: boolean;
     onProgress?: (progress: FaceSearchProgress) => void;
     signal?: AbortSignal;
 };
@@ -64,6 +65,7 @@ export async function runFaceSearch(input: FaceSearchInput): Promise<FaceSearchR
     const body = new FormData();
     body.append('selfie', await prepareSelfie(input.selfieFile, input.signal), 'selfie.jpg');
     body.append('sensitivity', input.sensitivity);
+    body.append('soloOnly', String(input.soloOnly));
     const response = await apiFetch(`/public/galleries/${encodeURIComponent(input.galleryId)}/face-search`, {
         method: 'POST',
         headers: { 'x-gallery-token': input.token },

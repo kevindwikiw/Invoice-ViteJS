@@ -49,6 +49,12 @@ type FaceEmbedding = {
     modelVersion: string;
 };
 
+type IndexedPhoto = {
+    driveFileId: string;
+    sourceVersion: string;
+    isSolo: boolean;
+};
+
 const MODEL_VERSION = FACE_MODEL_VERSION;
 const WORKER_URL = process.env.FACE_WORKER_URL?.trim().replace(/\/$/, "") || "";
 const WORKER_TOKEN = process.env.FACE_WORKER_TOKEN?.trim() || "";
@@ -97,7 +103,7 @@ async function workerReadiness(): Promise<{ ready: boolean; code?: string }> {
         });
         const payload = await response.json().catch(() => null) as { code?: string; model?: string; capabilities?: string[] } | null;
         if (response.ok) return payload?.model === MODEL_VERSION
-            ? ["embedding-cache-v1", "drive-direct-v1"].every((capability) => payload.capabilities?.includes(capability)) ? { ready: true } : { ready: false, code: "worker_update_required" }
+            ? ["embedding-cache-v1", "drive-direct-v1", "solo-filter-v1", "solo-person-filter-v1"].every((capability) => payload.capabilities?.includes(capability)) ? { ready: true } : { ready: false, code: "worker_update_required" }
             : { ready: false, code: "model_version_mismatch" };
         return { ready: false, code: payload?.code || "worker_not_ready" };
     } catch {
@@ -144,11 +150,12 @@ async function dispatchJob(jobId: number, galleryId: number, sourceVersion: stri
         return;
     }
 
-    const indexed = await galleryAll<{ driveFileId: string; sourceVersion: string }>(
-        'SELECT drive_file_id as "driveFileId", source_version as "sourceVersion" FROM face_index_photos WHERE gallery_id = ? AND model_version = ?',
+    const indexed = await galleryAll<{ driveFileId: string; sourceVersion: string; isSolo: number }>(
+        'SELECT drive_file_id as "driveFileId", source_version as "sourceVersion", is_solo as "isSolo" FROM face_index_photos WHERE gallery_id = ? AND model_version = ?',
         [galleryId, MODEL_VERSION],
     );
     const versions = new Map(indexed.map((photo) => [photo.driveFileId, photo.sourceVersion]));
+    const soloByFile = new Map(indexed.map((photo) => [photo.driveFileId, photo.isSolo === 1]));
     const stored = await galleryAll<{ driveFileId: string; faceIndex: number; embedding: string; boundingBox: string | null; sourceVersion: string }>(
         'SELECT drive_file_id as "driveFileId", face_index as "faceIndex", embedding, bounding_box as "boundingBox", source_version as "sourceVersion" FROM face_embeddings WHERE gallery_id = ? AND model_version = ?',
         [galleryId, MODEL_VERSION],
@@ -178,7 +185,7 @@ async function dispatchJob(jobId: number, galleryId: number, sourceVersion: stri
                 displayOrder: photo.displayOrder,
                 sourceVersion: facePhotoVersion(photo),
                 ...(versions.get(photo.driveFileId) === facePhotoVersion(photo)
-                    ? { cachedFaces: cached.get(photo.driveFileId) || [] }
+                    ? { cachedFaces: cached.get(photo.driveFileId) || [], cachedIsSolo: soloByFile.get(photo.driveFileId) === true }
                     : {}),
             })),
         }),
@@ -269,11 +276,12 @@ async function currentJob(galleryId: number): Promise<FaceIndexJob | null> {
     return job;
 }
 
-async function workerSearch(job: FaceIndexJob, selfie: File, sensitivity: string): Promise<Response> {
+async function workerSearch(job: FaceIndexJob, selfie: File, sensitivity: string, soloOnly: boolean): Promise<Response> {
     const body = new FormData();
     body.append("galleryId", String(job.galleryId));
     body.append("modelVersion", MODEL_VERSION);
     body.append("sensitivity", sensitivity);
+    body.append("soloOnly", String(soloOnly));
     body.append("sourceVersion", job.sourceVersion);
     body.append("completedJobId", String(job.id));
     body.append("selfie", selfie, selfie.name || "selfie.jpg");
@@ -312,6 +320,7 @@ async function workerSearchError(c: Context<Env>, response: Response, galleryId:
         index_changed: { status: 409, message: "This gallery changed during your search. Please try again." },
         index_unavailable: { status: 503, message: "The face index is temporarily unavailable. Please try again." },
         cache_capacity: { status: 503, message: "This gallery exceeds the worker cache capacity. Please contact the gallery owner." },
+        solo_metadata_required: { status: 503, message: "Solo photo filtering needs the gallery index to be rebuilt. Please try again shortly." },
         worker_search_failed: { status: 502, message: "Face search is temporarily unavailable. Please try again later." },
     };
     const code = typeof candidate === "string" && Object.hasOwn(errors, candidate) ? candidate : "worker_search_failed";
@@ -366,12 +375,14 @@ faceIndexRouter.post("/callbacks/jobs/:id/progress", async (c) => {
 faceIndexRouter.post("/callbacks/jobs/:id/complete", async (c) => {
     if (!internalAuthorized(c)) return jsonError(c, "Unauthorized.", 401);
     const jobId = Number(c.req.param("id"));
-    const body = await c.req.json().catch(() => ({})) as { galleryId?: unknown; modelVersion?: unknown; sourceVersion?: unknown; embeddings?: unknown };
+    const body = await c.req.json().catch(() => ({})) as { galleryId?: unknown; modelVersion?: unknown; sourceVersion?: unknown; embeddings?: unknown; indexedPhotos?: unknown };
     const galleryId = Number(body.galleryId);
     const modelVersion = String(body.modelVersion || MODEL_VERSION);
     const sourceVersion = String(body.sourceVersion || "");
     if (!Array.isArray(body.embeddings)) return jsonError(c, "Embeddings must be an array.");
+    if (!Array.isArray(body.indexedPhotos)) return jsonError(c, "Indexed photo metadata must be an array.");
     const embeddings = body.embeddings as FaceEmbedding[];
+    const indexedPhotos = body.indexedPhotos as IndexedPhoto[];
     const job = await galleryOne<{ galleryId: number; modelVersion: string; sourceVersion: string; status: string }>(
         "SELECT gallery_id as galleryId, model_version as modelVersion, source_version as sourceVersion, status FROM face_index_jobs WHERE id = ?",
         [jobId],
@@ -386,16 +397,33 @@ faceIndexRouter.post("/callbacks/jobs/:id/complete", async (c) => {
         return jsonError(c, "Gallery changed during indexing.", 409);
     }
     const versions = new Map(photos.map((photo) => [photo.driveFileId, facePhotoVersion(photo)]));
+    const indexedByFile = new Map<string, IndexedPhoto>();
+    for (const item of indexedPhotos) {
+        if (!item || typeof item.driveFileId !== "string" || typeof item.sourceVersion !== "string" || typeof item.isSolo !== "boolean"
+            || versions.get(item.driveFileId) !== item.sourceVersion || indexedByFile.has(item.driveFileId)) {
+            return jsonError(c, "Invalid indexed photo metadata.", 400);
+        }
+        indexedByFile.set(item.driveFileId, item);
+    }
+    if (indexedByFile.size !== photos.length || photos.some((photo) => !indexedByFile.has(photo.driveFileId))) {
+        return jsonError(c, "Indexed photo metadata is incomplete.", 400);
+    }
     const keys = new Set<string>();
+    const embeddingCounts = new Map<string, number>();
     for (const item of embeddings) {
         const key = `${item?.driveFileId}:${item?.faceIndex}`;
         if (!item || versions.get(item.driveFileId) !== item.sourceVersion
+            || !indexedByFile.has(item.driveFileId)
             || !Number.isInteger(item.faceIndex) || item.faceIndex < 0 || keys.has(key)
             || !Array.isArray(item.embedding) || item.embedding.length !== 128
             || item.embedding.some((value) => typeof value !== "number" || !Number.isFinite(value))) {
             return jsonError(c, "Invalid face embeddings.", 400);
         }
         keys.add(key);
+        embeddingCounts.set(item.driveFileId, (embeddingCounts.get(item.driveFileId) || 0) + 1);
+    }
+    if (indexedPhotos.some((photo) => photo.isSolo && embeddingCounts.get(photo.driveFileId) !== 1)) {
+        return jsonError(c, "Solo photo metadata does not match its face embeddings.", 400);
     }
 
     // Recheck inside the transaction so a stale/failure callback cannot replace
@@ -409,8 +437,8 @@ faceIndexRouter.post("/callbacks/jobs/:id/complete", async (c) => {
         { sql: `DELETE FROM face_embeddings WHERE gallery_id = ? AND model_version = ? AND ${active}`, params: [galleryId, modelVersion, jobId] },
         { sql: `DELETE FROM face_index_photos WHERE gallery_id = ? AND model_version = ? AND ${active}`, params: [galleryId, modelVersion, jobId] },
         ...photos.map((photo) => ({
-            sql: `INSERT INTO face_index_photos (gallery_id, drive_file_id, source_version, model_version) SELECT ?, ?, ?, ? WHERE ${active}`,
-            params: [galleryId, photo.driveFileId, facePhotoVersion(photo), modelVersion, jobId],
+            sql: `INSERT INTO face_index_photos (gallery_id, drive_file_id, source_version, model_version, is_solo) SELECT ?, ?, ?, ?, ? WHERE ${active}`,
+            params: [galleryId, photo.driveFileId, facePhotoVersion(photo), modelVersion, indexedByFile.get(photo.driveFileId)!.isSolo ? 1 : 0, jobId],
         })),
         ...embeddings.flatMap((item) => {
             if (!item || typeof item.driveFileId !== "string" || !Array.isArray(item.embedding)) return [];
@@ -444,12 +472,13 @@ faceIndexRouter.get("/indexes/:jobId", async (c) => {
     // The LEFT JOIN preserves a valid completed index containing zero faces.
     const rows = await galleryAll<{
         galleryId: number; modelVersion: string; sourceVersion: string;
-        driveFileId: string | null; faceIndex: number | null; embedding: string | null;
+        driveFileId: string | null; faceIndex: number | null; embedding: string | null; isSolo: number | null;
     }>(`
         SELECT j.gallery_id AS "galleryId", j.model_version AS "modelVersion", j.source_version AS "sourceVersion",
-            e.drive_file_id AS "driveFileId", e.face_index AS "faceIndex", e.embedding
+            e.drive_file_id AS "driveFileId", e.face_index AS "faceIndex", e.embedding, p.is_solo AS "isSolo"
         FROM face_index_jobs j JOIN galleries g ON g.id = j.gallery_id
         LEFT JOIN face_embeddings e ON e.gallery_id = j.gallery_id AND e.model_version = j.model_version
+        LEFT JOIN face_index_photos p ON p.gallery_id = e.gallery_id AND p.drive_file_id = e.drive_file_id AND p.model_version = e.model_version
         WHERE j.id = ? AND j.status = 'completed' AND g.face_source_version = j.source_version
         AND NOT EXISTS (SELECT 1 FROM face_index_jobs newer WHERE newer.gallery_id = j.gallery_id
             AND newer.model_version = j.model_version AND newer.status = 'completed' AND newer.id > j.id)
@@ -459,8 +488,9 @@ faceIndexRouter.get("/indexes/:jobId", async (c) => {
     const first = rows[0]!;
     c.header("Cache-Control", "no-store");
     return c.json({ galleryId: first.galleryId, modelVersion: first.modelVersion, sourceVersion: first.sourceVersion,
+        soloMetadata: true,
         completedJobId: id, embeddings: rows.filter((row) => row.embedding !== null).map((row) => ({
-            driveFileId: row.driveFileId, faceIndex: row.faceIndex, embedding: JSON.parse(row.embedding!),
+            driveFileId: row.driveFileId, faceIndex: row.faceIndex, embedding: JSON.parse(row.embedding!), isSolo: row.isSolo === 1,
         })) });
 });
 
@@ -559,6 +589,9 @@ export async function handlePublicFaceSearch(
     catch { return jsonError(c, "Invalid selfie form.", 400, "invalid_selfie"); }
     const selfie = form.get("selfie");
     const sensitivity = String(form.get("sensitivity") || "balanced");
+    const soloOnlyValue = form.get("soloOnly");
+    if (soloOnlyValue !== null && soloOnlyValue !== "true" && soloOnlyValue !== "false") return jsonError(c, "Invalid solo photo option.", 400, "invalid_search_form");
+    const soloOnly = soloOnlyValue === "true";
     if (!(selfie instanceof File)) return jsonError(c, "Selfie image is required.");
     if (selfie.size > MAX_SELFIE_BYTES) return jsonError(c, "Selfie image is too large.", 413, "selfie_too_large");
     let job: FaceIndexJob | null;
@@ -573,7 +606,7 @@ export async function handlePublicFaceSearch(
         return jsonError(c, "Face search is temporarily unavailable.", 503);
     }
     try {
-        const response = await workerSearch(job, selfie, sensitivity);
+        const response = await workerSearch(job, selfie, sensitivity, soloOnly);
         if (!response.ok) {
             return workerSearchError(c, response, galleryId);
         }
@@ -603,12 +636,15 @@ faceIndexRouter.post("/search", async (c) => {
     const galleryId = Number(form.get("galleryId"));
     const selfie = form.get("selfie");
     const sensitivity = String(form.get("sensitivity") || "balanced");
+    const soloOnlyValue = form.get("soloOnly");
+    if (soloOnlyValue !== null && soloOnlyValue !== "true" && soloOnlyValue !== "false") return jsonError(c, "Invalid solo photo option.", 400, "invalid_search_form");
+    const soloOnly = soloOnlyValue === "true";
     if (!Number.isInteger(galleryId) || !(selfie instanceof File)) return jsonError(c, "galleryId and selfie are required.");
     if (selfie.size > MAX_SELFIE_BYTES) return jsonError(c, "Selfie image is too large.", 413, "selfie_too_large");
     try {
         const job = await currentJob(galleryId);
         if (!job || job.status !== "completed") return jsonError(c, "Index is not ready.", 409, "index_changed");
-        const response = await workerSearch(job, selfie, sensitivity);
+        const response = await workerSearch(job, selfie, sensitivity, soloOnly);
         if (!response.ok) return workerSearchError(c, response, galleryId);
         const latest = await currentJob(galleryId);
         if (latest?.id !== job.id || latest.status !== "completed") return jsonError(c, "Index changed.", 409, "index_changed");

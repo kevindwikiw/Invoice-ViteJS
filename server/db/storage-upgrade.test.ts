@@ -21,6 +21,8 @@ for (const legacy of [true, false]) {
                     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
                 )\`);
                 db.exec(\`INSERT INTO face_index_jobs (gallery_id, model_version, status, total, processed) VALUES (1, 'old-model', 'completed', 3, 3)\`);
+                db.exec(\`CREATE TABLE face_index_photos (gallery_id INTEGER NOT NULL, drive_file_id TEXT NOT NULL, source_version TEXT NOT NULL, model_version TEXT NOT NULL, PRIMARY KEY (gallery_id, drive_file_id, model_version))\`);
+                db.exec(\`INSERT INTO face_index_photos (gallery_id, drive_file_id, source_version, model_version) VALUES (1, 'legacy-photo', 'v1', 'old-model')\`);
             }
             const { ensureGalleryStorage, galleryRun } = await import('./db/galleries');
             const { remainingRateLimit, hitRateLimit, resetRateLimitKey, resetRateLimitSuffixes } = await import('./db/rate-limit');
@@ -30,10 +32,13 @@ for (const legacy of [true, false]) {
             assert(db.query('PRAGMA table_info(rate_limits)').all().some(c => c.name === 'rate_key'));
             assert(db.query('PRAGMA table_info(galleries)').all().some(c => c.name === 'face_source_version'));
             assert(db.query('PRAGMA table_info(galleries)').all().some(c => c.name === 'face_source_revision'));
+            assert(db.query('PRAGMA table_info(face_index_photos)').all().some(c => c.name === 'is_solo'));
             assert.equal(db.query("SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'trigger' AND name IN ('face_source_insert', 'face_source_delete', 'face_source_update')").get().n, 3);
             if (${legacy}) {
                 assert.deepEqual(db.query('SELECT status, total, processed, source_version FROM face_index_jobs').get(),
                     { status: 'completed', total: 3, processed: 3, source_version: '' });
+                assert.deepEqual(db.query('SELECT drive_file_id, is_solo FROM face_index_photos').get(),
+                    { drive_file_id: 'legacy-photo', is_solo: 0 });
                 assert.equal(await remainingRateLimit('login:test', 2, 1000), 0);
                 assert.equal((await hitRateLimit('login:test', 1000, 2, 1000)).allowed, false);
                 assert.equal((await hitRateLimit('login:test', 1000, 2, 2000)).count, 1);
@@ -51,7 +56,7 @@ for (const legacy of [true, false]) {
             process.env.FACE_WORKER_URL = 'http://worker.test';
             process.env.FACE_WORKER_TOKEN = 'test';
             const { FACE_MODEL_VERSION } = await import('./lib/face-model');
-            globalThis.fetch = async () => Response.json({ model: FACE_MODEL_VERSION, capabilities: ['embedding-cache-v1', 'drive-direct-v1'] });
+            globalThis.fetch = async () => Response.json({ model: FACE_MODEL_VERSION, capabilities: ['embedding-cache-v1', 'drive-direct-v1', 'solo-filter-v1', 'solo-person-filter-v1'] });
             const { publicFaceSearchStatus } = await import('./routes/face-index');
             const status = await publicFaceSearchStatus(1);
             assert.equal(status.available, true);

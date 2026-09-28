@@ -16,7 +16,8 @@ from engine import Face, MODEL_VERSION
 
 KEY = IndexKey(1, MODEL_VERSION, "a" * 64, 1)
 VECTOR = [1.0] + [0.0] * 127
-RECORDS = [{"driveFileId": "a", "embedding": VECTOR}, {"driveFileId": "a", "embedding": VECTOR}]
+RECORDS = [{"driveFileId": "a", "embedding": VECTOR, "isSolo": False}, {"driveFileId": "a", "embedding": VECTOR, "isSolo": False}]
+SOLO_RECORDS = [*RECORDS, {"driveFileId": "solo", "embedding": VECTOR, "isSolo": True}]
 
 
 class CacheTests(unittest.IsolatedAsyncioTestCase):
@@ -40,7 +41,17 @@ class CacheTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(loader.await_count, 1)
         self.assertFalse(result.matrix.flags.writeable)
         self.assertEqual(result.match(np.array(VECTOR, dtype=np.float32), .637), [{"driveFileId": "a", "distance": 0.0}])
+        self.assertEqual(result.match(np.array(VECTOR, dtype=np.float32), .637, True), [])
         await cache.close()
+
+    async def test_solo_metadata_still_requires_exactly_one_valid_embedding(self):
+        index = prepare_index([
+            {"driveFileId": "valid", "embedding": VECTOR, "isSolo": True},
+            {"driveFileId": "invalid", "embedding": VECTOR, "isSolo": True},
+            {"driveFileId": "invalid", "embedding": VECTOR, "isSolo": True},
+        ], True)
+        matches = index.match(np.array(VECTOR, dtype=np.float32), .637, True)
+        self.assertEqual(matches, [{"driveFileId": "valid", "distance": 0.0}])
 
     async def test_at_most_two_fills_and_keys_include_all_version_fields(self):
         cache = EmbeddingCache(1_000_000, 16, 900)
@@ -122,7 +133,7 @@ class CachedSearchTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.calls = 0
         self.snapshot = {"galleryId": 1, "modelVersion": MODEL_VERSION, "sourceVersion": KEY.source_version,
-                         "completedJobId": 1, "embeddings": RECORDS}
+                         "completedJobId": 1, "soloMetadata": True, "embeddings": RECORDS}
         self.callback_status = 200
         async def callback(request):
             self.calls += 1
@@ -149,9 +160,9 @@ class CachedSearchTests(unittest.IsolatedAsyncioTestCase):
         for p in reversed(self.patches):
             p.stop()
 
-    async def search(self):
+    async def search(self, solo_only=False):
         return await self.client.post("/v1/search", data={"galleryId": "1", "modelVersion": MODEL_VERSION,
-            "sourceVersion": KEY.source_version, "completedJobId": "1", "sensitivity": "balanced"},
+            "sourceVersion": KEY.source_version, "completedJobId": "1", "sensitivity": "balanced", "soloOnly": str(solo_only).lower()},
             files={"selfie": ("selfie.jpg", self.selfie, "image/jpeg")})
 
     async def test_cold_and_warm_match_legacy_without_another_transfer(self):
@@ -162,6 +173,22 @@ class CachedSearchTests(unittest.IsolatedAsyncioTestCase):
         legacy = await self.client.post("/v1/search", data={"galleryId":"1", "embeddings":json.dumps(RECORDS)}, files={"selfie":("selfie.jpg",self.selfie,"image/jpeg")})
         self.assertEqual(legacy.json(), cold.json())
         self.assertIn("embedding-cache-v1", (await self.client.get("/readyz")).json()["capabilities"])
+        self.assertIn("solo-filter-v1", (await self.client.get("/readyz")).json()["capabilities"])
+        self.assertIn("solo-person-filter-v1", (await self.client.get("/readyz")).json()["capabilities"])
+
+    async def test_solo_filter_uses_cached_person_metadata_and_rejects_legacy_payloads(self):
+        self.snapshot["embeddings"] = SOLO_RECORDS
+        cached = await self.search(solo_only=True)
+        legacy = await self.client.post("/v1/search", data={"galleryId": "1", "embeddings": json.dumps(SOLO_RECORDS), "soloOnly": "true"}, files={"selfie": ("selfie.jpg", self.selfie, "image/jpeg")})
+        self.assertEqual(cached.status_code, 200, cached.text)
+        self.assertEqual(cached.json()["matches"], [{"driveFileId": "solo", "distance": 0.0}])
+        self.assertEqual(legacy.status_code, 409)
+        self.assertEqual(legacy.json()["detail"]["code"], "solo_metadata_required")
+        warm = await self.search(solo_only=True)
+        self.assertEqual(warm.json(), cached.json())
+        unfiltered = await self.search(solo_only=False)
+        self.assertEqual([match["driveFileId"] for match in unfiltered.json()["matches"]], ["a", "solo"])
+        self.assertEqual(self.calls, 1)
 
     async def test_changed_index_and_callback_failure_are_not_cached(self):
         self.snapshot["completedJobId"] = 2

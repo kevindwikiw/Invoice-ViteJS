@@ -134,6 +134,7 @@ const GALLERY_SCHEMA = [
         drive_file_id TEXT NOT NULL,
         source_version TEXT NOT NULL,
         model_version TEXT NOT NULL,
+        is_solo INTEGER NOT NULL DEFAULT 0,
         PRIMARY KEY (gallery_id, drive_file_id, model_version)
     )`,
     `CREATE TABLE IF NOT EXISTS gallery_edit_requests (id INTEGER PRIMARY KEY AUTOINCREMENT, gallery_id INTEGER NOT NULL REFERENCES galleries(id) ON DELETE CASCADE, requested_additional_count INTEGER NOT NULL, pricing_mode TEXT NOT NULL, package_id INTEGER, unit_price INTEGER, quoted_total INTEGER, status TEXT NOT NULL DEFAULT 'pending', client_note TEXT, admin_note TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)`,
@@ -211,7 +212,11 @@ const FACE_INDEX_JOB_REQUIRED_COLUMNS: Array<readonly [string, string]> = [
     ["source_version", "TEXT NOT NULL DEFAULT ''"],
 ];
 
-type GalleryTableWithMigrations = "galleries" | "gallery_selections" | "gallery_photos" | "face_index_jobs";
+const FACE_INDEX_PHOTO_REQUIRED_COLUMNS: Array<readonly [string, string]> = [
+    ["is_solo", "INTEGER NOT NULL DEFAULT 0"],
+];
+
+type GalleryTableWithMigrations = "galleries" | "gallery_selections" | "gallery_photos" | "face_index_jobs" | "face_index_photos";
 
 async function ensureTursoColumns(tableName: GalleryTableWithMigrations, columns: Array<readonly [string, string]>): Promise<void> {
     if (!galleryTurso) return;
@@ -246,6 +251,7 @@ async function initializeGalleryStorage(): Promise<void> {
         await ensureTursoColumns("gallery_selections", GALLERY_SELECTION_REQUIRED_COLUMNS);
         await ensureTursoColumns("gallery_photos", GALLERY_PHOTO_REQUIRED_COLUMNS);
         await ensureTursoColumns("face_index_jobs", FACE_INDEX_JOB_REQUIRED_COLUMNS);
+        await ensureTursoColumns("face_index_photos", FACE_INDEX_PHOTO_REQUIRED_COLUMNS);
         await galleryTurso.batch(FACE_SOURCE_SCHEMA, "write");
         const counterBackfill = await galleryTurso.execute({
             sql: "SELECT value FROM gallery_settings WHERE key = ?",
@@ -292,6 +298,7 @@ async function initializeGalleryStorage(): Promise<void> {
     await ensureSqliteColumns("gallery_selections", GALLERY_SELECTION_REQUIRED_COLUMNS);
     await ensureSqliteColumns("gallery_photos", GALLERY_PHOTO_REQUIRED_COLUMNS);
     await ensureSqliteColumns("face_index_jobs", FACE_INDEX_JOB_REQUIRED_COLUMNS);
+    await ensureSqliteColumns("face_index_photos", FACE_INDEX_PHOTO_REQUIRED_COLUMNS);
     for (const query of FACE_SOURCE_SCHEMA) await run(query);
     const counterBackfill = await one<{ value: string }>("SELECT value FROM gallery_settings WHERE key = ?", [GALLERY_COUNTER_BACKFILL_KEY]);
     if (!counterBackfill) {

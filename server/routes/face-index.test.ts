@@ -13,8 +13,9 @@ process.env.FACE_WORKER_CALLBACK_ORIGIN = "http://api.test";
 const { galleryRun, galleryAll, ensureGalleryStorage } = await import("../db/galleries");
 const { sqlite } = await import("../db/runtime");
 const { getFaceSourceVersion, FaceSourceChanged } = await import("../lib/face-source");
+const { facePhotoVersion } = await import("../lib/face-model");
 const { createOrReuseJob, currentJob, faceIndexRouter, MODEL_VERSION, publicFaceSearchStatus, handlePublicFaceSearch, prepareGalleryFaceIndex, faceSearchBodyLimit } = await import("./face-index");
-const capabilities = ["embedding-cache-v1", "drive-direct-v1"];
+const capabilities = ["embedding-cache-v1", "drive-direct-v1", "solo-filter-v1", "solo-person-filter-v1"];
 
 test("direct dispatch requires capability and includes source and thumbnail", async () => {
     await galleryRun("UPDATE gallery_photos SET thumbnail_url = 'https://lh3.googleusercontent.com/test=s220'");
@@ -105,7 +106,7 @@ beforeEach(async () => {
         if (String(input).endsWith("/v1/search")) return Response.json({ matches: [{ driveFileId: "a" }, { driveFileId: "b" }] });
         return Response.json({ accepted: true });
     });
-    for (const table of ["face_index_photos", "face_embeddings", "face_index_jobs", "gallery_photos", "galleries"]) await galleryRun(`DELETE FROM ${table}`);
+    for (const table of ["face_index_photos", "face_embeddings", "face_index_jobs", "gallery_selections", "gallery_photos", "galleries"]) await galleryRun(`DELETE FROM ${table}`);
     await galleryRun("INSERT INTO galleries (id, title, drive_folder_id, pin_hash) VALUES (1, 'test', 'folder', 'hash')");
     await addPhoto("a");
 });
@@ -114,10 +115,14 @@ async function addPhoto(fileId: string, version = "v1") {
     await galleryRun("INSERT INTO gallery_photos (gallery_id, drive_file_id, filename, mime_type, source_version) VALUES (1, ?, ?, 'image/jpeg', ?)", [fileId, fileId, version]);
 }
 
-async function complete(job: NonNullable<Awaited<ReturnType<typeof currentJob>>>, embeddings: unknown[] = []) {
+async function complete(job: NonNullable<Awaited<ReturnType<typeof currentJob>>>, embeddings: any[] = [], soloFiles: string[] = []) {
+    const photos = await galleryAll<{ driveFileId: string; sourceVersion: string; createdAt: string; width: number | null; height: number | null }>(
+        'SELECT drive_file_id as "driveFileId", source_version as "sourceVersion", created_at as "createdAt", width, height FROM gallery_photos WHERE gallery_id = 1',
+    );
+    const indexedPhotos = photos.map((photo) => ({ driveFileId: photo.driveFileId, sourceVersion: facePhotoVersion(photo), isSolo: soloFiles.includes(photo.driveFileId) }));
     return faceIndexRouter.request(`/callbacks/jobs/${job.id}/complete`, {
         method: "POST", headers: { "Content-Type": "application/json", "x-face-worker-token": "test-internal" },
-        body: JSON.stringify({ galleryId: 1, modelVersion: MODEL_VERSION, sourceVersion: job.sourceVersion, embeddings }),
+        body: JSON.stringify({ galleryId: 1, modelVersion: MODEL_VERSION, sourceVersion: job.sourceVersion, embeddings, indexedPhotos }),
     });
 }
 
@@ -145,12 +150,73 @@ test("incremental jobs reuse both faces and no-face results; changed files are s
     const next = (await createOrReuseJob(1))!;
     const payload = dispatched[1];
     expect(payload.photos.find((p: any) => p.driveFileId === "a").cachedFaces).toHaveLength(1);
+    expect(payload.photos.find((p: any) => p.driveFileId === "a").cachedIsSolo).toBe(false);
     expect(payload.photos.find((p: any) => p.driveFileId === "b").cachedFaces).toEqual([]);
+    expect(payload.photos.find((p: any) => p.driveFileId === "b").cachedIsSolo).toBe(false);
     expect(payload.photos.find((p: any) => p.driveFileId === "c").cachedFaces).toBeUndefined();
     await complete(next, payload.photos[0].cachedFaces);
     await galleryRun("UPDATE gallery_photos SET source_version = 'v2' WHERE drive_file_id = 'a'");
     await createOrReuseJob(1);
     expect(dispatched[2].photos.find((p: any) => p.driveFileId === "a").cachedFaces).toBeUndefined();
+});
+
+test("solo metadata is complete, consistent, persisted and exposed in snapshots", async () => {
+    const face = { driveFileId: "a", faceIndex: 0, sourceVersion: "v1", embedding: Array(128).fill(1 / Math.sqrt(128)) };
+    const job = (await createOrReuseJob(1))!;
+    const missing = await faceIndexRouter.request(`/callbacks/jobs/${job.id}/complete`, {
+        method: "POST", headers: { "Content-Type": "application/json", "x-face-worker-token": "test-internal" },
+        body: JSON.stringify({ galleryId: 1, modelVersion: MODEL_VERSION, sourceVersion: job.sourceVersion, embeddings: [face] }),
+    });
+    expect(missing.status).toBe(400);
+    const mismatched = await faceIndexRouter.request(`/callbacks/jobs/${job.id}/complete`, {
+        method: "POST", headers: { "Content-Type": "application/json", "x-face-worker-token": "test-internal" },
+        body: JSON.stringify({ galleryId: 1, modelVersion: MODEL_VERSION, sourceVersion: job.sourceVersion, embeddings: [], indexedPhotos: [{ driveFileId: "a", sourceVersion: "v1", isSolo: true }] }),
+    });
+    expect(mismatched.status).toBe(400);
+    expect((await complete(job, [face], ["a"])).status).toBe(200);
+    expect(await galleryAll("SELECT is_solo FROM face_index_photos WHERE gallery_id = 1")).toEqual([{ is_solo: 1 }]);
+    const snapshot = await faceIndexRouter.request(`/indexes/${job.id}`, { headers: { "x-face-worker-token": "test-internal" } });
+    expect(await snapshot.json()).toMatchObject({ soloMetadata: true, embeddings: [{ driveFileId: "a", isSolo: true }] });
+});
+
+test("detection revision rebuilds old face counts without reusing faces or no-face results", async () => {
+    const oldVersion = "opencv-yunet-2023mar-sface-2021dec-1";
+    expect(MODEL_VERSION).not.toBe(oldVersion);
+    await addPhoto("b");
+    const face = { driveFileId: "a", faceIndex: 0, sourceVersion: "v1", embedding: Array(128).fill(1 / Math.sqrt(128)) };
+    const first = (await createOrReuseJob(1))!;
+    await complete(first, [face]);
+    for (const table of ["face_index_jobs", "face_index_photos", "face_embeddings"]) {
+        await galleryRun(`UPDATE ${table} SET model_version = ? WHERE gallery_id = 1`, [oldVersion]);
+    }
+    await galleryRun("INSERT INTO gallery_selections (gallery_id, selected_drive_file_id, selected_filename) VALUES (1, 'a', 'a.jpg')");
+    expect(await currentJob(1)).toBeNull();
+    expect((await publicFaceSearchStatus(1)).status).toBe("not_indexed");
+
+    const next = (await createOrReuseJob(1))!;
+    expect(next.id).not.toBe(first.id);
+    expect(next.modelVersion).toBe(MODEL_VERSION);
+    expect(next.sourceVersion).toBe(first.sourceVersion);
+    expect(dispatched[1].photos).toHaveLength(2);
+    expect(dispatched[1].photos.every((photo: any) => photo.cachedFaces === undefined)).toBe(true);
+    // A previous count of one face is replaced with both faces, not reused.
+    expect((await complete(next, [face, { ...face, faceIndex: 1 }])).status).toBe(200);
+    expect(await galleryAll("SELECT face_index FROM face_embeddings WHERE gallery_id = 1 AND model_version = ?", [MODEL_VERSION])).toHaveLength(2);
+    expect(await galleryAll("SELECT selected_drive_file_id FROM gallery_selections WHERE gallery_id = 1")).toEqual([{ selected_drive_file_id: "a" }]);
+
+    // An in-flight callback from the old worker cannot replace the revised index.
+    await galleryRun("UPDATE face_index_jobs SET status = 'running' WHERE id = ?", [first.id]);
+    const late = await faceIndexRouter.request(`/callbacks/jobs/${first.id}/complete`, {
+        method: "POST", headers: { "Content-Type": "application/json", "x-face-worker-token": "test-internal" },
+        body: JSON.stringify({ galleryId: 1, modelVersion: oldVersion, sourceVersion: first.sourceVersion, embeddings: [face], indexedPhotos: [{ driveFileId: "a", sourceVersion: "v1", isSolo: true }] }),
+    });
+    expect(late.status).toBe(409);
+    expect((await currentJob(1))?.id).toBe(next.id);
+});
+
+test("old detector readiness cannot serve searches using the revised index", async () => {
+    fetchMock.mockImplementation(async () => Response.json({ model: "opencv-yunet-2023mar-sface-2021dec-1", capabilities }));
+    expect(await publicFaceSearchStatus(1)).toMatchObject({ available: false, code: "model_version_mismatch" });
 });
 
 test("stale job can retry, and late completion cannot overwrite newer results", async () => {
@@ -205,10 +271,27 @@ test("worker matches use public serialization and gallery order across all photo
     app.post("/search", (c) => handlePublicFaceSearch(c, 1, (photo) => ({ driveFileId: photo.driveFileId, photoToken: `signed-${photo.driveFileId}` })));
     const form = new FormData();
     form.set("selfie", new File(["test"], "selfie.jpg", { type: "image/jpeg" }));
+    form.set("soloOnly", "true");
     const result = await app.request("/search", { method: "POST", body: form });
     expect(result.status).toBe(200);
     const body = await result.json() as { matches: unknown[] };
     expect(body.matches).toEqual([{ driveFileId: "b", photoToken: "signed-b" }, { driveFileId: "a", photoToken: "signed-a" }]);
+    const search = fetchMock.mock.calls.findLast(([url]) => String(url).endsWith("/v1/search"));
+    expect(((search?.[1] as RequestInit).body as FormData).get("soloOnly")).toBe("true");
+});
+
+test("public search rejects an invalid solo option before calling the worker", async () => {
+    await complete((await createOrReuseJob(1))!);
+    const app = new Hono<{ Variables: { user?: { sub: number; email: string; name: string; role: string } } }>();
+    app.post("/search", (c) => handlePublicFaceSearch(c, 1));
+    const form = new FormData();
+    form.set("selfie", new File(["test"], "selfie.jpg", { type: "image/jpeg" }));
+    form.set("soloOnly", "yes");
+    const before = fetchMock.mock.calls.filter(([url]) => String(url).endsWith("/v1/search")).length;
+    const response = await app.request("/search", { method: "POST", body: form });
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({ code: "invalid_search_form" });
+    expect(fetchMock.mock.calls.filter(([url]) => String(url).endsWith("/v1/search"))).toHaveLength(before);
 });
 
 test("worker search errors use safe codes and messages without echoing private details", async () => {
@@ -226,6 +309,7 @@ test("worker search errors use safe codes and messages without echoing private d
         { workerStatus: 422, detail: "No face found in the selfie", status: 422, code: "no_face" },
         { workerStatus: 422, detail: { code: "invalid_selfie" }, status: 422, code: "invalid_selfie" },
         { workerStatus: 409, detail: { code: "model_version_mismatch" }, status: 503, code: "model_version_mismatch" },
+        { workerStatus: 409, detail: { code: "solo_metadata_required" }, status: 503, code: "solo_metadata_required" },
         { workerStatus: 400, detail: { code: "PRIVATE_SELFIE_TOKEN_EMBEDDING", input: "PRIVATE_SELFIE_TOKEN_EMBEDDING" }, status: 502, code: "worker_search_failed" },
         { workerStatus: 422, detail: [{ input: "PRIVATE_SELFIE_TOKEN_EMBEDDING" }], status: 502, code: "worker_search_failed" },
     ];
@@ -296,6 +380,7 @@ test("warm polling does not read photos; warm search sends only index identity, 
             expect(body.has("embeddings")).toBe(false);
             expect(body.get("completedJobId")).toBe(String(job.id));
             expect(body.get("sourceVersion")).toBe(job.sourceVersion);
+            expect(body.get("soloOnly")).toBe("false");
         }
     } finally { prepare.mockRestore(); }
 });

@@ -59,6 +59,14 @@ class DriveTests(unittest.IsolatedAsyncioTestCase):
         self.handler = handler
         self.assertEqual(await self.source.fetch("a", "https://lh3.googleusercontent.com/stale=s220", 1), b"fresh")
         self.assertFalse(any("alt=media" in str(r.url) for r in self.requests))
+        self.requests.clear()
+        self.assertEqual(await self.source.fetch("b", "https://lh3.googleusercontent.com/stale=s220", 1), b"fresh")
+        self.assertFalse(any(r.url.host == "lh3.googleusercontent.com" and "stale" in r.url.path for r in self.requests))
+        self.assertTrue(any(r.url.host == "www.googleapis.com" and r.url.path.endswith("/b") for r in self.requests))
+
+        self.requests.clear()
+        self.assertEqual(await self.source.fetch("c", "https://lh3.googleusercontent.com/image=s220", 2), b"fresh")
+        self.assertTrue(any(r.url.host == "lh3.googleusercontent.com" and "image" in r.url.path for r in self.requests))
 
     async def test_missing_thumbnail_uses_bounded_original_directly(self):
         self.handler = lambda r: httpx.Response(200, content=b"original") if "alt" in r.url.params else httpx.Response(200, json={"id": "a"})

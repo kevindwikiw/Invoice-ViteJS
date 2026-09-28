@@ -26,7 +26,8 @@ async def benchmark(image_path: Path, record_count: int) -> None:
         raise ValueError("No face detected in the evaluation image")
     vector = main.normalized_embedding(face)
     records = [{"driveFileId": f"evaluation-{i}", "embedding": vector} for i in range(record_count)]
-    snapshot = {"galleryId": 1, "modelVersion": MODEL_VERSION, "sourceVersion": "a"*64, "completedJobId": 1, "embeddings": records}
+    snapshot = {"galleryId": 1, "modelVersion": MODEL_VERSION, "sourceVersion": "a"*64, "completedJobId": 1,
+                "soloMetadata": True, "embeddings": [{**record, "isSolo": False} for record in records]}
     transferred = 0
     def callback(_):
         nonlocal transferred

@@ -12,6 +12,7 @@ import numpy as np
 from PIL import Image
 
 import main
+from embedding_cache import prepare_index
 from engine import Face, FaceEngine, MODEL_VERSION, sensitivity_threshold
 
 
@@ -26,10 +27,11 @@ class ImageTests(unittest.TestCase):
         image = np.zeros((32, 32, 3), dtype=np.uint8)
         face = Face(np.array([0, 0, 10, 10]), np.ones(128))
         for selfie, results, expected_thresholds in [
-            (True, [[face]], []),
-            (False, [[]], []),
-            (True, [[], [face]], [0.8, 0.9]),
-            (True, [[], []], [0.8, 0.9]),
+            (True, [[face]], [0.9, 0.9]),
+            (False, [[]], [0.8, 0.9]),
+            (False, [[face]], [0.8, 0.9]),
+            (True, [[], [face]], [0.9, 0.8, 0.9]),
+            (True, [[], []], [0.9, 0.8, 0.9]),
         ]:
             with self.subTest(selfie=selfie, passes=len(results)):
                 engine = FaceEngine.__new__(FaceEngine)
@@ -58,12 +60,58 @@ class ImageTests(unittest.TestCase):
         image = np.zeros((32, 32, 3), dtype=np.uint8)
         with self.assertRaises(RuntimeError):
             engine.get(image, selfie=True)
-        self.assertEqual(thresholds, [0.8, 0.9])
+        self.assertEqual(thresholds, [0.9, 0.8, 0.9])
         self.assertFalse(engine.lock.locked())
         engine._get = Mock(return_value=[])
         self.assertEqual(engine.get(image), [])
         engine._get.assert_called_once()
+        self.assertEqual(thresholds, [0.9, 0.8, 0.9, 0.8, 0.9])
+
+    def test_indexing_failure_restores_selfie_threshold(self):
+        engine = FaceEngine.__new__(FaceEngine)
+        engine.lock = Lock()
+        thresholds = []
+        def set_threshold(value):
+            self.assertTrue(engine.lock.locked())
+            thresholds.append(value)
+        engine.detector = SimpleNamespace(setScoreThreshold=set_threshold)
+        engine._get = Mock(side_effect=RuntimeError("inference failed"))
+        with self.assertRaises(RuntimeError):
+            engine.get(np.zeros((32, 32, 3), dtype=np.uint8))
         self.assertEqual(thresholds, [0.8, 0.9])
+        self.assertFalse(engine.lock.locked())
+
+    def test_secondary_face_below_selfie_threshold_excludes_group_from_solo(self):
+        engine = FaceEngine.__new__(FaceEngine)
+        engine.lock = Lock()
+        threshold = 0.9
+        detections = [np.array([0, 0, 20, 20, 0.95]), np.array([25, 0, 6, 6, 0.85])]
+        def set_threshold(value):
+            nonlocal threshold
+            self.assertTrue(engine.lock.locked())
+            threshold = value
+        def detect(_):
+            found = [detection for detection in detections if detection[-1] >= threshold]
+            return len(found), found
+        engine.detector = SimpleNamespace(setInputSize=lambda _: None, detect=detect, setScoreThreshold=set_threshold)
+        vector = np.eye(1, 128, dtype=np.float32)
+        engine.recognizer = SimpleNamespace(alignCrop=lambda image, face: image, feature=lambda _: vector)
+        image = np.zeros((32, 32, 3), dtype=np.uint8)
+        query = main.normalized_embedding(engine.get(image, selfie=True)[0])
+        # The lower-confidence second face must be indexed even though the first
+        # pass at the selfie threshold would already have found the primary face.
+        faces = engine.get(image)
+        self.assertEqual(len(faces), 2)
+        self.assertEqual(len(engine.get(image, selfie=True)), 1)
+        records = [{**main.face_payload(face, main.PhotoInput(driveFileId="group"), i), "isSolo": False} for i, face in enumerate(faces)]
+        records += [{**main.face_payload(faces[0], main.PhotoInput(driveFileId="solo"), 0), "isSolo": True}]
+        query = np.array(query, dtype=np.float32)
+        index = prepare_index(records, True)
+        for solo_only, expected_ids in [(False, ["group", "solo"]), (True, ["solo"])]:
+            cached = index.match(query, sensitivity_threshold("balanced"), solo_only)
+            legacy = main.match_records(query, records, sensitivity_threshold("balanced"), solo_only)
+            self.assertEqual([match["driveFileId"] for match in cached], expected_ids)
+            self.assertEqual(cached, legacy)
 
     def test_decode_bounds_dimensions(self):
         image = main.decode_image(blank_jpeg((3000, 1800)))
@@ -78,7 +126,7 @@ class ImageTests(unittest.TestCase):
         buffer = np.ones((1, 128), dtype=np.float32)
         engine = FaceEngine.__new__(FaceEngine)
         engine.lock = Lock()
-        engine.detector = SimpleNamespace(setInputSize=lambda _: None, detect=lambda _: (2, [np.array([1, 2, 3, 4]), np.array([5, 6, 7, 8])]))
+        engine.detector = SimpleNamespace(setInputSize=lambda _: None, setScoreThreshold=lambda _: None, detect=lambda _: (2, [np.array([1, 2, 3, 4]), np.array([5, 6, 7, 8])]))
         engine.recognizer = SimpleNamespace(alignCrop=lambda image, face: image, feature=lambda _: buffer)
         faces = engine.get(np.zeros((32, 32, 3), dtype=np.uint8))
         buffer[:] = 0
@@ -90,14 +138,21 @@ class ImageTests(unittest.TestCase):
     def test_sface_threshold_and_best_face_per_photo(self):
         query = np.array([1, 0], dtype=np.float32)
         records = [
-            {"driveFileId": "a", "embedding": [1, 0]},
-            {"driveFileId": "a", "embedding": [0.8, 0.2]},
+            {"driveFileId": "a", "embedding": [1, 0], "isSolo": False},
+            {"driveFileId": "a", "embedding": [0.8, 0.2], "isSolo": False},
+            {"driveFileId": "solo", "embedding": [1, 0], "isSolo": True},
             {"driveFileId": "b", "embedding": [0, 1]},
             {"driveFileId": "invalid", "embedding": [float("nan"), 0]},
             {"driveFileId": "invalid2", "embedding": [[1, 0]]},
         ]
         self.assertAlmostEqual(sensitivity_threshold("balanced"), 1 - 0.363)
-        self.assertEqual(main.match_records(query, records, sensitivity_threshold("balanced")), [{"driveFileId": "a", "distance": 0.0}])
+        self.assertEqual(main.match_records(query, records, sensitivity_threshold("balanced")), [
+            {"driveFileId": "a", "distance": 0.0},
+            {"driveFileId": "solo", "distance": 0.0},
+        ])
+        self.assertEqual(main.match_records(query, records, sensitivity_threshold("balanced"), True), [
+            {"driveFileId": "solo", "distance": 0.0},
+        ])
 
 
 class WorkerTests(unittest.IsolatedAsyncioTestCase):
@@ -149,9 +204,14 @@ class WorkerTests(unittest.IsolatedAsyncioTestCase):
         data["modelVersion"] = "unsupported-model-version"
         self.assertEqual((await self.client.post("/v1/search", data=data, files={"selfie": ("selfie.jpg", blank_jpeg())})).status_code, 409)
 
+    async def test_search_rejects_invalid_solo_filter(self):
+        response = await self.client.post("/v1/search", data={"galleryId": "1", "embeddings": "[]", "soloOnly": "yes"}, files={"selfie": ("selfie.jpg", blank_jpeg())})
+        self.assertEqual(response.status_code, 422)
+        self.assertEqual(response.json()["detail"]["code"], "invalid_search_form")
+
     async def test_cache_includes_no_face_photos(self):
         job = main.IndexJobInput(jobId=1, galleryId=1, modelVersion=MODEL_VERSION, photos=[
-            main.PhotoInput(driveFileId="cached-empty", cachedFaces=[]),
+            main.PhotoInput(driveFileId="cached-empty", cachedFaces=[], cachedIsSolo=False),
             main.PhotoInput(driveFileId="new"),
         ])
         fetch = AsyncMock(return_value=blank_jpeg())
@@ -162,6 +222,43 @@ class WorkerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(fetch.call_args.args[1].driveFileId, "new")
         self.assertTrue(report.call_args.args[1].endswith("/complete"))
         self.assertEqual(report.call_args.args[2]["embeddings"], [])
+        self.assertEqual(report.call_args.args[2]["indexedPhotos"], [
+            {"driveFileId": "cached-empty", "sourceVersion": "", "isSolo": False},
+            {"driveFileId": "new", "sourceVersion": "", "isSolo": False},
+        ])
+
+    async def test_person_detector_runs_only_for_single_face_and_sets_solo_metadata(self):
+        vector = np.ones(128, dtype=np.float32) / np.sqrt(128)
+        face = Face(np.array([0, 0, 10, 10]), vector)
+        main.face_app = SimpleNamespace(
+            get=Mock(side_effect=[[], [face, face], [face], [face], [face]]),
+            count_people=Mock(side_effect=[0, 1, 2]),
+        )
+        job = main.IndexJobInput(jobId=4, galleryId=1, modelVersion=MODEL_VERSION, photos=[
+            main.PhotoInput(driveFileId=value, sourceVersion="v1") for value in ["none", "group-face", "zero-person", "solo", "group-person"]
+        ])
+        report = AsyncMock()
+        with patch.object(main, "PHOTO_CONCURRENCY", 1), patch.object(main, "fetch_photo", AsyncMock(return_value=blank_jpeg())), patch.object(main, "callback", report):
+            await main.process_index_job(job)
+        self.assertEqual(main.face_app.count_people.call_count, 3)
+        completed = next(call.args[2] for call in report.call_args_list if call.args[1].endswith("/complete"))
+        self.assertEqual({item["driveFileId"]: item["isSolo"] for item in completed["indexedPhotos"]}, {
+            "none": False, "group-face": False, "zero-person": False, "solo": True, "group-person": False,
+        })
+
+    async def test_person_detector_failure_retries_and_does_not_publish(self):
+        vector = np.ones(128, dtype=np.float32) / np.sqrt(128)
+        face = Face(np.array([0, 0, 10, 10]), vector)
+        main.face_app = SimpleNamespace(get=Mock(return_value=[face]), count_people=Mock(side_effect=RuntimeError("nanodet failed")))
+        job = main.IndexJobInput(jobId=5, galleryId=1, modelVersion=MODEL_VERSION, photos=[main.PhotoInput(driveFileId="photo")])
+        report = AsyncMock()
+        fetch = AsyncMock(return_value=blank_jpeg())
+        with patch.object(main, "fetch_photo", fetch), patch.object(main, "callback", report):
+            await main.process_index_job(job)
+        self.assertEqual(fetch.await_count, 2)
+        self.assertEqual(main.face_app.count_people.call_count, 2)
+        self.assertFalse(any(call.args[1].endswith("/complete") for call in report.call_args_list))
+        self.assertTrue(report.call_args.args[1].endswith("/fail"))
 
     async def test_search_accepts_two_megabyte_embedding_field(self):
         vector = np.ones(128, dtype=np.float32) / np.sqrt(128)

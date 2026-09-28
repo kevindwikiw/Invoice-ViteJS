@@ -1,6 +1,8 @@
 # Orbit Face Recognition Worker
 
-CPU worker using Python, OpenCV Headless, YuNet detection and SFace embeddings.
+CPU worker using Python and OpenCV Headless. YuNet detects faces, SFace creates
+identity embeddings, and NanoDet Plus checks person count for the optional solo
+filter.
 The gallery/API still run on Hono/Bun. Installation uses ready-made binary
 wheels without Docker or a compiler. Tested locally with Python
 3.13 x64 on Windows; Ubuntu 24.04 ARM64 must still be validated on the VM.
@@ -48,7 +50,7 @@ The run script invokes the venv explicitly and loads `.env`:
 ```
 
 `GET /healthz` means HTTP is alive. `GET /readyz` requires a Bearer worker token
-and only returns 200 after both models warm up. The gallery shows Filter by
+and only returns 200 after all three models warm up. The gallery shows Filter by
 selfie only when the API sees a ready, matching worker. There is no browser ML
 fallback. Port 8088 is a private endpoint.
 
@@ -56,7 +58,7 @@ fallback. Port 8088 is a private endpoint.
 
 - Syncing a gallery or opening/publishing a synced gallery starts indexing when
   the worker is available. These admin responses do not wait for indexing.
-- A single model instance stays warm. Three bounded tasks overlap image fetch
+- A single three-model pipeline stays warm. Three bounded tasks overlap image fetch
   and decode; one inference runs at a time with two OpenCV CPU threads.
 - API assets request 1280px Drive thumbnails. Local files and fallback originals
   are resized to a maximum side of 1280px, with EXIF orientation applied. Original
@@ -73,9 +75,11 @@ fallback. Port 8088 is a private endpoint.
   pre-indexing, sync again or use Find Face after it becomes available to retry.
 - Selfie requests compute a query and compare against stored gallery vectors.
   Detection starts at 0.90; only when no face is found, selfie detection retries
-  once at 0.80. Gallery indexing stays at 0.90 and identity-match thresholds are
-  unchanged. The shared detector threshold is restored under its inference lock,
-  including on errors. Existing gallery indexes do not need rebuilding.
+  once at 0.80. Gallery indexing uses 0.80 on every photo, including photos where
+  a confident primary face was already detected. This admits secondary faces
+  that the old 0.90 index could miss. Identity-match thresholds stay unchanged.
+  The shared detector threshold is restored under its inference lock, including
+  on errors. The revised index version requires one rebuild per gallery.
   Selfie bytes/embeddings are not saved as application data or written to logs;
   multipart temporary uploads are cleaned up when the request finishes.
 - Search authenticates before parsing multipart data. The embedding field uses
@@ -85,7 +89,8 @@ fallback. Port 8088 is a private endpoint.
   API logs expose only gallery ID, worker status and an allowlisted error code.
   Restart the worker and API after updating to apply the parser/error changes.
 
-Logs show job ID, file ID, face count, fetch/decode/wait/inference milliseconds.
+Logs show job ID, file ID, face/person count, solo status and
+fetch/decode/wait/face/person inference milliseconds.
 Local inference still consumes laptop CPU; it does not run ML in the browser.
 
 SFace produces 128-dimensional embeddings. Its model identity is pinned in
@@ -96,12 +101,55 @@ Balanced starts at OpenCV's LFW cosine similarity baseline 0.363 (distance
 0.637). Strict uses distance 0.50 and Wider 0.68. These are starting points;
 calibrate on representative wedding photos, especially small/group faces.
 
+### Solo Photos Only and NanoDet index revision 4
+
+Solo Photos Only requires exactly one valid indexed face that matches the selfie
+and exactly one COCO `person` detection. YuNet runs first. NanoDet is skipped for
+zero-face and multi-face photos and runs only for exactly-one-face candidates.
+For precision-first behavior, zero or multiple person detections are not solo.
+Person boxes are not persisted. A missed/occluded person can still create a false
+solo classification, so validate representative wedding photos before rollout.
+
+`opencv-yunet-2023mar-sface-2021dec-nanodet-2022nov-4` retains the existing
+YuNet/SFace identity matching and thresholds, then adds the pinned FP32 NanoDet
+Plus model at 416x416, person confidence 0.18 and NMS IoU 0.60. The lower person
+threshold improves recall for cropped, seated and small solo subjects while the
+exactly-one-person rule remains precision-first. Both `engine.py`
+and `server/lib/face-model.ts` must have this exact version. Old indexes are not
+reused, so each gallery rebuilds once. The idempotent storage upgrade adds only
+`face_index_photos.is_solo`; gallery selections are untouched.
+
+The callback publishes explicit solo metadata for every indexed photo, including
+photos with no face. Incremental jobs reuse that metadata for unchanged photos,
+so NanoDet is not repeated. Legacy embedding search remains available without a
+solo filter; `soloOnly=true` is rejected when person metadata is unavailable.
+
+Deploy the worker first (update the service code under `/opt/orbit-face-worker`,
+not only the Git checkout, and restart `orbit-face-worker`), then deploy the API.
+Authenticated `/readyz` must report model
+`opencv-yunet-2023mar-sface-2021dec-nanodet-2022nov-4` and capabilities
+`solo-filter-v1` plus `solo-person-filter-v1`. During the version mismatch, face search is
+unavailable. Once versions agree, Sync or the next Find Face search rebuilds the
+gallery index once. Repeated searches then reuse the new index; restarting the
+same worker version alone does not rebuild it. Wait for any old indexing job to
+finish before upgrading.
+
+The model setup verifies the pinned SHA-256 before startup. Unit coverage includes
+letterbox preprocessing, person-class filtering, NMS, warm-up, conditional
+execution, retry/failure behavior, callback integrity and cold/warm cache parity.
+Local validation on 2026-09-28 passed 55 worker tests, 26 backend tests, server
+and client typechecks, the production client build, and the Find Face Chromium
+smoke test. A 900-record synthetic cache check reported one 2,436,412-byte cold
+snapshot transfer and zero snapshot bytes on three warm searches.
+The requested 50-100 labeled wedding-photo evaluation and ARM timing remain a
+deployment gate; unit tests do not establish real-world solo-filter accuracy.
+
 ## Validation and timing
 
 ### Versioned RAM cache and lightweight status
 
 The API sends `galleryId`, `modelVersion`, `sourceVersion`, `completedJobId`,
-`sensitivity` and the selfie to `/v1/search`. On a cache miss, the worker pulls
+`sensitivity`, `soloOnly` and the selfie to `/v1/search`. On a cache miss, the worker pulls
 `GET /api/internal/face-index/indexes/:jobId` using its callback token. That
 endpoint validates publication and source version in the same SQL snapshot as
 the embeddings read. Empty completed indexes are valid. Warm searches do not
@@ -140,17 +188,19 @@ deleted gallery entries may remain in RAM until eviction but cannot be returned
 through the public API.
 
 Rollout: back up gallery storage, deploy/restart the worker first, then the API.
-The new worker advertises `embedding-cache-v1` in authenticated `/readyz` and
-still accepts legacy embedding forms. The new API requires that capability;
+The new worker advertises `embedding-cache-v1`, `drive-direct-v1`,
+`solo-filter-v1`, and `solo-person-filter-v1` in authenticated `/readyz` and
+still accepts legacy embedding forms for non-solo searches. The new API requires
+those capabilities;
 older workers are reported unavailable until updated. Schema initialization is
-idempotent; no selection data or embeddings are dropped. During a rolling
-upgrade, old API instances can still use the worker's legacy request format.
+idempotent; no selection data or embeddings are dropped. Legacy request format
+compatibility still requires matching model/index versions on the API and worker.
 
 Cache logs contain hit/miss, retained bytes/entries, transfer bytes, record count,
 load duration and safe failure codes. No tokens, selfies or embedding values.
 
 ```powershell
-.\.venv-ml\Scripts\python.exe -m unittest -v test_worker test_embedding_cache
+.\.venv-ml\Scripts\python.exe -m unittest discover -p "test_*.py" -v
 .\.venv-ml\Scripts\python.exe benchmark_cache.py --image .evaluation/lena.jpg --records 900
 ```
 
@@ -366,14 +416,21 @@ duration and safe failure codes. HTTP client URL logging is disabled to avoid
 recording signed thumbnails. No Google SDK, private key, rclone mount or new
 Python dependency is needed for direct mode.
 
+Google `thumbnailLink` values expire. A direct indexing job tries its supplied
+thumbnail normally; after the first stale link in that job, later photos request
+fresh Drive metadata first and skip repeated stale WebP/JPEG attempts. Logs show
+`refreshed_thumbnail` for the first recovery and `metadata_thumbnail` for the
+adaptive fast path. The preference is bounded to the 64 most recent jobs.
+
 Rolling deployment order:
 
 1. Update the worker code, including `drive_source.py`. Keep
    `FACE_WORKER_PHOTO_SOURCE=callback` (the code default) while the old API is
    running. Drain active jobs before restarting the service. Old payloads still
    work with the old API; explicit `photoSource: "drive"` always uses Drive.
-2. Verify authenticated `/readyz` advertises both `embedding-cache-v1` and
-   `drive-direct-v1`. This checks model readiness/capability, not Drive access.
+2. Verify authenticated `/readyz` advertises `embedding-cache-v1`,
+   `drive-direct-v1`, `solo-filter-v1`, and `solo-person-filter-v1`. This checks
+   all model warm-ups and worker capability, not Drive access.
 3. Drain old jobs, then deploy the API and client together. The new API requires
    `drive-direct-v1`, includes `thumbnailUrl` in each photo, and issues direct jobs.
    Keep `FACE_WORKER_LEGACY_ASSET_PROXY=0` on Fly (also the default).
@@ -442,6 +499,8 @@ Drive IDs are the source of truth. When using local files, prefer
 - [OpenCV face pipeline and matching baseline](https://docs.opencv.org/4.12.0/d0/dd4/tutorial_dnn_face.html)
 - [YuNet model and MIT license](https://github.com/opencv/opencv_zoo/tree/47534e27c9851bb1128ccc0102f1145e27f23f98/models/face_detection_yunet)
 - [SFace model and Apache-2.0 license](https://github.com/opencv/opencv_zoo/tree/47534e27c9851bb1128ccc0102f1145e27f23f98/models/face_recognition_sface)
+- [NanoDet Plus model and Apache-2.0 license](https://github.com/opencv/opencv_zoo/tree/47534e27c9851bb1128ccc0102f1145e27f23f98/models/object_detection_nanodet)
 
-Keep the applicable notices with deployed model distributions. Model downloads
+See `THIRD_PARTY_NOTICES.md` for the NanoDet attribution. Keep the applicable
+notices with deployed model distributions. Model downloads
 are explicit setup operations; readiness never downloads code or weights.

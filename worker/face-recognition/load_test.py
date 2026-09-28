@@ -67,7 +67,8 @@ def serve(image_path: Path, records_count: int, instances: int) -> None:
             raise ValueError("Evaluation image has no detectable face")
         vector = main.normalized_embedding(face)
         snapshot = {"galleryId": 1, "modelVersion": main.MODEL_VERSION, "sourceVersion": "a" * 64,
-                    "completedJobId": 1, "embeddings": [{"driveFileId": f"sample-{i}", "embedding": vector} for i in range(records_count)]}
+                    "completedJobId": 1, "soloMetadata": True,
+                    "embeddings": [{"driveFileId": f"sample-{i}", "embedding": vector, "isSolo": False} for i in range(records_count)]}
         snapshot_bytes = json.dumps(snapshot, separators=(",", ":")).encode()
         import numpy as np
         reference = prepare_index(snapshot["embeddings"]).match(np.asarray(vector, dtype=np.float32), .637)

@@ -25,22 +25,26 @@ class IndexKey:
 class PreparedIndex:
     matrix: np.ndarray
     file_ids: tuple[str, ...]
+    solo_file_ids: frozenset[str]
+    solo_metadata: bool
     total: int
     byte_size: int
 
-    def match(self, query: np.ndarray, threshold: float) -> list[dict]:
+    def match(self, query: np.ndarray, threshold: float, solo_only: bool = False) -> list[dict]:
         if not len(self.file_ids):
             return []
         distances = np.clip(1 - self.matrix @ query, 0, 2)
         best: dict[str, float] = {}
         for file_id, distance in zip(self.file_ids, distances):
+            if solo_only and file_id not in self.solo_file_ids:
+                continue
             if distance <= threshold and distance < best.get(file_id, float("inf")):
                 best[file_id] = float(distance)
         return sorted(({"driveFileId": key, "distance": value} for key, value in best.items()), key=lambda item: item["distance"])
 
 
-def prepare_index(records: list[dict]) -> PreparedIndex:
-    vectors, ids = [], []
+def prepare_index(records: list[dict], solo_metadata: bool = False) -> PreparedIndex:
+    vectors, ids, solo_candidates, face_counts = [], [], set(), {}
     for record in records:
         try:
             vector = np.asarray(record["embedding"], dtype=np.float32)
@@ -52,14 +56,18 @@ def prepare_index(records: list[dict]) -> PreparedIndex:
                 continue
             vectors.append(vector / norm)
             ids.append(file_id)
+            face_counts[file_id] = face_counts.get(file_id, 0) + 1
+            if solo_metadata and record.get("isSolo") is True:
+                solo_candidates.add(file_id)
         except (KeyError, TypeError, ValueError):
             continue
     matrix = np.stack(vectors) if vectors else np.empty((0, 128), dtype=np.float32)
     matrix.setflags(write=False)
     file_ids = tuple(ids)
+    solo_file_ids = frozenset(file_id for file_id in solo_candidates if face_counts.get(file_id) == 1)
     # Account for retained arrays and identifiers, not only the numeric matrix.
-    byte_size = sys.getsizeof(matrix) + sys.getsizeof(file_ids) + sum(sys.getsizeof(value) for value in file_ids) + 512
-    return PreparedIndex(matrix, file_ids, len({str(record.get("driveFileId")) for record in records}), byte_size)
+    byte_size = sys.getsizeof(matrix) + sys.getsizeof(file_ids) + sys.getsizeof(solo_file_ids) + sum(sys.getsizeof(value) for value in file_ids) + 512
+    return PreparedIndex(matrix, file_ids, solo_file_ids, solo_metadata, len({str(record.get("driveFileId")) for record in records}), byte_size)
 
 
 class CacheCapacityError(Exception):

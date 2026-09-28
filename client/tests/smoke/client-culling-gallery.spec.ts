@@ -634,6 +634,7 @@ test('filters immediately from a selfie and keeps selection submit working', asy
     let statusPolls = 0;
     let searchRequests = 0;
     let browserModelRequests = 0;
+    const soloOptions: string[] = [];
     const uploadedSelfies: Array<{ width: number; height: number; type: string; size: number; top: number[] }> = [];
     await page.route(`**/api/public/galleries/${id}/face-search/status`, (route) => {
         if (!indexingStarted) return route.fulfill({ json: { available: true, status: 'not_indexed', processed: 0, total: 0 } });
@@ -649,6 +650,8 @@ test('filters immediately from a selfie and keeps selection submit working', asy
             headers: { 'content-type': route.request().headers()['content-type'] },
         }).formData();
         const selfie = body.get('selfie') as File;
+        const soloOnly = String(body.get('soloOnly'));
+        soloOptions.push(soloOnly);
         const pixels = await page.evaluate(async (bytes) => {
             const bitmap = await createImageBitmap(new Blob([new Uint8Array(bytes)], { type: 'image/jpeg' }));
             const canvas = document.createElement('canvas');
@@ -666,7 +669,7 @@ test('filters immediately from a selfie and keeps selection submit working', asy
             indexingStarted = true;
             return route.fulfill({ status: 202, json: { status: 'indexing', job: { processed: 0, total: 101 }, matches: [], total: 0 } });
         }
-        return route.fulfill({ json: { status: 'complete', total: 101, matches: [photo(2), photo(56)] } });
+        return route.fulfill({ json: { status: 'complete', total: 101, matches: soloOnly === 'true' ? [photo(2)] : [photo(2), photo(56)] } });
     });
     await page.route(/\/(?:models\/face-api|vendor\/face-api)\//, (route) => {
         browserModelRequests += 1;
@@ -702,7 +705,7 @@ test('filters immediately from a selfie and keeps selection submit working', asy
     await page.getByRole('button', { name: 'Filter by selfie' }).click();
     const dialog = page.getByRole('dialog', { name: 'Filter by selfie' });
     await expect(dialog).toBeVisible();
-    await expect(dialog.getByRole('checkbox')).toHaveCount(0);
+    await expect(dialog.locator('input[type="checkbox"]')).not.toBeChecked();
     await expect(dialog.getByRole('button', { name: 'Choose selfie' })).toBeEnabled();
     await expect(dialog.getByText('Selecting a selfie starts face matching.', { exact: false })).toBeVisible();
     await page.screenshot({ path: 'test-results/selfie-filter-mobile.png', animations: 'disabled' });
@@ -727,6 +730,7 @@ test('filters immediately from a selfie and keeps selection submit working', asy
     await expect(dialog.getByText('Preparing face search 55 / 101')).toBeVisible();
     await expect(dialog.getByText('2 photos found')).toBeVisible();
     expect(searchRequests).toBe(2);
+    expect(soloOptions).toEqual(['false', 'false']);
     expect(uploadedSelfies).toHaveLength(2);
     for (const uploaded of uploadedSelfies) {
         expect(uploaded).toMatchObject({ width: 640, height: 1280, type: 'image/jpeg' });
@@ -741,15 +745,19 @@ test('filters immediately from a selfie and keeps selection submit working', asy
     await dialog.locator('summary').click();
     await dialog.getByRole('button', { name: 'Wider', exact: true }).click();
     await expect(dialog.getByText('2 photos found')).toBeVisible();
-    const box = await dialog.getByRole('button', { name: 'Show 2 photos' }).boundingBox();
+    const soloCheckbox = dialog.getByRole('checkbox', { name: 'Solo Photos Only' });
+    await soloCheckbox.check();
+    await expect(dialog.getByText('1 photos found')).toBeVisible();
+    expect(soloOptions.at(-1)).toBe('true');
+    const box = await dialog.getByRole('button', { name: 'Show 1 photos' }).boundingBox();
     expect(box!.y + box!.height).toBeLessThanOrEqual(568);
     expect(await dialog.locator('.gallery-modal-scroll').evaluate((element) => element.scrollWidth <= element.clientWidth + 1)).toBe(true);
     await page.screenshot({ path: 'test-results/selfie-filter-results-mobile.png', animations: 'disabled' });
-    await dialog.getByRole('button', { name: 'Show 2 photos' }).click();
+    await dialog.getByRole('button', { name: 'Show 1 photos' }).click();
     await page.setViewportSize({ width: 390, height: 844 });
 
-    await expect(page.getByRole('button', { name: 'Face (2)' })).toBeVisible();
-    await expect(page.getByRole('button', { name: /^Open photo-/ })).toHaveCount(2);
+    await expect(page.getByRole('button', { name: 'Face (1)' })).toBeVisible();
+    await expect(page.getByRole('button', { name: /^Open photo-/ })).toHaveCount(1);
     await expect(page.getByRole('button', { name: 'Next' })).toHaveCount(0);
 
     await page.getByRole('button', { name: 'Select photo-002.jpg' }).click();
@@ -848,6 +856,11 @@ for (const theme of ['black', 'white'] as const) {
         }
         await dialog.locator('summary').click();
         await expect(dialog.getByRole('button', { name: 'Balanced', exact: true })).toHaveCSS('background-color', accent);
+        const soloCheckbox = dialog.getByRole('checkbox', { name: 'Solo Photos Only' });
+        await expect(soloCheckbox).not.toBeChecked();
+        await expect(soloCheckbox).toHaveCSS('accent-color', accent);
+        await soloCheckbox.focus();
+        await expect(soloCheckbox).toBeFocused();
         await dialog.getByRole('button', { name: 'Wider', exact: true }).click();
         await expect(dialog.getByRole('button', { name: 'Wider', exact: true })).toHaveCSS('background-color', accent);
         await expect(dialog.getByRole('button', { name: 'Wider', exact: true })).toHaveAttribute('aria-pressed', 'true');

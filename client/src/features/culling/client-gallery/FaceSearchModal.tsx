@@ -47,6 +47,7 @@ function waitForPoll(milliseconds: number, signal: AbortSignal): Promise<void> {
 export function FaceSearchModal({ theme, galleryId, token, activeCount, activeTotal, onApply, onReset, onClose }: FaceSearchModalProps) {
     const [selfie, setSelfie] = useState<{ file: File; url: string } | null>(null);
     const [sensitivity, setSensitivity] = useState<FaceSearchSensitivity>('balanced');
+    const [soloOnly, setSoloOnly] = useState(false);
     const [progress, setProgress] = useState<FaceSearchProgress | null>(null);
     const [error, setError] = useState('');
     const [isScanning, setIsScanning] = useState(false);
@@ -62,7 +63,7 @@ export function FaceSearchModal({ theme, galleryId, token, activeCount, activeTo
         if (previewRef.current) URL.revokeObjectURL(previewRef.current);
     }, []);
 
-    const runSearch = async (file: File, mode = sensitivity) => {
+    const runSearch = async (file: File, mode = sensitivity, solo = soloOnly) => {
         abortRef.current?.abort();
         const controller = new AbortController();
         abortRef.current = controller;
@@ -72,7 +73,7 @@ export function FaceSearchModal({ theme, galleryId, token, activeCount, activeTo
         setProgress(null);
         try {
             const search = () => runFaceSearch({
-                galleryId, token, selfieFile: file, sensitivity: mode, signal: controller.signal,
+                galleryId, token, selfieFile: file, sensitivity: mode, soloOnly: solo, signal: controller.signal,
                 onProgress: (next) => { if (!controller.signal.aborted) setProgress(next); },
             });
             let found = await search();
@@ -196,6 +197,23 @@ export function FaceSearchModal({ theme, galleryId, token, activeCount, activeTo
                             <button key={option.value} type="button" disabled={isScanning} aria-pressed={sensitivity === option.value} onClick={() => { setSensitivity(option.value); if (selfie) void runSearch(selfie.file, option.value); }} className={clsx(buttonFeedback, 'min-h-10 rounded px-2 text-xs font-semibold', sensitivity === option.value ? 'bg-[var(--accent)] text-[var(--bg-deep)]' : 'text-[var(--text-secondary)] enabled:hover:bg-[var(--bg-hover)]')}>{option.label}</button>
                         ))}
                     </div>
+                    <label className={clsx('mt-3 flex min-h-14 cursor-pointer items-start gap-3 rounded-md border border-[var(--border)] px-3 py-2.5 transition-colors duration-150 hover:bg-[var(--bg-hover)] focus-within:outline focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-[var(--accent)]', isScanning && 'cursor-not-allowed opacity-45')}>
+                        <input
+                            type="checkbox"
+                            checked={soloOnly}
+                            disabled={isScanning}
+                            onChange={(event) => {
+                                const next = event.currentTarget.checked;
+                                setSoloOnly(next);
+                                if (selfie) void runSearch(selfie.file, sensitivity, next);
+                            }}
+                            className="mt-0.5 !h-4 !w-4 shrink-0 !p-0 accent-[var(--accent)]"
+                        />
+                        <span className="min-w-0">
+                            <span className="block text-xs font-semibold text-[var(--text-primary)]">Solo Photos Only</span>
+                            <span className="mt-1 block text-[11px] leading-4 text-[var(--text-muted)]">Show matches where no other face was detected.</span>
+                        </span>
+                    </label>
                     {selfie && !isScanning && <button type="button" onClick={() => void runSearch(selfie.file)} className={`${secondaryButton} mt-3 w-full`}><RefreshCcw size={14} /> Search again</button>}
                 </details>
             </div>

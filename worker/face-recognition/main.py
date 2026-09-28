@@ -78,6 +78,7 @@ class PhotoInput(BaseModel):
     displayOrder: int = 0
     sourceVersion: str = ""
     cachedFaces: list[dict[str, Any]] | None = None
+    cachedIsSolo: bool | None = None
 
 
 class IndexJobInput(BaseModel):
@@ -286,6 +287,7 @@ async def callback(job: IndexJobInput, path: str, payload: dict[str, Any]) -> No
 async def process_index_job(job: IndexJobInput) -> None:
     async with job_semaphore:
         embeddings: list[dict[str, Any]] = []
+        indexed_photos: list[dict[str, Any]] = []
         processed = 0
         heartbeat_stop = asyncio.Event()
         heartbeat_task: asyncio.Task[None] | None = None
@@ -305,10 +307,10 @@ async def process_index_job(job: IndexJobInput) -> None:
 
             heartbeat_task = asyncio.create_task(heartbeat())
 
-            async def index_photo(photo: PhotoInput) -> list[dict[str, Any]]:
-                if photo.cachedFaces is not None:
-                    logger.info("Job %s photo %s: cached (%s faces)", job.jobId, photo.driveFileId, len(photo.cachedFaces))
-                    return photo.cachedFaces
+            async def index_photo(photo: PhotoInput) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+                if photo.cachedFaces is not None and photo.cachedIsSolo is not None:
+                    logger.info("Job %s photo %s: cached (%s faces, solo=%s)", job.jobId, photo.driveFileId, len(photo.cachedFaces), photo.cachedIsSolo)
+                    return photo.cachedFaces, {"driveFileId": photo.driveFileId, "sourceVersion": photo.sourceVersion, "isSolo": photo.cachedIsSolo}
                 last_error: Exception | None = None
                 for attempt in range(2):
                     started_at = time.perf_counter()
@@ -320,14 +322,18 @@ async def process_index_job(job: IndexJobInput) -> None:
                         async with inference_semaphore:
                             inference_at = time.perf_counter()
                             faces = await asyncio.to_thread(recognizer.get, image)
+                            faces_at = time.perf_counter()
+                            people = await asyncio.to_thread(recognizer.count_people, image) if len(faces) == 1 else None
                         finished_at = time.perf_counter()
+                        is_solo = len(faces) == 1 and people == 1
                         logger.info(
-                            "Job %s photo %s: faces=%s fetch_ms=%.0f decode_ms=%.0f wait_ms=%.0f inference_ms=%.0f",
-                            job.jobId, photo.driveFileId, len(faces), (fetched_at - started_at) * 1000,
+                            "Job %s photo %s: faces=%s people=%s solo=%s fetch_ms=%.0f decode_ms=%.0f wait_ms=%.0f face_ms=%.0f person_ms=%.0f",
+                            job.jobId, photo.driveFileId, len(faces), "skipped" if people is None else people, is_solo, (fetched_at - started_at) * 1000,
                             (decoded_at - fetched_at) * 1000, (inference_at - decoded_at) * 1000,
-                            (finished_at - inference_at) * 1000,
+                            (faces_at - inference_at) * 1000, (finished_at - faces_at) * 1000,
                         )
-                        return [face_payload(face, photo, face_index) for face_index, face in enumerate(faces) if normalized_embedding(face)]
+                        records = [face_payload(face, photo, face_index) for face_index, face in enumerate(faces) if normalized_embedding(face)]
+                        return records, {"driveFileId": photo.driveFileId, "sourceVersion": photo.sourceVersion, "isSolo": is_solo}
                     except Exception as error:
                         last_error = error
                         logger.warning("Unable to index %s (attempt %s/2): %s", photo.driveFileId, attempt + 1, error)
@@ -340,7 +346,9 @@ async def process_index_job(job: IndexJobInput) -> None:
             async def consume_photos() -> None:
                 nonlocal processed
                 for photo in pending_photos:
-                    embeddings.extend(await index_photo(photo))
+                    photo_faces, indexed_photo = await index_photo(photo)
+                    embeddings.extend(photo_faces)
+                    indexed_photos.append(indexed_photo)
                     processed += 1
 
             # A bounded pool overlaps downloads/decode with one shared inference engine.
@@ -355,6 +363,7 @@ async def process_index_job(job: IndexJobInput) -> None:
                 "modelVersion": job.modelVersion,
                 "sourceVersion": job.sourceVersion,
                 "embeddings": embeddings,
+                "indexedPhotos": indexed_photos,
             })
             logger.info("Completed face job %s: %s photos, %s faces", job.jobId, processed, len(embeddings))
         except Exception as error:
@@ -385,7 +394,7 @@ async def readyz(authorization: str | None = Header(default=None)) -> JSONRespon
             "state": model_state,
             "code": model_error_code or "model_loading",
         }, status_code=503)
-    return JSONResponse({"ok": True, "service": "orbit-face-worker", "state": "ready", "model": MODEL_NAME, "capabilities": ["embedding-cache-v1", "drive-direct-v1"]})
+    return JSONResponse({"ok": True, "service": "orbit-face-worker", "state": "ready", "model": MODEL_NAME, "capabilities": ["embedding-cache-v1", "drive-direct-v1", "solo-filter-v1", "solo-person-filter-v1"]})
 
 
 @app.post("/v1/index/jobs", status_code=202)
@@ -414,7 +423,7 @@ def largest_face(faces: list[Any]) -> Any | None:
     return max(faces, key=lambda face: float((face.bbox[2] - face.bbox[0]) * (face.bbox[3] - face.bbox[1])))
 
 
-def match_records(query: np.ndarray, records: list, threshold: float) -> list[dict[str, Any]]:
+def match_records(query: np.ndarray, records: list, threshold: float, solo_only: bool = False) -> list[dict[str, Any]]:
     candidates, file_ids = [], []
     for record in records:
         try:
@@ -431,9 +440,12 @@ def match_records(query: np.ndarray, records: list, threshold: float) -> list[di
             continue
     if not candidates:
         return []
+    solo_file_ids = {str(record.get("driveFileId")) for record in records if record.get("isSolo") is True}
     distances = np.clip(1 - np.stack(candidates) @ query, 0, 2)
     best_by_photo: dict[str, float] = {}
     for file_id, distance in zip(file_ids, distances):
+        if solo_only and file_id not in solo_file_ids:
+            continue
         if distance <= threshold and distance < best_by_photo.get(file_id, float("inf")):
             best_by_photo[file_id] = float(distance)
     return sorted(({"driveFileId": key, "distance": value} for key, value in best_by_photo.items()), key=lambda item: item["distance"])
@@ -445,7 +457,7 @@ def search_error(status: int, code: str, message: str) -> HTTPException:
 
 async def parse_search_form(request: Request) -> FormData:
     try:
-        return await request.form(max_files=1, max_fields=5, max_part_size=MAX_EMBEDDING_JSON_BYTES)
+        return await request.form(max_files=1, max_fields=6, max_part_size=MAX_EMBEDDING_JSON_BYTES)
     except StarletteHTTPException as error:
         if error.status_code == 400 and str(error.detail).startswith(("Part exceeded maximum size", "Field exceeded maximum size")):
             raise search_error(413, "embeddings_too_large", "Embeddings payload is too large") from error
@@ -466,16 +478,20 @@ async def search_faces(request: Request, authorization: str | None = Header(defa
 
 
 async def search_form(form: FormData, recognizer: Any) -> dict[str, Any]:
-    allowed = {"galleryId", "embeddings", "sensitivity", "modelVersion", "selfie", "sourceVersion", "completedJobId"}
+    allowed = {"galleryId", "embeddings", "sensitivity", "modelVersion", "selfie", "sourceVersion", "completedJobId", "soloOnly"}
     if any(key not in allowed or len(form.getlist(key)) != 1 for key in form):
         raise search_error(400, "invalid_search_form", "Invalid search form")
     gallery_id = form.get("galleryId")
     embeddings = form.get("embeddings")
     sensitivity = form.get("sensitivity", "balanced")
+    solo_only_value = form.get("soloOnly", "false")
     modelVersion = form.get("modelVersion", MODEL_VERSION)
     selfie = form.get("selfie")
-    if not all(isinstance(value, str) for value in (gallery_id, sensitivity, modelVersion)) or not isinstance(selfie, UploadFile):
+    if not all(isinstance(value, str) for value in (gallery_id, sensitivity, modelVersion, solo_only_value)) or not isinstance(selfie, UploadFile):
         raise search_error(422, "invalid_search_form", "Required search fields are missing or invalid")
+    if solo_only_value not in {"true", "false"}:
+        raise search_error(422, "invalid_search_form", "Invalid soloOnly value")
+    solo_only = solo_only_value == "true"
     try:
         galleryId = int(gallery_id)
     except ValueError as error:
@@ -494,6 +510,8 @@ async def search_form(form: FormData, recognizer: Any) -> dict[str, Any]:
             records = json.loads(embeddings)
         except json.JSONDecodeError as error:
             raise search_error(400, "invalid_embeddings", "Invalid embeddings payload") from error
+        if solo_only:
+            raise search_error(409, "solo_metadata_required", "Solo filtering requires the current indexed search format")
         validate_records(records)
     else:
         source = form.get("sourceVersion")
@@ -505,6 +523,8 @@ async def search_form(form: FormData, recognizer: Any) -> dict[str, Any]:
         except CacheCapacityError as error:
             raise search_error(503, "cache_capacity", "Index exceeds cache capacity") from error
         records = []
+        if solo_only and not cached_index.solo_metadata:
+            raise search_error(409, "solo_metadata_required", "Solo filtering requires person metadata")
     if selfie.size is not None and selfie.size > MAX_IMAGE_BYTES:
         raise search_error(413, "selfie_too_large", "Selfie image is too large")
     try:
@@ -521,21 +541,23 @@ async def search_form(form: FormData, recognizer: Any) -> dict[str, Any]:
     query = np.asarray(normalized_embedding(selfie_face), dtype=np.float32)
     threshold = sensitivity_threshold(sensitivity)
     if cached_index is not None:
-        matches = await asyncio.to_thread(cached_index.match, query, threshold)
+        matches = await asyncio.to_thread(cached_index.match, query, threshold, solo_only)
         total = cached_index.total
     else:
-        matches = await asyncio.to_thread(match_records, query, records, threshold)
+        matches = await asyncio.to_thread(match_records, query, records, threshold, solo_only)
         total = len({str(record.get('driveFileId')) for record in records})
     return {"status": "complete", "galleryId": galleryId, "total": total, "matches": matches}
 
 
-def validate_records(records: Any) -> None:
+def validate_records(records: Any, require_solo_metadata: bool = False) -> None:
     if not isinstance(records, list):
         raise search_error(400, "invalid_embeddings", "Embeddings must be a list")
     if len(records) > MAX_EMBEDDING_RECORDS:
         raise search_error(413, "too_many_embeddings", "Too many embeddings")
     if any(not isinstance(record, dict) for record in records):
         raise search_error(400, "invalid_embeddings", "Invalid embedding record")
+    if require_solo_metadata and any(not isinstance(record.get("isSolo"), bool) for record in records):
+        raise search_error(409, "solo_metadata_required", "Solo filtering requires person metadata")
 
 
 async def load_cached_index(key: IndexKey) -> PreparedIndex:
@@ -555,8 +577,10 @@ async def load_cached_index(key: IndexKey) -> PreparedIndex:
         if not isinstance(snapshot, dict) or (snapshot.get("galleryId"), snapshot.get("modelVersion"), snapshot.get("sourceVersion"), snapshot.get("completedJobId")) != (key.gallery_id, key.model_version, key.source_version, key.completed_job_id):
             raise search_error(409, "index_changed", "Index identity does not match")
         records = snapshot.get("embeddings")
-        validate_records(records)
-        result = await asyncio.to_thread(prepare_index, records)
+        if snapshot.get("soloMetadata") is not True:
+            raise search_error(409, "solo_metadata_required", "Solo filtering requires person metadata")
+        validate_records(records, require_solo_metadata=True)
+        result = await asyncio.to_thread(prepare_index, records, True)
         logger.info("Face cache transfer bytes=%s records=%s", len(payload), len(records))
         return result
     except (httpx.HTTPError, ValueError, RuntimeError) as error:
