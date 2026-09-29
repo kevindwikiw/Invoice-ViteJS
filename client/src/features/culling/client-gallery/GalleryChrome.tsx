@@ -19,6 +19,8 @@ export const OrbitLogo = memo(function OrbitLogo({
             <img
                 src={orbitLogo}
                 alt="Orbit Logo"
+                width={791}
+                height={296}
                 className="h-auto w-20 object-contain sm:w-28 lg:w-30"
                 style={{ filter: isInverted ? 'invert(1)' : 'none' }}
             />
@@ -34,4 +36,3 @@ export function ThemeToggle({ theme, onToggle }: { theme: GalleryTheme; onToggle
         </button>
     );
 }
-

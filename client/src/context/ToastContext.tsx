@@ -64,7 +64,7 @@ export const ToastProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     return (
         <ToastContext.Provider value={{ addToast, removeToast }}>
             {children}
-            {createPortal(<div aria-label="Notifications" className="fixed left-4 right-4 top-[max(1rem,env(safe-area-inset-top))] z-[1000] flex max-h-[50dvh] flex-col gap-2 overflow-y-auto pointer-events-none sm:left-auto sm:w-96">
+            {createPortal(<div role="region" aria-label="Notifications" className="fixed left-4 right-4 top-[max(1rem,env(safe-area-inset-top))] z-[1000] flex max-h-[50dvh] flex-col gap-2 overflow-y-auto pointer-events-none sm:left-auto sm:w-96">
                 {toasts.map((toast) => (
                     <div
                         key={toast.id}

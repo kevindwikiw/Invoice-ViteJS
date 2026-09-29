@@ -640,7 +640,8 @@ export default function ClientCullingGallery() {
                                     token={token}
                                     galleryId={galleryId}
                                     displayIndex={photoDisplayIndex(photo, fallbackIndex)}
-                                    thumbnailPriority={index < 10}
+                                    thumbnailPriority={index === 0}
+                                    thumbnailEager={index < 10}
                                     onOpen={handleOpenLightbox}
                                     onPrefetch={handlePrefetchLightbox}
                                     onToggle={handleToggleSelection}
@@ -662,7 +663,7 @@ export default function ClientCullingGallery() {
             <footer className="border-t border-[var(--border)] px-4 py-5 text-[10px] text-[var(--text-muted)] md:px-8">
                 <div className="mx-auto flex max-w-[1600px] flex-col items-center justify-between gap-3 sm:flex-row">
                     <p>&copy; {new Date().getFullYear()} The Orbit Photo. All rights reserved.</p>
-                    <a href="https://www.instagram.com/theorbitphoto/" target="_blank" rel="noreferrer" aria-label="The Orbit Photo on Instagram" className="inline-flex items-center gap-1.5 text-[var(--text-secondary)] transition-colors hover:text-[var(--text-primary)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)]">
+                    <a href="https://www.instagram.com/theorbitphoto/" target="_blank" rel="noreferrer" aria-label="@theorbitphoto on Instagram" className="inline-flex items-center gap-1.5 text-[var(--text-secondary)] transition-colors hover:text-[var(--text-primary)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)]">
                         <Instagram size={13} /> @theorbitphoto
                     </a>
                 </div>
@@ -730,7 +731,7 @@ export default function ClientCullingGallery() {
                 />
             )}
             
-            {showTutorial && <TutorialModal galleryId={galleryId} token={token} tutorialSampleSlots={displayGallery?.tutorialSampleSlots || []} onClose={closeTutorial} />}
+            {showTutorial && <TutorialModal galleryId={galleryId} token={token} tutorialSampleSlots={displayGallery?.tutorialSampleSlots || []} theme={theme} showIntro={!localStorage.getItem(tutorialKey(galleryId))} onClose={closeTutorial} />}
         </main>
     );
 }

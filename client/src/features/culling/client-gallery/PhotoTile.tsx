@@ -14,6 +14,7 @@ export const PhotoTile = memo(function PhotoTile({
     galleryId,
     displayIndex,
     thumbnailPriority,
+    thumbnailEager,
     onOpen,
     onPrefetch,
     onToggle,
@@ -24,6 +25,7 @@ export const PhotoTile = memo(function PhotoTile({
     galleryId: string;
     displayIndex: number;
     thumbnailPriority?: boolean;
+    thumbnailEager?: boolean;
     onOpen: (driveFileId: string) => void;
     onPrefetch: (photo: GalleryPhoto) => void;
     onToggle: (photo: GalleryPhoto) => void;
@@ -73,10 +75,12 @@ export const PhotoTile = memo(function PhotoTile({
                             alt={displayLabel}
                             title={displayLabel}
                             draggable={false}
-                            loading={thumbnailPriority ? 'eager' : 'lazy'}
+                            width={photo.width || undefined}
+                            height={photo.height || undefined}
+                            loading={thumbnailEager || thumbnailPriority ? 'eager' : 'lazy'}
                             decoding="async"
                             fetchPriority={thumbnailPriority ? 'high' : 'auto'}
-                            className="h-full w-full object-cover opacity-0 transition-[opacity,transform] duration-200 group-hover:scale-[1.015]"
+                            className={clsx('h-full w-full object-cover duration-200 group-hover:scale-[1.015]', thumbnailPriority ? 'transition-transform' : 'opacity-0 transition-[opacity,transform]')}
                             onLoad={(event) => event.currentTarget.classList.remove('opacity-0')}
                             onDragStart={(event) => event.preventDefault()}
                             onError={() => setHasError(true)}

@@ -121,6 +121,10 @@ async function expectMobileGalleryViewport(page: Page, width: number, height: nu
 test('opens photo 101 on page 2 by driveFileId and keeps the full frame above the footer', async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 844 });
     await installSession(page);
+    const externalFontRequests: string[] = [];
+    page.on('request', (request) => {
+        if (/fonts\.(googleapis|gstatic)\.com/.test(request.url())) externalFontRequests.push(request.url());
+    });
 
     let secondPageRequests = 0;
     await page.route(`**/api/public/galleries/${galleryId}/contact`, (route) => route.fulfill({ json: {} }));
@@ -153,8 +157,22 @@ test('opens photo 101 on page 2 by driveFileId and keeps the full frame above th
 
     await page.goto(`/culling/${galleryId}`);
     await expect(page.getByRole('button', { name: /^Open photo-/ })).toHaveCount(54);
+    const grid = page.getByTestId('gallery-grid');
+    await expect(grid.locator('img[fetchpriority="high"]')).toHaveCount(1);
+    await expect(grid.locator('img[loading="eager"]')).toHaveCount(10);
+    await expect(grid.locator('img[loading="lazy"]')).toHaveCount(44);
+    await expect(grid.locator('img').first()).toHaveCSS('opacity', '1');
+    await expect(grid.locator('img').first()).toHaveAttribute('width', '6000');
+    await expect(page.getByRole('img', { name: 'Orbit Logo' })).toHaveAttribute('width', '791');
+    await expect(page.getByRole('region', { name: 'Notifications', includeHidden: true })).toHaveCount(1);
+    await expect(page.getByRole('link', { name: '@theorbitphoto on Instagram' })).toContainText('@theorbitphoto');
+    expect(await page.evaluate(async () => (await document.fonts.load('400 16px Inter')).length)).toBeGreaterThan(0);
+    expect(externalFontRequests).toEqual([]);
     await expectMobileGalleryViewport(page, 375, 667);
     await expectMobileGalleryViewport(page, 390, 844);
+    await page.screenshot({ path: 'test-results/culling-local-fonts-mobile.png' });
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.screenshot({ path: 'test-results/culling-local-fonts-desktop.png' });
     await expectMobileGalleryViewport(page, 414, 896);
 
     const nextPage = page.getByRole('button', { name: 'Next' });
@@ -624,6 +642,105 @@ test('skips the awareness step when no tutorial samples are configured', async (
     await expect(page.getByTestId('tutorial-submit-step')).toBeVisible();
     await expect(page.getByTestId('tutorial-confidence-step')).toHaveCount(0);
 });
+
+async function prepareTutorialIntro(page: Page, id: string, theme: 'black' | 'white') {
+    await installSession(page, id);
+    await page.addInitScript(({ id, theme }) => {
+        localStorage.removeItem(`orbit_culling_tutorial_${id}`);
+        localStorage.setItem(`orbit_culling_theme_${id}`, theme);
+    }, { id, theme });
+    await page.route(`**/api/public/galleries/${id}/contact`, (route) => route.fulfill({ json: {} }));
+    await page.route(`**/api/public/galleries/${id}/photos?*`, (route) => route.fulfill({
+        json: {
+            gallery: { ...gallery('2026-09-05T03:00:00.000Z'), tutorialSampleSlots: [] },
+            photos: [photo(1)], page: 1, pageSize: 54, total: 1, totalPages: 1,
+            selectedDriveFileIds: [], selectedPhotos: [],
+        },
+    }));
+    await page.route(`**/api/public/galleries/${id}/photos/*/thumbnail?*`, (route) => fulfillImage(route, 320, 320));
+}
+
+for (const theme of ['black', 'white'] as const) {
+    for (const viewport of [{ width: 320, height: 568 }, { width: 390, height: 844 }, { width: 1440, height: 900 }]) {
+        test(`tutorial intro logo fits ${theme} at ${viewport.width}px`, async ({ page }) => {
+            await page.setViewportSize(viewport);
+            await prepareTutorialIntro(page, `intro-${theme}-${viewport.width}`, theme);
+            await page.goto(`/culling/intro-${theme}-${viewport.width}`);
+            const intro = page.getByTestId('tutorial-intro');
+            const logo = intro.getByRole('img', { name: 'The Orbit Photo' });
+            await expect(logo).toBeVisible();
+            await expect.poll(() => logo.evaluate((img: HTMLImageElement) => img.complete && img.naturalWidth > 0)).toBe(true);
+            await expect(logo).toHaveCSS('filter', theme === 'black' ? 'brightness(0) invert(1)' : 'brightness(0)');
+            await expect.poll(async () => Number(await intro.getByRole('progressbar').getAttribute('aria-valuenow'))).toBeGreaterThanOrEqual(20);
+            const box = await logo.boundingBox();
+            expect(box).not.toBeNull();
+            expect(box!.x).toBeGreaterThanOrEqual(0);
+            expect(box!.x + box!.width).toBeLessThanOrEqual(viewport.width);
+            expect(box!.width).toBeGreaterThanOrEqual(viewport.width >= 640 ? 319 : 239);
+            expect(box!.y + box!.height).toBeLessThan(viewport.height);
+            await page.screenshot({ path: `test-results/tutorial-intro-${theme}-${viewport.width}.png` });
+            await expect(page.getByTestId('tutorial-submit-step')).toBeVisible({ timeout: 4500 });
+            await expect(intro).toHaveCount(0);
+            await page.getByRole('button', { name: 'Close tutorial' }).click();
+            await page.getByRole('button', { name: 'How to submit' }).click();
+            await expect(page.getByTestId('tutorial-submit-step')).toBeVisible();
+            await expect(intro).toHaveCount(0);
+        });
+    }
+}
+
+test('tutorial intro respects reduced motion and finishes despite a failed logo', async ({ page }) => {
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    await prepareTutorialIntro(page, 'intro-failed-logo', 'black');
+    await page.route('**/logo.png', (route) => route.abort());
+    await page.clock.install({ time: new Date('2026-09-02T03:00:00.000Z') });
+    await page.clock.pauseAt(new Date('2026-09-02T03:00:01.000Z'));
+    await page.goto('/culling/intro-failed-logo');
+    const intro = page.getByTestId('tutorial-intro');
+    await expect(intro).toBeVisible();
+    await expect(intro.getByAltText('The Orbit Photo')).toBeHidden();
+    expect(await intro.evaluate((element) => element.getAnimations({ subtree: true }).length)).toBe(0);
+    const start = Number(await intro.getByRole('progressbar').getAttribute('aria-valuenow'));
+    const progressUpdates = await intro.getByRole('progressbar').evaluateHandle((element) => {
+        const values: number[] = [];
+        const observer = new MutationObserver(() => values.push(Number(element.getAttribute('aria-valuenow'))));
+        observer.observe(element, { attributes: true, attributeFilter: ['aria-valuenow'] });
+        return { values, observer };
+    });
+    await page.clock.runFor(1000);
+    const next = Number(await intro.getByRole('progressbar').getAttribute('aria-valuenow'));
+    expect(next).toBeGreaterThan(start);
+    const values = await progressUpdates.evaluate(({ values, observer }) => {
+        observer.disconnect();
+        return values;
+    });
+    expect(values.length).toBeGreaterThanOrEqual(25);
+    expect(values.slice(1).every((value, index) => value - values[index] === 1)).toBe(true);
+    await expect(intro).toBeVisible();
+    await page.clock.runFor(2999);
+    await expect(intro).toBeVisible();
+    await expect(intro.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '100');
+    await page.clock.runFor(1);
+    await expect(intro).toHaveCount(0);
+    await expect(page.getByTestId('tutorial-submit-step')).toBeVisible();
+});
+
+for (const closeWith of ['escape', 'button'] as const) {
+    test(`tutorial intro cancels animations and timers on ${closeWith}`, async ({ page }) => {
+        const id = `intro-close-${closeWith}`;
+        await prepareTutorialIntro(page, id, 'black');
+        await page.goto(`/culling/${id}`);
+        const intro = page.getByTestId('tutorial-intro');
+        await expect(intro).toBeVisible();
+        const activeAnimations = await intro.evaluateHandle((element) => element.getAnimations({ subtree: true }));
+        if (closeWith === 'escape') await page.keyboard.press('Escape');
+        else await intro.getByRole('button', { name: 'Close tutorial' }).click();
+        await expect(intro).toHaveCount(0);
+        expect(await activeAnimations.evaluate((animations) => animations.every((animation) => animation.playState === 'idle'))).toBe(true);
+        await page.waitForTimeout(4100);
+        await expect(page.getByTestId('tutorial-panel')).toHaveCount(0);
+    });
+}
 
 test('filters immediately from a selfie and keeps selection submit working', async ({ page }) => {
     const id = 'face-filter-gallery';

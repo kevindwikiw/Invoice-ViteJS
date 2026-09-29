@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type SyntheticEvent } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type SyntheticEvent } from 'react';
 import { AlertCircle, Check, CheckSquare, ChevronLeft, ChevronRight, Images, ImageOff, Loader2, MessageCircle, MoveHorizontal, QrCode, ScanFace, Send, X } from 'lucide-react';
 import clsx from 'clsx';
 
@@ -7,6 +7,7 @@ import type { DiscountRule } from '../culling.types';
 
 import { idrFormat } from './constants';
 import { QrisModal } from './QrisModal';
+import type { GalleryTheme } from './types';
 
 const pendingTutorialImagePreloads = new Set<HTMLImageElement>();
 
@@ -420,7 +421,92 @@ function BeforeAfterSlider({ galleryId, token, slot }: { galleryId: string; toke
     );
 }
 
-export function TutorialModal({ galleryId, token, tutorialSampleSlots, onClose }: { galleryId: string; token: string; tutorialSampleSlots: number[]; onClose: () => void }) {
+function TutorialIntro({ theme, onComplete, onClose }: { theme: GalleryTheme; onComplete: () => void; onClose: () => void }) {
+    const [logoFailed, setLogoFailed] = useState(false);
+    const contentRef = useRef<HTMLDivElement>(null);
+    const logoRef = useRef<HTMLDivElement>(null);
+    const progressRef = useRef<HTMLDivElement>(null);
+    const progressFillRef = useRef<HTMLDivElement>(null);
+    const percentageRef = useRef<HTMLSpanElement>(null);
+
+    useEffect(() => {
+        const content = contentRef.current;
+        const logo = logoRef.current;
+        if (!content || !logo || typeof logo.animate !== 'function') return;
+        const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
+        if (reducedMotion.matches) return;
+
+        const animations = [
+            logo.animate([
+                { opacity: 0, transform: 'scale(0.96)' },
+                { opacity: 1, transform: 'scale(1)' },
+            ], { duration: 350, easing: 'ease-out' }),
+            logo.animate([
+                { transform: 'scale(1)' },
+                { transform: 'scale(1.025)' },
+                { transform: 'scale(1)' },
+            ], { delay: 350, duration: 1725, iterations: 2, easing: 'ease-in-out' }),
+            content.animate([{ opacity: 1 }, { opacity: 0 }], {
+                delay: 3800, duration: 200, easing: 'ease-in', fill: 'forwards',
+            }),
+        ];
+        const cancelAnimations = () => animations.forEach((animation) => animation.cancel());
+        reducedMotion.addEventListener('change', cancelAnimations);
+        return () => {
+            cancelAnimations();
+            reducedMotion.removeEventListener('change', cancelAnimations);
+        };
+    }, []);
+
+    useEffect(() => {
+        const startedAt = performance.now();
+        const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
+        let previousPercent = -1;
+        let frame = 0;
+        const updateProgress = () => {
+            const progress = Math.min(1, (performance.now() - startedAt) / 3900);
+            const percent = Math.floor(progress * 100);
+            if (percent !== previousPercent) {
+                if (percentageRef.current) percentageRef.current.textContent = `${percent}%`;
+                progressRef.current?.setAttribute('aria-valuenow', String(percent));
+                previousPercent = percent;
+            }
+            if (progressFillRef.current) {
+                progressFillRef.current.style.transform = `scaleX(${reducedMotion.matches ? percent / 100 : progress})`;
+            }
+            if (progress < 1) frame = requestAnimationFrame(updateProgress);
+        };
+        frame = requestAnimationFrame(updateProgress);
+        const timeout = setTimeout(onComplete, 4_000);
+        return () => {
+            cancelAnimationFrame(frame);
+            clearTimeout(timeout);
+        };
+    }, [onComplete]);
+
+    return (
+        <div data-testid="tutorial-intro" className="absolute inset-0 flex items-center justify-center bg-[var(--bg-deep)] px-6 text-[var(--text-primary)]">
+            <button type="button" autoFocus onClick={onClose} aria-label="Close tutorial" className="absolute right-4 top-4 flex h-10 w-10 items-center justify-center rounded-md border border-[var(--border)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)]"><X size={15} /></button>
+            <div ref={contentRef} className="w-full max-w-sm text-center">
+                <div ref={logoRef} data-testid="tutorial-intro-logo" className="mx-auto mb-8 aspect-[791/296] w-60 max-w-full origin-center sm:w-80">
+                    <img src="/logo.png" alt="The Orbit Photo" width={791} height={296} fetchPriority="high" decoding="async" onError={() => setLogoFailed(true)} className={clsx('h-full w-full object-contain', logoFailed && 'invisible')} style={{ filter: theme === 'black' ? 'brightness(0) invert(1)' : 'brightness(0)' }} />
+                </div>
+                <h2 className="font-display text-2xl">Your Gallery Awaits</h2>
+                <div className="mx-auto mt-5 flex max-w-xs items-center justify-between text-xs text-[var(--text-muted)]">
+                    <span>Opening Your Guide</span>
+                    <span ref={percentageRef} aria-hidden="true" className="w-10 text-right tabular-nums">0%</span>
+                </div>
+                <div ref={progressRef} role="progressbar" aria-label="Opening your guide" aria-valuemin={0} aria-valuemax={100} aria-valuenow={0} className="mx-auto mt-3 h-1 max-w-xs overflow-hidden bg-[var(--border)]">
+                    <div ref={progressFillRef} className="h-full origin-left bg-[var(--accent)]" style={{ transform: 'scaleX(0)' }} />
+                </div>
+            </div>
+        </div>
+    );
+}
+
+export function TutorialModal({ galleryId, token, tutorialSampleSlots, theme, showIntro = false, onClose }: { galleryId: string; token: string; tutorialSampleSlots: number[]; theme: GalleryTheme; showIntro?: boolean; onClose: () => void }) {
+    const [introComplete, setIntroComplete] = useState(!showIntro);
+    const finishIntro = useCallback(() => setIntroComplete(true), []);
     const hasSamples = tutorialSampleSlots.length > 0;
     const [stepIndex, setStepIndex] = useState(0);
     const [sampleIndex, setSampleIndex] = useState(0);
@@ -475,7 +561,7 @@ export function TutorialModal({ galleryId, token, tutorialSampleSlots, onClose }
 
     return (
         <div className="fixed inset-0 z-[130] flex items-center justify-center overscroll-contain bg-black/70 px-2 py-2 sm:px-4 sm:py-4" role="dialog" aria-modal="true" aria-label="How photo selection works" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
-            <section data-testid="tutorial-panel" className="flex h-[calc(100dvh-1rem)] max-h-[calc(100dvh-1rem)] w-full max-w-lg flex-col overflow-hidden border border-[var(--border)] bg-[var(--bg-card)] text-[var(--text-primary)] shadow-2xl sm:h-[min(56rem,calc(100dvh-2rem))] sm:max-h-[calc(100dvh-2rem)] md:max-w-2xl">
+            {!introComplete ? <TutorialIntro theme={theme} onComplete={finishIntro} onClose={onClose} /> : <section data-testid="tutorial-panel" className="flex h-[calc(100dvh-1rem)] max-h-[calc(100dvh-1rem)] w-full max-w-lg flex-col overflow-hidden border border-[var(--border)] bg-[var(--bg-card)] text-[var(--text-primary)] shadow-2xl sm:h-[min(56rem,calc(100dvh-2rem))] sm:max-h-[calc(100dvh-2rem)] md:max-w-2xl">
                 <header className="flex shrink-0 items-start justify-between gap-4 border-b border-[var(--border)] px-4 py-3.5 sm:px-5 sm:py-4">
                     <div>
                         <p className="text-[9px] font-bold uppercase tracking-[0.14em] text-[var(--text-muted)]">ORBIT GUIDE</p>
@@ -571,7 +657,7 @@ export function TutorialModal({ galleryId, token, tutorialSampleSlots, onClose }
                         <button type="button" onClick={() => goToStep(safeStepIndex + 1)} className="flex h-10 items-center gap-1 rounded-md bg-[var(--accent)] px-3 text-[10px] font-black uppercase tracking-[0.1em] text-[var(--bg-deep)] transition-transform duration-150 ease-out active:scale-[0.97] motion-reduce:transition-none">Ready To Choose <ChevronRight size={14} /></button>
                     ) : null}
                 </footer>
-            </section>
+            </section>}
         </div>
     );
 }
