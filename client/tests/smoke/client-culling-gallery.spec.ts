@@ -699,7 +699,9 @@ test('tutorial intro respects reduced motion and finishes despite a failed logo'
     const intro = page.getByTestId('tutorial-intro');
     await expect(intro).toBeVisible();
     await expect(intro.getByAltText('The Orbit Photo')).toBeHidden();
-    expect(await intro.evaluate((element) => element.getAnimations({ subtree: true }).length)).toBe(0);
+    const introKeyframes = await intro.evaluate((element) => element.getAnimations({ subtree: true }).flatMap((animation) => (animation.effect as KeyframeEffect).getKeyframes()));
+    expect(introKeyframes.length).toBeGreaterThan(0);
+    expect(introKeyframes.every((keyframe) => keyframe.transform === undefined || keyframe.transform === 'none')).toBe(true);
     const start = Number(await intro.getByRole('progressbar').getAttribute('aria-valuenow'));
     const progressUpdates = await intro.getByRole('progressbar').evaluateHandle((element) => {
         const values: number[] = [];
@@ -717,29 +719,80 @@ test('tutorial intro respects reduced motion and finishes despite a failed logo'
     expect(values.length).toBeGreaterThanOrEqual(25);
     expect(values.slice(1).every((value, index) => value - values[index] === 1)).toBe(true);
     await expect(intro).toBeVisible();
-    await page.clock.runFor(2999);
+    await page.clock.runFor(2799);
     await expect(intro).toBeVisible();
+    await expect(page.getByTestId('tutorial-panel')).toHaveCount(0);
+    await page.clock.runFor(1);
     await expect(intro.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '100');
+    const panel = page.getByTestId('tutorial-panel');
+    await expect(panel).toHaveCount(1);
+    await expect(panel).toHaveAttribute('aria-hidden', 'true');
+    await expect(panel).toHaveAttribute('inert', '');
+    await expect(panel).toHaveCSS('pointer-events', 'none');
+    const panelKeyframes = await panel.evaluate((element) => element.getAnimations().flatMap((animation) => (animation.effect as KeyframeEffect).getKeyframes()));
+    expect(panelKeyframes.every((keyframe) => keyframe.transform === undefined || keyframe.transform === 'none')).toBe(true);
+    await page.clock.runFor(199);
+    await expect(intro).toBeVisible();
     await page.clock.runFor(1);
     await expect(intro).toHaveCount(0);
+    await expect(panel).not.toHaveAttribute('aria-hidden', 'true');
+    await expect(panel).not.toHaveAttribute('inert', '');
     await expect(page.getByTestId('tutorial-submit-step')).toBeVisible();
+    await expect(panel.getByRole('button', { name: 'Close tutorial' })).toBeFocused();
 });
 
-for (const closeWith of ['escape', 'button'] as const) {
-    test(`tutorial intro cancels animations and timers on ${closeWith}`, async ({ page }) => {
-        const id = `intro-close-${closeWith}`;
-        await prepareTutorialIntro(page, id, 'black');
-        await page.goto(`/culling/${id}`);
-        const intro = page.getByTestId('tutorial-intro');
-        await expect(intro).toBeVisible();
-        const activeAnimations = await intro.evaluateHandle((element) => element.getAnimations({ subtree: true }));
-        if (closeWith === 'escape') await page.keyboard.press('Escape');
-        else await intro.getByRole('button', { name: 'Close tutorial' }).click();
-        await expect(intro).toHaveCount(0);
-        expect(await activeAnimations.evaluate((animations) => animations.every((animation) => animation.playState === 'idle'))).toBe(true);
-        await page.waitForTimeout(4100);
-        await expect(page.getByTestId('tutorial-panel')).toHaveCount(0);
-    });
+test('crossfades the intro into the tutorial panel during handoff', async ({ page }) => {
+    await prepareTutorialIntro(page, 'intro-handoff', 'black');
+    await page.clock.install({ time: new Date('2026-09-02T03:00:00.000Z') });
+    await page.clock.pauseAt(new Date('2026-09-02T03:00:01.000Z'));
+    await page.goto('/culling/intro-handoff');
+
+    const intro = page.getByTestId('tutorial-intro');
+    await expect(intro).toBeVisible();
+    await page.clock.runFor(3799);
+    await expect(page.getByTestId('tutorial-panel')).toHaveCount(0);
+    await page.clock.runFor(17);
+
+    const panel = page.getByTestId('tutorial-panel');
+    await expect(intro).toHaveCount(1);
+    await expect(panel).toHaveAttribute('aria-hidden', 'true');
+    const panelKeyframes = await panel.evaluate((element) => element.getAnimations().flatMap((animation) => (animation.effect as KeyframeEffect).getKeyframes()));
+    expect(panelKeyframes.some((keyframe) => String(keyframe.transform).includes('scale(0.985)'))).toBe(true);
+    expect(panelKeyframes.some((keyframe) => String(keyframe.transform).includes('translateY(8px)'))).toBe(true);
+
+    await page.clock.runFor(184);
+    await expect(intro).toHaveCount(0);
+    await expect(panel).not.toHaveAttribute('aria-hidden', 'true');
+    await expect(panel.getByRole('button', { name: 'Close tutorial' })).toBeFocused();
+});
+
+for (const phase of ['loading', 'handoff'] as const) {
+    for (const closeWith of ['escape', 'button'] as const) {
+        test(`tutorial intro cancels animations and timers on ${closeWith} during ${phase}`, async ({ page }) => {
+            const id = `intro-close-${phase}-${closeWith}`;
+            await prepareTutorialIntro(page, id, 'black');
+            await page.clock.install({ time: new Date('2026-09-02T03:00:00.000Z') });
+            await page.clock.pauseAt(new Date('2026-09-02T03:00:01.000Z'));
+            await page.goto(`/culling/${id}`);
+            const intro = page.getByTestId('tutorial-intro');
+            await expect(intro).toBeVisible();
+            if (phase === 'handoff') {
+                const panel = page.getByTestId('tutorial-panel');
+                await page.clock.runFor(3799);
+                await expect(panel).toHaveCount(0);
+                await page.clock.runFor(17);
+                await expect(panel).toHaveAttribute('aria-hidden', 'true');
+            }
+            const dialog = page.getByRole('dialog', { name: 'How photo selection works' });
+            const activeAnimations = await dialog.evaluateHandle((element) => element.getAnimations({ subtree: true }));
+            if (closeWith === 'escape') await page.keyboard.press('Escape');
+            else await intro.getByRole('button', { name: 'Close tutorial' }).click({ force: phase === 'handoff' });
+            await expect(dialog).toHaveCount(0);
+            expect(await activeAnimations.evaluate((animations) => animations.every((animation) => animation.playState === 'idle'))).toBe(true);
+            await page.clock.runFor(4100);
+            await expect(page.getByTestId('tutorial-panel')).toHaveCount(0);
+        });
+    }
 }
 
 test('filters immediately from a selfie and keeps selection submit working', async ({ page }) => {

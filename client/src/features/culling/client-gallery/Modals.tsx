@@ -421,35 +421,35 @@ function BeforeAfterSlider({ galleryId, token, slot }: { galleryId: string; toke
     );
 }
 
-function TutorialIntro({ theme, onComplete, onClose }: { theme: GalleryTheme; onComplete: () => void; onClose: () => void }) {
+type TutorialIntroPhase = 'loading' | 'handoff' | 'ready';
+
+function TutorialIntro({ theme, onHandoffStart, onComplete, onClose }: { theme: GalleryTheme; onHandoffStart: () => void; onComplete: () => void; onClose: () => void }) {
     const [logoFailed, setLogoFailed] = useState(false);
-    const contentRef = useRef<HTMLDivElement>(null);
+    const rootRef = useRef<HTMLDivElement>(null);
     const logoRef = useRef<HTMLDivElement>(null);
     const progressRef = useRef<HTMLDivElement>(null);
     const progressFillRef = useRef<HTMLDivElement>(null);
     const percentageRef = useRef<HTMLSpanElement>(null);
 
     useEffect(() => {
-        const content = contentRef.current;
+        const root = rootRef.current;
         const logo = logoRef.current;
-        if (!content || !logo || typeof logo.animate !== 'function') return;
+        if (!root || !logo || typeof root.animate !== 'function') return;
         const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
-        if (reducedMotion.matches) return;
-
-        const animations = [
-            logo.animate([
+        const animations = [root.animate([{ opacity: 1 }, { opacity: 0 }], {
+            delay: 3800, duration: 200, easing: 'cubic-bezier(0.23, 1, 0.32, 1)', fill: 'forwards',
+        })];
+        if (!reducedMotion.matches) {
+            animations.push(logo.animate([
                 { opacity: 0, transform: 'scale(0.96)' },
                 { opacity: 1, transform: 'scale(1)' },
-            ], { duration: 350, easing: 'ease-out' }),
-            logo.animate([
+            ], { duration: 350, easing: 'cubic-bezier(0.23, 1, 0.32, 1)' }));
+            animations.push(logo.animate([
                 { transform: 'scale(1)' },
                 { transform: 'scale(1.025)' },
                 { transform: 'scale(1)' },
-            ], { delay: 350, duration: 1725, iterations: 2, easing: 'ease-in-out' }),
-            content.animate([{ opacity: 1 }, { opacity: 0 }], {
-                delay: 3800, duration: 200, easing: 'ease-in', fill: 'forwards',
-            }),
-        ];
+            ], { delay: 350, duration: 1725, iterations: 2, easing: 'cubic-bezier(0.77, 0, 0.175, 1)' }));
+        }
         const cancelAnimations = () => animations.forEach((animation) => animation.cancel());
         reducedMotion.addEventListener('change', cancelAnimations);
         return () => {
@@ -463,9 +463,7 @@ function TutorialIntro({ theme, onComplete, onClose }: { theme: GalleryTheme; on
         const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
         let previousPercent = -1;
         let frame = 0;
-        const updateProgress = () => {
-            const progress = Math.min(1, (performance.now() - startedAt) / 3900);
-            const percent = Math.floor(progress * 100);
+        const renderProgress = (percent: number, progress: number) => {
             if (percent !== previousPercent) {
                 if (percentageRef.current) percentageRef.current.textContent = `${percent}%`;
                 progressRef.current?.setAttribute('aria-valuenow', String(percent));
@@ -474,20 +472,30 @@ function TutorialIntro({ theme, onComplete, onClose }: { theme: GalleryTheme; on
             if (progressFillRef.current) {
                 progressFillRef.current.style.transform = `scaleX(${reducedMotion.matches ? percent / 100 : progress})`;
             }
+        };
+        const updateProgress = () => {
+            const progress = Math.min(1, (performance.now() - startedAt) / 3800);
+            const percent = Math.floor(progress * 100);
+            renderProgress(percent, progress);
             if (progress < 1) frame = requestAnimationFrame(updateProgress);
         };
         frame = requestAnimationFrame(updateProgress);
-        const timeout = setTimeout(onComplete, 4_000);
+        const handoffTimeout = setTimeout(() => {
+            renderProgress(100, 1);
+            onHandoffStart();
+        }, 3_800);
+        const completeTimeout = setTimeout(onComplete, 4_000);
         return () => {
             cancelAnimationFrame(frame);
-            clearTimeout(timeout);
+            clearTimeout(handoffTimeout);
+            clearTimeout(completeTimeout);
         };
-    }, [onComplete]);
+    }, [onComplete, onHandoffStart]);
 
     return (
-        <div data-testid="tutorial-intro" className="absolute inset-0 flex items-center justify-center bg-[var(--bg-deep)] px-6 text-[var(--text-primary)]">
+        <div ref={rootRef} data-testid="tutorial-intro" className="absolute inset-0 z-10 flex items-center justify-center bg-[var(--bg-deep)] px-6 text-[var(--text-primary)]">
             <button type="button" autoFocus onClick={onClose} aria-label="Close tutorial" className="absolute right-4 top-4 flex h-10 w-10 items-center justify-center rounded-md border border-[var(--border)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)]"><X size={15} /></button>
-            <div ref={contentRef} className="w-full max-w-sm text-center">
+            <div className="w-full max-w-sm text-center">
                 <div ref={logoRef} data-testid="tutorial-intro-logo" className="mx-auto mb-8 aspect-[791/296] w-60 max-w-full origin-center sm:w-80">
                     <img src="/logo.png" alt="The Orbit Photo" width={791} height={296} fetchPriority="high" decoding="async" onError={() => setLogoFailed(true)} className={clsx('h-full w-full object-contain', logoFailed && 'invisible')} style={{ filter: theme === 'black' ? 'brightness(0) invert(1)' : 'brightness(0)' }} />
                 </div>
@@ -505,12 +513,36 @@ function TutorialIntro({ theme, onComplete, onClose }: { theme: GalleryTheme; on
 }
 
 export function TutorialModal({ galleryId, token, tutorialSampleSlots, theme, showIntro = false, onClose }: { galleryId: string; token: string; tutorialSampleSlots: number[]; theme: GalleryTheme; showIntro?: boolean; onClose: () => void }) {
-    const [introComplete, setIntroComplete] = useState(!showIntro);
-    const finishIntro = useCallback(() => setIntroComplete(true), []);
+    const [introPhase, setIntroPhase] = useState<TutorialIntroPhase>(showIntro ? 'loading' : 'ready');
+    const startIntroHandoff = useCallback(() => setIntroPhase((current) => current === 'loading' ? 'handoff' : current), []);
+    const finishIntro = useCallback(() => setIntroPhase('ready'), []);
     const hasSamples = tutorialSampleSlots.length > 0;
     const [stepIndex, setStepIndex] = useState(0);
     const [sampleIndex, setSampleIndex] = useState(0);
     const scrollAreaRef = useRef<HTMLDivElement>(null);
+    const panelRef = useRef<HTMLElement>(null);
+    const panelCloseButtonRef = useRef<HTMLButtonElement>(null);
+
+    useLayoutEffect(() => {
+        const panel = panelRef.current;
+        if (introPhase !== 'handoff' || !panel || typeof panel.animate !== 'function') return;
+        const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+        const animation = panel.animate(reducedMotion
+            ? [{ opacity: 0 }, { opacity: 1 }]
+            : [
+                { opacity: 0, transform: 'translateY(8px) scale(0.985)' },
+                { opacity: 1, transform: 'translateY(0) scale(1)' },
+            ], {
+            duration: 200,
+            easing: 'cubic-bezier(0.23, 1, 0.32, 1)',
+            fill: 'both',
+        });
+        return () => animation.cancel();
+    }, [introPhase]);
+
+    useEffect(() => {
+        if (showIntro && introPhase === 'ready') panelCloseButtonRef.current?.focus();
+    }, [introPhase, showIntro]);
 
     useEffect(() => {
         const body = document.body;
@@ -561,13 +593,13 @@ export function TutorialModal({ galleryId, token, tutorialSampleSlots, theme, sh
 
     return (
         <div className="fixed inset-0 z-[130] flex items-center justify-center overscroll-contain bg-black/70 px-2 py-2 sm:px-4 sm:py-4" role="dialog" aria-modal="true" aria-label="How photo selection works" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
-            {!introComplete ? <TutorialIntro theme={theme} onComplete={finishIntro} onClose={onClose} /> : <section data-testid="tutorial-panel" className="flex h-[calc(100dvh-1rem)] max-h-[calc(100dvh-1rem)] w-full max-w-lg flex-col overflow-hidden border border-[var(--border)] bg-[var(--bg-card)] text-[var(--text-primary)] shadow-2xl sm:h-[min(56rem,calc(100dvh-2rem))] sm:max-h-[calc(100dvh-2rem)] md:max-w-2xl">
+            {introPhase !== 'loading' && <section ref={panelRef} data-testid="tutorial-panel" inert={introPhase === 'handoff'} aria-hidden={introPhase === 'handoff' ? true : undefined} className={clsx('flex h-[calc(100dvh-1rem)] max-h-[calc(100dvh-1rem)] w-full max-w-lg origin-center flex-col overflow-hidden border border-[var(--border)] bg-[var(--bg-card)] text-[var(--text-primary)] shadow-2xl sm:h-[min(56rem,calc(100dvh-2rem))] sm:max-h-[calc(100dvh-2rem)] md:max-w-2xl', introPhase === 'handoff' && 'pointer-events-none')}>
                 <header className="flex shrink-0 items-start justify-between gap-4 border-b border-[var(--border)] px-4 py-3.5 sm:px-5 sm:py-4">
                     <div>
                         <p className="text-[9px] font-bold uppercase tracking-[0.14em] text-[var(--text-muted)]">ORBIT GUIDE</p>
                         <h2 className="mt-1 font-display text-xl">{stepTitle}</h2>
                     </div>
-                    <button type="button" onClick={onClose} aria-label="Close tutorial" className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md border border-[var(--border)] transition-[transform,border-color] duration-150 ease-out hover:border-[var(--accent)] active:scale-[0.97] motion-reduce:transition-none"><X size={15} /></button>
+                    <button ref={panelCloseButtonRef} type="button" onClick={onClose} aria-label="Close tutorial" className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md border border-[var(--border)] transition-[transform,border-color] duration-150 ease-out hover:border-[var(--accent)] active:scale-[0.97] motion-reduce:transition-none"><X size={15} /></button>
                 </header>
 
                 <nav aria-label="Tutorial progress" className="grid shrink-0 border-b border-[var(--border)] px-3 py-2.5 sm:px-5 sm:py-3" style={{ gridTemplateColumns: `repeat(${wizardSteps.length}, minmax(0, 1fr))` }}>
@@ -658,6 +690,7 @@ export function TutorialModal({ galleryId, token, tutorialSampleSlots, theme, sh
                     ) : null}
                 </footer>
             </section>}
+            {introPhase !== 'ready' && <TutorialIntro theme={theme} onHandoffStart={startIntroHandoff} onComplete={finishIntro} onClose={onClose} />}
         </div>
     );
 }
