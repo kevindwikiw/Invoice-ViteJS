@@ -566,7 +566,7 @@ function GalleryTable({
           </tr>
         </thead>
         <tbody className="divide-y divide-[var(--border)]">
-          {galleries.map((gallery) => (
+          {galleries.map((gallery, index) => (
             <tr
               key={gallery.id}
               onClick={() => onSelect(gallery.id)}
@@ -608,7 +608,7 @@ function GalleryTable({
               <td className="px-7 text-center">
                 <div className="flex justify-center gap-1.5">
                   <ClientLinkMenu gallery={gallery} />
-                  <DownloadMenu gallery={gallery} />
+                  <DownloadMenu gallery={gallery} direction={index < 2 ? 'down' : 'up'} />
                   <MaintenanceMenu
                     gallery={gallery}
                     onResetPin={onResetPin}
@@ -1043,6 +1043,9 @@ export default function ClientGalleries() {
     enabled: canManage,
     placeholderData: (previousData) => previousData,
     staleTime: 60 * 1000,
+    refetchInterval: 15 * 1000,
+    refetchIntervalInBackground: false,
+    refetchOnWindowFocus: 'always',
   });
   const galleries = query.data?.items || [];
   const total = query.data?.total || 0;

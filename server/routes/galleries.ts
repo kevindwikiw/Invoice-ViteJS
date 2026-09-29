@@ -536,6 +536,7 @@ function photoFromImageToken(c: Context<Env>, fileId: string): PhotoRow | null {
 adminGalleriesRouter.get("/", async (c) => {
     const denied = await requireGalleryAdmin(c);
     if (denied) return denied;
+    c.header("Cache-Control", "private, no-store");
 
     const pageSize = Math.min(50, Math.max(1, Number(c.req.query("pageSize") || 10) || 10));
     const page = Math.max(1, Number(c.req.query("page") || 1) || 1);
@@ -566,7 +567,8 @@ adminGalleriesRouter.get("/", async (c) => {
                g.public_key as "publicKey", g.contact_whatsapp_url as "contactWhatsappUrl",
                g.max_selections as "maxSelections", g.additional_selection_limit as "additionalSelectionLimit",
                g.edit_addon_status as "editAddonStatus", g.edit_addon_pricing_mode as "editAddonPricingMode", g.edit_addon_price as "editAddonPrice", g.qris_enabled as "qrisEnabled",
-               g.photo_count as "photoCount", g.selection_count as "selectionCount",
+               g.photo_count as "photoCount",
+               (SELECT COUNT(*) FROM gallery_selections s WHERE s.gallery_id = g.id) as "selectionCount",
                g.selection_duration_days as "selectionDurationDays", g.selection_duration_hours as "selectionDurationHours", g.selection_deadline_at as "selectionDeadlineAt",
                g.created_at as "createdAt", g.updated_at as "updatedAt", g.synced_at as "syncedAt"
         FROM galleries g
@@ -1126,23 +1128,33 @@ adminGalleriesRouter.get("/:id/export-copy.ps1", async (c) => {
         ")",
         "",
         "New-Item -ItemType Directory -Force -Path $DestinationRoot | Out-Null",
-        "$copied = 0",
+        "$filesByStem = @{}",
+        "Get-ChildItem -LiteralPath $SourceRoot -File -Recurse | ForEach-Object {",
+        "    $stem = [System.IO.Path]::GetFileNameWithoutExtension($_.Name)",
+        "    if (-not $filesByStem.ContainsKey($stem)) { $filesByStem[$stem] = @() }",
+        "    $filesByStem[$stem] += $_",
+        "}",
+        "",
+        "$matchedSelections = 0",
+        "$copiedFiles = 0",
         "$missing = New-Object System.Collections.Generic.List[string]",
         "",
         "foreach ($item in $Selections) {",
-        "    $source = Join-Path $SourceRoot $item.Filename",
-        "    if (-not (Test-Path -LiteralPath $source -PathType Leaf)) {",
+        "    $stem = [System.IO.Path]::GetFileNameWithoutExtension($item.Filename)",
+        "    if (-not $filesByStem.ContainsKey($stem)) {",
         "        $missing.Add($item.Filename)",
         "        continue",
         "    }",
         "",
-        "    $destination = Join-Path $DestinationRoot $item.Filename",
-        "",
-        "    Copy-Item -LiteralPath $source -Destination $destination -Force",
-        "    $copied += 1",
+        "    $matchedSelections += 1",
+        "    foreach ($source in @($filesByStem[$stem])) {",
+        "        $destination = Join-Path $DestinationRoot $source.Name",
+        "        Copy-Item -LiteralPath $source.FullName -Destination $destination -Force",
+        "        $copiedFiles += 1",
+        "    }",
         "}",
         "",
-        "$message = \"Copied $copied of $($Selections.Count) selected photo(s) to:`r`n$DestinationRoot\"",
+        "$message = \"Matched $matchedSelections of $($Selections.Count) selection(s) and copied $copiedFiles file(s) to:`r`n$DestinationRoot\"",
         "if ($missing.Count) {",
         "    $message += \"`r`n`r`nMissing $($missing.Count) file(s):`r`n\" + (($missing | Select-Object -First 10) -join \"`r`n\")",
         "    if ($missing.Count -gt 10) { $message += \"`r`n...and $($missing.Count - 10) more.\" }",
