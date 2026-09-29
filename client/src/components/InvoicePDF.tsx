@@ -16,6 +16,7 @@ import IconLoc from "../assets/pdf/Location.png";
 import IconMail from "../assets/pdf/Email.png";
 import IconIG from "../assets/pdf/IG.png";
 import IconPhone from "../assets/pdf/Phonecall.png";
+import { parsePackageBundleDescription } from "../lib/packageCatalog";
 
 // IMPORTANT FIX: Stop weird word-splitting
 Font.registerHyphenationCallback((word) => [word]);
@@ -266,7 +267,8 @@ const normalizeItems = (data: InvoiceData): InvoiceItem[] => {
 
     return data.items.map((rawValue) => {
         const raw = asRecord(rawValue);
-        const isBundle = Boolean(raw.isBundle || raw._bundle);
+        const details = s(raw?.details ?? raw?.Details, "");
+        const parsedBundle = parsePackageBundleDescription(details);
 
         const bundleSrcRaw = Array.isArray(raw._bundleSrc)
             ? raw._bundleSrc
@@ -274,18 +276,22 @@ const normalizeItems = (data: InvoiceData): InvoiceItem[] => {
                 ? raw._bundle_src
                 : [];
 
-        const bundleSrc: BundleSrc[] = (bundleSrcRaw ?? []).map((bundleValue) => {
+        const storedBundleSrc: BundleSrc[] = (bundleSrcRaw ?? []).map((bundleValue) => {
             const bundle = asRecord(bundleValue);
             return {
                 desc: s(bundle.desc ?? bundle.Description, ""),
                 details: s(bundle.details ?? bundle.Details, ""),
             };
         });
+        const bundleSrc = storedBundleSrc.length > 0
+            ? storedBundleSrc
+            : parsedBundle.map((section) => ({ desc: section.title, details: section.details }));
+        const isBundle = Boolean(raw.isBundle || raw._bundle || bundleSrc.length > 0);
 
         return {
             name: s(raw?.name ?? raw?.Name, ""),
             desc: s(raw?.desc ?? raw?.Description, ""),
-            details: s(raw?.details ?? raw?.Details, ""),
+            details,
             price: n(raw?.price ?? raw?.Price, 0),
             qty: Math.max(1, n(raw?.qty ?? raw?.Qty, 1)),
             isBundle,

@@ -31,6 +31,33 @@ export function packageDisplayName(name: string): string {
         .replace(/\p{L}+/gu, (word) => word.charAt(0).toLocaleUpperCase('id-ID') + word.slice(1));
 }
 
+export interface PackageBundleSection {
+    title: string;
+    details: string;
+}
+
+const BUNDLE_HEADING = /^\s*(?:[-*•]\s*)?\*\*(.+?)\*\*\s*$/;
+
+export function parsePackageBundleDescription(description: string): PackageBundleSection[] {
+    const sections: PackageBundleSection[] = [];
+    let current: { title: string; details: string[] } | null = null;
+
+    for (const rawLine of description.replace(/\r\n?/g, '\n').split('\n')) {
+        const heading = rawLine.match(BUNDLE_HEADING);
+        if (heading) {
+            if (current) sections.push({ title: current.title, details: current.details.join('\n') });
+            current = { title: heading[1].trim(), details: [] };
+            continue;
+        }
+        if (!current) continue;
+        const detail = rawLine.trim().replace(/^(?:[-*]|•)\s*/, '');
+        if (detail) current.details.push(detail);
+    }
+
+    if (current) sections.push({ title: current.title, details: current.details.join('\n') });
+    return sections.filter((section) => section.title && section.details);
+}
+
 function uniqueItemId(packageId: number): string {
     const suffix = typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
         ? crypto.randomUUID()
@@ -39,13 +66,26 @@ function uniqueItemId(packageId: number): string {
 }
 
 export function invoiceItemFromPackage(pkg: PackageData): InvoiceItem {
+    const bundleSections = parsePackageBundleDescription(pkg.description);
+    const isBundle = bundleSections.length > 0;
+
     return {
         id: uniqueItemId(pkg.id),
         name: pkg.name,
         desc: pkg.name,
-        details: pkg.description,
+        details: isBundle ? undefined : pkg.description,
         price: pkg.price,
         qty: 1,
+        isBundle,
         _rowId: packageRowId(pkg),
+        ...(isBundle ? {
+            _bundleSrc: bundleSections.map((section, index) => ({
+                id: `bundle_section_${pkg.id}_${index}`,
+                desc: section.title,
+                details: section.details,
+                price: 0,
+                qty: 1,
+            })),
+        } : {}),
     };
 }

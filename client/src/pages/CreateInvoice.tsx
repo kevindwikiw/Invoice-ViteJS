@@ -401,7 +401,7 @@ export default function CreateInvoice() {
     // CART ACTIONS
     const availablePackageIds = useMemo(() => new Set(packages.map(packageRowId)), [packages]);
     const selectedPackageItems = useMemo(
-        () => cartItems.filter((item) => item._rowId && !item.isBundle),
+        () => cartItems.filter((item) => item._rowId),
         [cartItems],
     );
     const selectedAvailableCatalogItems = useMemo(
