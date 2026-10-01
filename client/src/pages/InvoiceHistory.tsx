@@ -6,7 +6,7 @@ import { fetchWithAuth, parsePaymentProofs, resolveProofDataUrls } from '../lib/
 import { useToast } from '../context/ToastContext'
 import {
     Search, FileClock, Eye, Pencil, Trash2, Loader2, Plus, Filter, MoreHorizontal, Archive, RotateCcw, Check,
-    ChevronLeft, ChevronRight, Download, X, Paperclip,
+    ChevronLeft, ChevronRight, Download, X, Paperclip, CalendarDays, MapPin,
 } from 'lucide-react'
 import clsx from 'clsx'
 import {
@@ -591,7 +591,7 @@ export default function InvoiceHistory() {
                 )}
 
                 {/* Table */}
-                <section className={`${PANEL_CARD_CLASS} space-y-6 overflow-visible relative`}>
+                <section className={`${PANEL_CARD_CLASS} !p-4 sm:!p-6 space-y-6 overflow-visible relative`}>
 
                     <div className="pb-4 border-b border-[var(--border)] relative z-40">
                         <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-4">
@@ -808,7 +808,7 @@ export default function InvoiceHistory() {
                         subtitle={`BILLING RECORDS & SETTLEMENT (${visibleInvoices.length} SHOWN / ${totalInvoices} TOTAL)`}
                     />
 
-                    <div className="relative overflow-x-auto rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)]/10 md:max-h-[calc(100vh-15rem)] md:overflow-y-auto md:overscroll-contain">
+                    <div className="relative overflow-x-auto rounded-lg border border-[var(--border)] bg-[var(--bg-elevated)]/10 md:max-h-[calc(100vh-15rem)] md:overflow-y-auto md:overscroll-contain md:rounded-xl">
                     <div className={clsx('grid grid-cols-1', INVOICE_GRID_TRACKS_CLASS)}>
                     {/* Table Header */}
                     <div className="hidden border-b border-[var(--border)] bg-[var(--bg-card)] px-6 py-3.5 md:sticky md:top-0 md:z-30 md:col-span-full md:grid md:grid-cols-subgrid">
@@ -966,7 +966,7 @@ export default function InvoiceHistory() {
                                     <div
                                         key={id}
                                         className={clsx(
-                                            "group relative grid min-w-0 grid-cols-1 gap-y-3 px-6 py-4 transition-colors md:col-span-full md:grid-cols-subgrid md:py-5",
+                                            "group relative grid min-w-0 grid-cols-[auto_minmax(0,1fr)_auto] gap-x-3 gap-y-2.5 px-4 py-4 transition-colors md:col-span-full md:grid-cols-subgrid md:gap-x-4 md:gap-y-0 md:px-6 md:py-5",
                                             idx % 2 === 0 ? "bg-transparent" : "bg-[var(--bg-elevated)]/15",
                                             isChecked ? "bg-rose-500/5" : "hover:bg-[var(--bg-elevated)]/35"
                                         )}
@@ -974,35 +974,36 @@ export default function InvoiceHistory() {
                                         <span className="pointer-events-none absolute left-0 top-0 h-full w-[2px] bg-[var(--accent)] opacity-0 group-hover:opacity-70 transition-opacity" />
                                         {/* Checkbox */}
                                         {canDelete ? (
-                                            <div className="flex items-center">
+                                            <div className="col-start-1 row-start-1 flex items-start pt-0.5 md:col-auto md:row-auto md:items-center md:pt-0">
                                                 <input
                                                     type="checkbox"
                                                     checked={isChecked}
                                                     onChange={() => toggleSelect(id)}
+                                                    aria-label={`Select ${invoiceNo}`}
                                                     className="w-4 h-4 rounded border-[var(--border)] accent-[var(--accent)] cursor-pointer"
                                                 />
                                             </div>
                                         ) : <div className="hidden md:block" />}
 
                                         {/* Invoice No */}
-                                        <div className="flex flex-col justify-center min-w-0">
+                                        <div className="col-start-2 row-start-1 flex min-w-0 flex-col justify-center md:col-auto md:row-auto">
                                             <Link
                                                 to="/invoices/$invoiceId"
                                                 params={{ invoiceId: String(id) }}
-                                                className="block max-w-full truncate font-semibold text-sm text-[var(--text-primary)] hover:text-[var(--accent)] transition-colors uppercase font-sans tracking-tight"
+                                                className="block max-w-full truncate text-[13px] font-semibold uppercase tracking-tight text-[var(--text-primary)] transition-colors hover:text-[var(--accent)] md:text-sm"
                                                 style={{ fontFamily: 'var(--font-body)' }}
                                             >
                                                 {invoiceNo}
                                             </Link>
-                                            <span className="text-[10px] text-[var(--text-secondary)] font-normal truncate mt-0.5" style={{ fontFamily: 'var(--font-body)' }}>
+                                            <span className="mt-0.5 truncate text-[11px] font-normal text-[var(--text-secondary)] md:text-[10px]" style={{ fontFamily: 'var(--font-body)' }}>
                                                 {clientName}
                                             </span>
                                         </div>
 
                                         {/* Status */}
-                                        <div className="flex items-center justify-center gap-1.5">
+                                        <div className="col-start-3 row-start-1 flex items-start justify-end gap-1.5 md:col-auto md:row-auto md:items-center md:justify-center">
                                             <span className={clsx(
-                                                "inline-flex items-center px-1.5 py-0.5 rounded text-[8px] font-bold uppercase tracking-wider border shrink-0 whitespace-nowrap",
+                                                "inline-flex min-h-5 shrink-0 items-center whitespace-nowrap rounded border px-2 py-0.5 text-[8px] font-bold uppercase tracking-wider",
                                                 sc.bg, sc.text, sc.border
                                             )} style={{ fontFamily: 'var(--font-body)' }}>
                                                 {sc.label}
@@ -1020,17 +1021,21 @@ export default function InvoiceHistory() {
                                         </div>
 
                                         {/* Venue */}
-                                        <div className="flex min-w-0 items-center justify-center">
-                                            <span className="block w-full truncate text-center text-xs text-[var(--text-secondary)]" title={venue}>
+                                        <div className="col-start-2 col-span-2 row-start-2 flex min-w-0 items-center gap-2 text-[var(--text-muted)] md:col-auto md:row-auto md:col-span-1 md:justify-center">
+                                            <MapPin size={13} className="shrink-0 md:hidden" aria-hidden="true" />
+                                            <span className="block w-full truncate text-left text-xs text-[var(--text-secondary)] md:text-center" title={venue}>
                                                 {venue}
                                             </span>
                                         </div>
 
                                         {/* Notes */}
-                                        <div className="flex items-center min-w-0">
+                                        <div className={clsx(
+                                            "col-start-2 col-span-2 row-start-3 min-w-0 items-center md:col-auto md:row-auto md:col-span-1 md:flex",
+                                            notesExists ? "flex" : "hidden"
+                                        )}>
                                             <span
                                                 className={clsx(
-                                                    "text-xs truncate font-sans block w-full",
+                                                    "block w-full truncate text-left text-xs md:text-left",
                                                     notesExists
                                                         ? "text-[var(--text-secondary)]"
                                                         : "text-[var(--text-muted)] italic"
@@ -1043,26 +1048,37 @@ export default function InvoiceHistory() {
                                         </div>
 
                                         {/* Event Date */}
-                                        <div className="flex items-center justify-center">
-                                            <span className="text-[11px] tabular-nums text-[var(--text-muted)] font-sans opacity-90" style={{ fontFamily: 'var(--font-body)' }}>
+                                        <div className={clsx(
+                                            "col-start-2 col-span-2 flex items-center gap-2 text-[var(--text-muted)] md:col-auto md:row-auto md:col-span-1 md:justify-center",
+                                            notesExists ? "row-start-4" : "row-start-3"
+                                        )}>
+                                            <CalendarDays size={13} className="shrink-0 md:hidden" aria-hidden="true" />
+                                            <span className="text-[11px] tabular-nums opacity-90" style={{ fontFamily: 'var(--font-body)' }}>
                                                 {eventDate}
                                             </span>
                                         </div>
 
                                         {/* Amount */}
-                                        <div className="flex items-center justify-end">
-                                            <span className="text-sm font-semibold text-[var(--accent)] tracking-tight tabular-nums font-sans" style={{ fontFamily: 'var(--font-body)' }}>
+                                        <div className={clsx(
+                                            "col-start-2 flex items-end border-t border-[var(--border)]/60 pt-3 md:col-auto md:row-auto md:border-0 md:pt-0 md:justify-end",
+                                            notesExists ? "row-start-5" : "row-start-4"
+                                        )}>
+                                            <span className="text-[15px] font-semibold tracking-tight tabular-nums text-[var(--accent)] md:text-sm" style={{ fontFamily: 'var(--font-body)' }}>
                                                 {rupiah(totalAmount)}
                                             </span>
                                         </div>
 
                                         {/* Actions */}
-                                        <div className="relative flex items-center justify-center gap-1.5">
+                                        <div className={clsx(
+                                            "relative col-start-3 flex items-center justify-end gap-1.5 border-t border-[var(--border)]/60 pt-3 md:col-auto md:row-auto md:border-0 md:pt-0 md:justify-center",
+                                            notesExists ? "row-start-5" : "row-start-4"
+                                        )}>
                                             <Link
                                                 to="/invoices/$invoiceId"
                                                 params={{ invoiceId: String(id) }}
-                                                className="h-8 w-8 inline-flex items-center justify-center rounded-md border border-[var(--border)] bg-[var(--bg-card)] text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:border-[var(--accent)]/40 transition-colors"
+                                                className="inline-flex h-10 w-10 items-center justify-center rounded-md border border-[var(--border)] bg-[var(--bg-card)] text-[var(--text-muted)] transition-colors hover:border-[var(--accent)]/40 hover:text-[var(--text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)] md:h-8 md:w-8"
                                                 title="View"
+                                                aria-label={`View ${invoiceNo}`}
                                             >
                                                 <Eye size={14} />
                                             </Link>
@@ -1073,7 +1089,7 @@ export default function InvoiceHistory() {
                                                     handleDownloadInvoice(id, invoiceNo)
                                                 }}
                                                 disabled={!canDownload || downloadingId !== null}
-                                                className="h-8 w-8 inline-flex items-center justify-center rounded-md border border-[var(--border)] bg-[var(--bg-card)] text-[var(--text-muted)] hover:text-[var(--accent)] hover:border-[var(--accent)]/40 transition-colors disabled:cursor-not-allowed disabled:opacity-40"
+                                                className="inline-flex h-10 w-10 items-center justify-center rounded-md border border-[var(--border)] bg-[var(--bg-card)] text-[var(--text-muted)] transition-colors hover:border-[var(--accent)]/40 hover:text-[var(--accent)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)] disabled:cursor-not-allowed disabled:opacity-40 md:h-8 md:w-8"
                                                 title={canDownload ? 'Download PDF' : 'No download access'}
                                                 aria-label={`Download ${invoiceNo} PDF`}
                                             >
@@ -1084,8 +1100,9 @@ export default function InvoiceHistory() {
                                                     e.stopPropagation()
                                                     setOpenRowMenuId(prev => (prev === id ? null : id))
                                                 }}
-                                                className="h-8 w-8 inline-flex items-center justify-center rounded-md border border-[var(--border)] bg-[var(--bg-card)] text-[var(--text-muted)] hover:text-[var(--accent)] hover:border-[var(--accent)]/40 transition-colors"
+                                                className="inline-flex h-10 w-10 items-center justify-center rounded-md border border-[var(--border)] bg-[var(--bg-card)] text-[var(--text-muted)] transition-colors hover:border-[var(--accent)]/40 hover:text-[var(--accent)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)] md:h-8 md:w-8"
                                                 title="More actions"
+                                                aria-label={`More actions for ${invoiceNo}`}
                                             >
                                                 <MoreHorizontal size={16} />
                                             </button>
@@ -1097,7 +1114,7 @@ export default function InvoiceHistory() {
                                                         setOpenRowMenuId(null)
                                                         setInvoiceToDelete({ id, invoiceNo })
                                                     }}
-                                                    className="h-8 w-8 inline-flex items-center justify-center rounded-md border border-rose-500/20 bg-rose-500/5 text-rose-500 transition-colors hover:bg-rose-500 hover:text-white"
+                                                    className="hidden h-8 w-8 items-center justify-center rounded-md border border-rose-500/20 bg-rose-500/5 text-rose-500 transition-colors hover:bg-rose-500 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-500 md:inline-flex"
                                                     title="Delete invoice"
                                                     aria-label={`Delete ${invoiceNo}`}
                                                 >
@@ -1147,6 +1164,19 @@ export default function InvoiceHistory() {
                                                     {isArchived ? <RotateCcw size={14} /> : <Archive size={14} />}
                                                     {isArchived ? 'Unarchive' : 'Archive'}
                                                 </button>
+                                                {canDelete && (
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => {
+                                                            setOpenRowMenuId(null)
+                                                            setInvoiceToDelete({ id, invoiceNo })
+                                                        }}
+                                                        className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-xs text-rose-500 transition-colors hover:bg-rose-500/10 md:hidden"
+                                                    >
+                                                        <Trash2 size={14} />
+                                                        Delete
+                                                    </button>
+                                                )}
                                             </div>
                                         </div>
                                     </div>
