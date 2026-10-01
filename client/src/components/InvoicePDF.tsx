@@ -17,7 +17,7 @@ import IconMail from "../assets/pdf/Email.png";
 import IconIG from "../assets/pdf/IG.png";
 import IconPhone from "../assets/pdf/Phonecall.png";
 import { parsePackageBundleDescription } from "../lib/packageCatalog";
-import { shouldUseDenseInvoiceLayout } from "../lib/invoicePdfDensity";
+import { calculateInvoicePdfScale } from "../lib/invoicePdfDensity";
 
 // IMPORTANT FIX: Stop weird word-splitting
 Font.registerHyphenationCallback((word) => [word]);
@@ -186,37 +186,25 @@ type InvoiceLayoutMetrics = {
     legalLineHeight: number;
 };
 
-const invoiceLayoutMetrics = (useDenseLayout: boolean): InvoiceLayoutMetrics => {
-    if (useDenseLayout) {
-        return {
-            cellPadding: 7,
-            itemTitleFont: 8.5,
-            itemDescriptionFont: 7.25,
-            sectionTitleFont: 7.5,
-            detailFont: 6.75,
-            detailLineHeight: 1.22,
-            postMarginMm: 4.5,
-            infoHeaderFont: 7.25,
-            infoFont: 6.5,
-            termsFont: 5.75,
-            legalLineHeight: 1.16,
-        };
-    }
+const clampMetric = (value: number, min: number, max: number): number => (
+    Math.min(max, Math.max(min, value))
+);
 
-    return {
-        cellPadding: 8,
-        itemTitleFont: 9.25,
-        itemDescriptionFont: 7.75,
-        sectionTitleFont: 7.75,
-        detailFont: 7,
-        detailLineHeight: 1.22,
-        postMarginMm: 5,
-        infoHeaderFont: 8,
-        infoFont: 7,
-        termsFont: 6.5,
-        legalLineHeight: 1.2,
-    };
-};
+const roundMetric = (value: number): number => Number(value.toFixed(2));
+
+const invoiceLayoutMetrics = (scale: number): InvoiceLayoutMetrics => ({
+    cellPadding: roundMetric(clampMetric(8 * scale, 6, 8.8)),
+    itemTitleFont: roundMetric(clampMetric(9.25 * scale, 8.25, 9.7)),
+    itemDescriptionFont: roundMetric(clampMetric(7.75 * scale, 7, 8)),
+    sectionTitleFont: roundMetric(clampMetric(7.75 * scale, 7.1, 8)),
+    detailFont: roundMetric(clampMetric(7 * scale, 6.25, 7.4)),
+    detailLineHeight: roundMetric(clampMetric(1.2 + (scale - 1) * 0.18, 1.16, 1.24)),
+    postMarginMm: roundMetric(clampMetric(5 * scale, 4, 5.4)),
+    infoHeaderFont: roundMetric(clampMetric(8 * scale, 7, 8.3)),
+    infoFont: roundMetric(clampMetric(7 * scale, 6.25, 7.3)),
+    termsFont: roundMetric(clampMetric(6.5 * scale, 5.75, 6.75)),
+    legalLineHeight: roundMetric(clampMetric(1.2 + (scale - 1) * 0.16, 1.16, 1.23)),
+});
 
 const formatHoursWithDuration = (hoursStr: string): string => {
     if (!hoursStr) return "";
@@ -851,7 +839,6 @@ export const InvoicePDF = ({ invoice, proofs = [] }: { invoice: Invoice; proofs?
         const data = parseInvoiceData(invoice?.invoiceData);
         // ... (rest of data parsing) ...
         const items = normalizeItems(data);
-        const layout = invoiceLayoutMetrics(shouldUseDenseInvoiceLayout(items));
         const paymentTerms = normalizePaymentTerms(data);
         const displayPaymentTerms = paymentTerms.length
             ? paymentTerms
@@ -882,6 +869,13 @@ export const InvoicePDF = ({ invoice, proofs = [] }: { invoice: Invoice; proofs?
         const defaultTerms =
             "Booking fee is non-refundable.\nFull payment is required before event.\nEdit process takes 2-4 weeks.";
         const termsLines = splitTermsSafe(s(data.terms, defaultTerms));
+        const layoutScale = calculateInvoicePdfScale(items, {
+            eventDetailCount: [dateStr, venue, hours].filter(Boolean).length,
+            paymentTermCount: displayPaymentTerms.length,
+            termsLines,
+            notes,
+        });
+        const layout = invoiceLayoutMetrics(layoutScale);
 
         const clientName = s(invoice?.clientName, "");
         const invoiceNo = s(invoice?.invoiceNo, "");
