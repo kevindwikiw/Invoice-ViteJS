@@ -189,12 +189,12 @@ type InvoiceLayoutMetrics = {
 const invoiceLayoutMetrics = (useDenseLayout: boolean): InvoiceLayoutMetrics => {
     if (useDenseLayout) {
         return {
-            cellPadding: 6,
+            cellPadding: 7,
             itemTitleFont: 8.5,
             itemDescriptionFont: 7.25,
-            sectionTitleFont: 7.25,
-            detailFont: 6.25,
-            detailLineHeight: 1.18,
+            sectionTitleFont: 7.5,
+            detailFont: 6.75,
+            detailLineHeight: 1.22,
             postMarginMm: 4.5,
             infoHeaderFont: 7.25,
             infoFont: 6.5,
