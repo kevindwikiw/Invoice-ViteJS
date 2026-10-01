@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type SyntheticEvent } from 'react';
-import { AlertCircle, Check, CheckSquare, ChevronLeft, ChevronRight, Images, ImageOff, Loader2, MessageCircle, MoveHorizontal, QrCode, ScanFace, Send, X } from 'lucide-react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { AlertCircle, Check, CheckSquare, ChevronLeft, ChevronRight, Clock3, Images, Loader2, MessageCircle, QrCode, ScanFace, Send, X } from 'lucide-react';
 import clsx from 'clsx';
 
 import { calculateAddonQuote, cullingTutorialImageUrl, createQrisPayment, type QrisPaymentResponse } from '../culling.public';
@@ -7,6 +7,7 @@ import type { DiscountRule } from '../culling.types';
 
 import { idrFormat } from './constants';
 import { QrisModal } from './QrisModal';
+import { BeforeAfterSlider as ComparisonSlider } from './BeforeAfterSlider';
 import type { GalleryTheme } from './types';
 
 const pendingTutorialImagePreloads = new Set<HTMLImageElement>();
@@ -218,7 +219,7 @@ export function SubmitConfirmationModal({
                     <p className="font-display text-5xl tabular-nums text-[var(--text-primary)]">{selectedCount}</p>
                     <p className="mt-1 text-[10px] font-bold uppercase tracking-[0.14em] text-[var(--text-muted)]">{selectedCount === 1 ? 'Photo selected' : 'Photos selected'}</p>
                     <p className="mx-auto mt-5 max-w-xs text-xs leading-5 text-[var(--text-secondary)]">
-                        {clearsSelection ? 'This removes all previously submitted photos. You can select and submit them again later.' : 'Orbit will receive these filenames. You can revise your choices and submit again later.'}
+                        {clearsSelection ? 'This removes all previously submitted photos. You can select and submit them again later.' : 'Are you sure these are the photos you want to submit? Orbit will receive the selected filenames.'}
                     </p>
                     {error && <div className="mt-4 flex items-start gap-2 border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-left text-xs leading-5 text-rose-300"><AlertCircle size={14} className="mt-0.5 shrink-0" />{error}</div>}
                 </div>
@@ -236,189 +237,7 @@ export function SubmitConfirmationModal({
 }
 
 function BeforeAfterSlider({ galleryId, token, slot }: { galleryId: string; token: string; slot: number }) {
-    const mediaSlotRef = useRef<HTMLDivElement>(null);
-    const stageRef = useRef<HTMLDivElement>(null);
-    const touchStartRef = useRef<{ pointerId: number; x: number; y: number } | null>(null);
-    const [position, setPosition] = useState(50);
-    const [failedAssets, setFailedAssets] = useState({ before: false, after: false });
-    const [loadedAssets, setLoadedAssets] = useState({ before: false, after: false });
-    const [placeholderUrl, setPlaceholderUrl] = useState('');
-    const [sourceAspectRatio, setSourceAspectRatio] = useState(4 / 3);
-    const [stageSize, setStageSize] = useState<{ width: number; height: number } | null>(null);
-    const beforeUrl = cullingTutorialImageUrl(galleryId, token, slot, 'before');
-    const afterUrl = cullingTutorialImageUrl(galleryId, token, slot, 'after');
-    const pairReady = loadedAssets.before && loadedAssets.after;
-
-    useLayoutEffect(() => {
-        const mediaSlot = mediaSlotRef.current;
-        if (!mediaSlot) return;
-
-        const fitStageToSlot = () => {
-            const bounds = mediaSlot.getBoundingClientRect();
-            if (bounds.width <= 0 || bounds.height <= 0) return;
-            const width = Math.min(bounds.width, bounds.height * sourceAspectRatio);
-            setStageSize({ width, height: width / sourceAspectRatio });
-        };
-
-        fitStageToSlot();
-        const observer = new ResizeObserver(fitStageToSlot);
-        observer.observe(mediaSlot);
-        return () => observer.disconnect();
-    }, [sourceAspectRatio]);
-
-    const handleAssetLoad = (asset: 'before' | 'after', event: SyntheticEvent<HTMLImageElement>) => {
-        const image = event.currentTarget;
-        const { naturalWidth, naturalHeight } = image;
-        if (naturalWidth > 0 && naturalHeight > 0) setSourceAspectRatio(naturalWidth / naturalHeight);
-        setPlaceholderUrl((current) => current || image.currentSrc || image.src);
-
-        const markDecoded = () => setLoadedAssets((current) => ({ ...current, [asset]: true }));
-        if (typeof image.decode !== 'function') {
-            markDecoded();
-            return;
-        }
-        void image.decode().catch(() => undefined).finally(markDecoded);
-    };
-
-    const updatePosition = (clientX: number) => {
-        const bounds = stageRef.current?.getBoundingClientRect();
-        if (!bounds || bounds.width <= 0) return;
-        setPosition(Math.min(100, Math.max(0, ((clientX - bounds.left) / bounds.width) * 100)));
-    };
-
-    const handlePointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
-        if (event.pointerType === 'mouse') {
-            event.currentTarget.setPointerCapture(event.pointerId);
-            updatePosition(event.clientX);
-            return;
-        }
-
-        touchStartRef.current = { pointerId: event.pointerId, x: event.clientX, y: event.clientY };
-    };
-
-    const handlePointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
-        if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-            updatePosition(event.clientX);
-            return;
-        }
-
-        const start = touchStartRef.current;
-        if (!start || start.pointerId !== event.pointerId) return;
-        const deltaX = Math.abs(event.clientX - start.x);
-        const deltaY = Math.abs(event.clientY - start.y);
-        if (deltaX < 6 || deltaX <= deltaY) return;
-
-        event.currentTarget.setPointerCapture(event.pointerId);
-        updatePosition(event.clientX);
-    };
-
-    const finishPointer = (event: ReactPointerEvent<HTMLDivElement>) => {
-        if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-            event.currentTarget.releasePointerCapture(event.pointerId);
-        }
-        if (touchStartRef.current?.pointerId === event.pointerId) touchStartRef.current = null;
-    };
-
-    const handleKeyDown = (event: ReactKeyboardEvent<HTMLButtonElement>) => {
-        const step = event.shiftKey ? 10 : 5;
-        if (event.key === 'ArrowLeft') {
-            event.preventDefault();
-            setPosition((current) => Math.max(0, current - step));
-        } else if (event.key === 'ArrowRight') {
-            event.preventDefault();
-            setPosition((current) => Math.min(100, current + step));
-        } else if (event.key === 'Home') {
-            event.preventDefault();
-            setPosition(0);
-        } else if (event.key === 'End') {
-            event.preventDefault();
-            setPosition(100);
-        }
-    };
-
-    return (
-        <div>
-            <div ref={mediaSlotRef} data-testid="tutorial-media-slot" className="relative flex h-[clamp(20rem,58dvh,31rem)] w-full items-center justify-center overflow-hidden bg-black md:h-[min(60dvh,34rem)]">
-                <div
-                    ref={stageRef}
-                    data-testid="tutorial-before-after-slider"
-                    className="relative shrink-0 touch-pan-y overflow-hidden bg-black"
-                    style={stageSize ? { width: stageSize.width, height: stageSize.height } : { width: '100%', aspectRatio: sourceAspectRatio }}
-                    aria-busy={!pairReady && !failedAssets.before && !failedAssets.after}
-                    onPointerDown={handlePointerDown}
-                    onPointerMove={handlePointerMove}
-                    onPointerUp={finishPointer}
-                    onPointerCancel={finishPointer}
-                >
-                    {!failedAssets.after && (
-                        <img
-                            src={afterUrl}
-                            alt="Edited result sample"
-                            loading="eager"
-                            decoding="async"
-                            fetchPriority="high"
-                            className={clsx('absolute inset-0 h-full w-full object-cover transition-opacity duration-150 ease-out motion-reduce:transition-none', pairReady ? 'opacity-100' : 'opacity-0')}
-                            onLoad={(event) => handleAssetLoad('after', event)}
-                            onError={() => setFailedAssets((current) => ({ ...current, after: true }))}
-                        />
-                    )}
-                    {!failedAssets.before && (
-                        <img
-                            src={beforeUrl}
-                            alt="Before editing sample"
-                            loading="eager"
-                            decoding="async"
-                            fetchPriority="high"
-                            className={clsx('absolute inset-0 h-full w-full object-cover transition-opacity duration-150 ease-out motion-reduce:transition-none', pairReady ? 'opacity-100' : 'opacity-0')}
-                            style={{ clipPath: `inset(0 ${100 - position}% 0 0)` }}
-                            onLoad={(event) => handleAssetLoad('before', event)}
-                            onError={() => setFailedAssets((current) => ({ ...current, before: true }))}
-                        />
-                    )}
-
-                    {!failedAssets.before && !failedAssets.after && !pairReady && (
-                        <div data-testid="tutorial-image-loading" className="pointer-events-none absolute inset-0 z-30 flex items-center justify-center overflow-hidden bg-black text-white/75" aria-label="Loading comparison photos">
-                            {placeholderUrl && <img data-testid="tutorial-image-placeholder" aria-hidden="true" src={placeholderUrl} alt="" className="absolute inset-0 h-full w-full scale-[1.04] object-cover opacity-70 blur-[12px]" />}
-                            <span className="absolute inset-0 bg-black/25" />
-                            <Loader2 size={20} className="relative animate-spin motion-reduce:animate-none" />
-                        </div>
-                    )}
-
-                    {(failedAssets.before || failedAssets.after) && (
-                        <div className="absolute inset-0 z-30 flex flex-col items-center justify-center bg-[var(--bg-elevated)] px-6 text-center text-[var(--text-muted)]">
-                            <ImageOff size={24} className="mb-2 opacity-65" />
-                            <p className="text-[10px] font-bold uppercase tracking-[0.12em]">Tutorial photos unavailable</p>
-                            <p className="mt-1 max-w-xs text-[10px] leading-4">Set both sample files in this gallery&apos;s admin settings and share them with the Drive service account.</p>
-                        </div>
-                    )}
-
-                    {pairReady && (
-                        <>
-                            <span className="pointer-events-none absolute left-2 top-2 z-10 border border-white/10 bg-black/75 px-2 py-1 text-[9px] font-bold uppercase tracking-[0.12em] text-white shadow-sm backdrop-blur-md">Before</span>
-                            <span className="pointer-events-none absolute right-2 top-2 z-10 border border-white/10 bg-black/75 px-2 py-1 text-[9px] font-bold uppercase tracking-[0.12em] text-white shadow-sm backdrop-blur-md">Edited</span>
-                            <span data-testid="tutorial-slider-divider" className="pointer-events-none absolute top-[calc(50%_-_3.25rem)] z-10 h-7 w-px bg-white/80 shadow-[0_0_0_1px_rgba(0,0,0,0.18)]" style={{ left: `${position}%` }} />
-                            <span data-testid="tutorial-slider-divider" className="pointer-events-none absolute bottom-[calc(50%_-_3.25rem)] z-10 h-7 w-px bg-white/80 shadow-[0_0_0_1px_rgba(0,0,0,0.18)]" style={{ left: `${position}%` }} />
-                            <button
-                                type="button"
-                                data-testid="tutorial-slider-handle"
-                                role="slider"
-                                aria-label="Compare before and edited photo"
-                                aria-valuemin={0}
-                                aria-valuemax={100}
-                                aria-valuenow={Math.round(position)}
-                                onKeyDown={handleKeyDown}
-                                className="absolute top-1/2 z-20 flex h-11 w-11 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border border-white/75 bg-black/60 text-white shadow-[0_4px_18px_rgb(0_0_0/0.28)] backdrop-blur-md transition-[transform,background-color] duration-150 ease-out hover:scale-105 hover:bg-black/75 active:scale-[0.96] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white motion-reduce:transition-none"
-                                style={{ left: `${position}%` }}
-                            >
-                                <MoveHorizontal size={17} strokeWidth={1.8} />
-                            </button>
-                        </>
-                    )}
-                </div>
-            </div>
-            <p className="mt-2 text-center text-[10px] text-[var(--text-muted)]">Drag to compare.</p>
-        </div>
-    );
+    return <ComparisonSlider key={`${galleryId}-${slot}`} beforeUrl={cullingTutorialImageUrl(galleryId, token, slot, 'before')} afterUrl={cullingTutorialImageUrl(galleryId, token, slot, 'after')} />;
 }
 
 type TutorialIntroPhase = 'loading' | 'handoff' | 'ready';
@@ -522,6 +341,7 @@ export function TutorialModal({ galleryId, token, tutorialSampleSlots, theme, sh
     const scrollAreaRef = useRef<HTMLDivElement>(null);
     const panelRef = useRef<HTMLElement>(null);
     const panelCloseButtonRef = useRef<HTMLButtonElement>(null);
+    const readyContentRef = useRef<HTMLDivElement>(null);
 
     useLayoutEffect(() => {
         const panel = panelRef.current;
@@ -587,13 +407,22 @@ export function TutorialModal({ galleryId, token, tutorialSampleSlots, theme, sh
         scrollAreaRef.current?.scrollTo({ top: 0 });
     }, [safeStepIndex]);
 
+    useLayoutEffect(() => {
+        if (activeStep.id !== 'ready' || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+        const animation = readyContentRef.current?.animate([
+            { opacity: 0, transform: 'translateY(8px)' },
+            { opacity: 1, transform: 'translateY(0)' },
+        ], { duration: 220, easing: 'cubic-bezier(0.23, 1, 0.32, 1)' });
+        return () => animation?.cancel();
+    }, [activeStep.id]);
+
     const goToStep = (nextIndex: number) => {
         setStepIndex(Math.min(wizardSteps.length - 1, Math.max(0, nextIndex)));
     };
 
     return (
         <div className="fixed inset-0 z-[130] flex items-center justify-center overscroll-contain bg-black/70 px-2 py-2 sm:px-4 sm:py-4" role="dialog" aria-modal="true" aria-label="How photo selection works" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
-            {introPhase !== 'loading' && <section ref={panelRef} data-testid="tutorial-panel" inert={introPhase === 'handoff'} aria-hidden={introPhase === 'handoff' ? true : undefined} className={clsx('flex h-[calc(100dvh-1rem)] max-h-[calc(100dvh-1rem)] w-full max-w-lg origin-center flex-col overflow-hidden border border-[var(--border)] bg-[var(--bg-card)] text-[var(--text-primary)] shadow-2xl sm:h-[min(56rem,calc(100dvh-2rem))] sm:max-h-[calc(100dvh-2rem)] md:max-w-2xl', introPhase === 'handoff' && 'pointer-events-none')}>
+            {introPhase !== 'loading' && <section ref={panelRef} data-testid="tutorial-panel" inert={introPhase === 'handoff'} aria-hidden={introPhase === 'handoff' ? true : undefined} className={clsx('flex h-[calc(100dvh-1rem)] max-h-[calc(100dvh-1rem)] w-[calc(100vw-1rem)] origin-center flex-col overflow-hidden border border-[var(--border)] bg-[var(--bg-card)] text-[var(--text-primary)] shadow-2xl sm:h-[min(56rem,calc(100dvh-2rem))] sm:max-h-[calc(100dvh-2rem)] sm:w-[67vw] sm:max-w-2xl', introPhase === 'handoff' && 'pointer-events-none')}>
                 <header className="flex shrink-0 items-start justify-between gap-4 border-b border-[var(--border)] px-4 py-3.5 sm:px-5 sm:py-4">
                     <div>
                         <p className="text-[9px] font-bold uppercase tracking-[0.14em] text-[var(--text-muted)]">ORBIT GUIDE</p>
@@ -639,19 +468,20 @@ export function TutorialModal({ galleryId, token, tutorialSampleSlots, theme, sh
                     )}
 
                     {activeStep.id === 'submit' && (
-                        <div data-testid="tutorial-submit-step">
-                            <p className="mx-auto max-w-md text-center text-sm leading-6 text-[var(--text-secondary)]">Choose at your own pace. These five steps take you from the full gallery to a reviewed selection.</p>
-                            <ol data-testid="tutorial-submit-steps" className="mt-4 divide-y divide-[var(--border)] border-y border-[var(--border)]">
+                        <div data-testid="tutorial-submit-step" className="flex min-h-full flex-col">
+                            <p className="mx-auto max-w-md text-center text-[13px] leading-6 text-[var(--text-secondary)]">Choose at your own pace. These six steps take you from the full gallery to your edited photos.</p>
+                            <ol data-testid="tutorial-submit-steps" className="mt-3 divide-y divide-[var(--border)] border-y border-[var(--border)] sm:mt-4">
                                 {[
-                                    { icon: <Images size={15} />, title: 'Browse the Gallery', text: 'Scroll through the gallery and open any photo for a closer look.' },
-                                    { icon: <ScanFace size={15} />, title: 'Filter by Selfie', text: 'Use a clear selfie to find your photos. Tap All Photos to return to the full gallery.' },
-                                    { icon: <Check size={15} />, title: 'Choose Favorites', text: 'Tap the check button on every photo you want to keep.' },
-                                    { icon: <CheckSquare size={15} />, title: 'Review Picked', text: 'Open Picked to compare your choices and remove anything before finalizing.' },
-                                    { icon: <Send size={15} />, title: 'Submit Your Selection', text: 'Confirm the final count. You can revise and submit again later.' },
+                                    { icon: <Images size={18} />, title: 'Browse the Gallery', text: 'Scroll through the gallery and open any photo for a closer look.' },
+                                    { icon: <ScanFace size={18} />, title: 'Find and Choose Favorites', text: 'Use a clear selfie to find matching photos, then tap the check button on the ones you want to keep.' },
+                                    { icon: <CheckSquare size={18} />, title: 'Review Picked', text: 'Use All Photos, Picked, or Submitted to move between views.' },
+                                    { icon: <Send size={18} />, title: 'Submit Your Selection', text: 'Confirm the final count. You can revise and submit again later.' },
+                                    { icon: <Images size={18} />, title: 'Review Edited Photos', text: 'Open Edited Photos to compare your final images with Before / After.' },
+                                    { icon: <Clock3 size={18} />, title: 'Keep An Eye On Time', text: 'The countdown shows how long your gallery remains available.' },
                                 ].map((item, index) => (
-                                    <li key={item.title} className="flex gap-3 py-3.5 sm:py-4">
-                                        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-[var(--border)] text-[var(--text-primary)]">{item.icon}</span>
-                                        <div className="min-w-0"><p className="text-xs font-semibold"><span className="mr-1.5 text-[var(--text-muted)]">{index + 1}.</span>{item.title}</p><p className="mt-1 text-xs leading-5 text-[var(--text-muted)]">{item.text}</p></div>
+                                    <li key={item.title} className="flex items-center gap-3 py-2.5 sm:py-3">
+                                        <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-[var(--border)] text-[var(--text-primary)]">{item.icon}</span>
+                                        <div className="min-w-0 pt-0.5"><p className="text-xs font-semibold"><span className="mr-1.5 text-[var(--text-muted)]">{index + 1}.</span>{item.title}</p><p className="mt-0.5 text-[11px] leading-4 text-[var(--text-muted)]">{item.text}</p></div>
                                     </li>
                                 ))}
                             </ol>
@@ -659,21 +489,11 @@ export function TutorialModal({ galleryId, token, tutorialSampleSlots, theme, sh
                     )}
 
                     {activeStep.id === 'ready' && (
-                        <div data-testid="tutorial-ready-step" className="flex min-h-full flex-col justify-center py-3 text-center">
-                            <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full border border-[var(--accent)] text-[var(--accent)]"><Check size={24} /></div>
-                            <p className="mt-5 font-display text-2xl">Ready When You Are</p>
-                            <p className="mx-auto mt-3 max-w-sm text-sm leading-6 text-[var(--text-secondary)]">Take your time and trust your eye. There is no pressure to finish everything in one visit.</p>
-                            <div data-testid="tutorial-ready-checklist" className="mx-auto mt-7 w-full max-w-sm divide-y divide-[var(--border)] border-y border-[var(--border)] text-left">
-                                {[
-                                    ['Choose What Feels Meaningful', 'Keep the moments that tell your story, not only the technically perfect frames.'],
-                                    ['Review Before Submitting', 'Use Picked to see your selection together and check the final count.'],
-                                    ['Revise Whenever Needed', 'Your latest submission can be updated later while the gallery remains open.'],
-                                ].map(([title, text]) => (
-                                    <div key={title} className="flex gap-3 py-3.5">
-                                        <span className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-[var(--accent)] text-[var(--bg-deep)]"><Check size={13} strokeWidth={2.5} /></span>
-                                        <div><p className="text-xs font-semibold text-[var(--text-primary)]">{title}</p><p className="mt-1 text-xs leading-5 text-[var(--text-muted)]">{text}</p></div>
-                                    </div>
-                                ))}
+                        <div data-testid="tutorial-ready-step" className="flex min-h-full items-center justify-center py-6 text-center">
+                            <div ref={readyContentRef} className="flex w-full flex-col items-center">
+                                <div className="flex h-20 w-20 items-center justify-center rounded-full border border-[var(--accent)] text-[var(--accent)]"><Check size={34} /></div>
+                                <p className="mt-7 font-display text-2xl sm:text-3xl">Ready When You Are</p>
+                                <p className="mx-auto mt-4 max-w-sm text-sm leading-6 text-[var(--text-secondary)] sm:text-base sm:leading-7">Choose the moments that matter, review them in Picked, then submit when you're ready.</p>
                             </div>
                         </div>
                     )}
@@ -682,7 +502,7 @@ export function TutorialModal({ galleryId, token, tutorialSampleSlots, theme, sh
                 <footer data-testid="tutorial-footer" className="flex shrink-0 items-center justify-between gap-2 border-t border-[var(--border)] bg-[var(--bg-card)] p-3.5 sm:p-4">
                     <button type="button" disabled={activeStep.id === 'confidence' ? sampleIndex === 0 : safeStepIndex === 0} onClick={() => activeStep.id === 'confidence' ? setSampleIndex((current) => Math.max(0, current - 1)) : goToStep(safeStepIndex - 1)} className="flex h-10 items-center gap-1 rounded-md border border-[var(--border)] px-3 text-[10px] font-bold uppercase tracking-[0.1em] text-[var(--text-secondary)] transition-transform duration-150 ease-out active:scale-[0.97] disabled:invisible motion-reduce:transition-none"><ChevronLeft size={14} /> {activeStep.id === 'confidence' ? 'Previous' : 'Back'}</button>
                     {activeStep.id === 'confidence' ? (
-                        <button type="button" onClick={() => sampleIndex < tutorialSampleSlots.length - 1 ? setSampleIndex((current) => current + 1) : goToStep(safeStepIndex + 1)} className="flex h-10 items-center gap-1 rounded-md bg-[var(--accent)] px-3 text-[10px] font-black uppercase tracking-[0.1em] text-[var(--bg-deep)] transition-transform duration-150 ease-out active:scale-[0.97] motion-reduce:transition-none">{sampleIndex < tutorialSampleSlots.length - 1 ? 'Next sample' : 'How to submit'} <ChevronRight size={14} /></button>
+                        <button type="button" onClick={() => sampleIndex < tutorialSampleSlots.length - 1 ? setSampleIndex((current) => current + 1) : goToStep(safeStepIndex + 1)} className="flex h-10 items-center gap-1 rounded-md bg-[var(--accent)] px-3 text-[10px] font-black uppercase tracking-[0.1em] text-[var(--bg-deep)] transition-transform duration-150 ease-out active:scale-[0.97] motion-reduce:transition-none">{sampleIndex < tutorialSampleSlots.length - 1 ? 'Next sample' : 'How to Submit'} <ChevronRight size={14} /></button>
                     ) : activeStep.id === 'ready' ? (
                         <button type="button" onClick={onClose} className="flex h-10 flex-1 items-center justify-center rounded-md bg-[var(--accent)] text-[10px] font-black uppercase tracking-[0.12em] text-[var(--bg-deep)] transition-[transform,opacity] duration-150 ease-out hover:opacity-85 active:scale-[0.98] motion-reduce:transition-none">Start selecting</button>
                     ) : activeStep.id === 'submit' ? (

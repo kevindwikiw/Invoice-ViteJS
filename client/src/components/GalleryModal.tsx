@@ -4,9 +4,10 @@ import { X } from 'lucide-react';
 import clsx from 'clsx';
 import './gallery-modal.css';
 
-export function GalleryModal({ title, close, children, footer, busy = false, widthClass = 'max-w-2xl', maxHeightClass = 'max-h-[90dvh]', layerClass = 'z-[100]', style }: {
+export function GalleryModal({ title, close, beforeClose, children, footer, busy = false, widthClass = 'max-w-2xl', maxHeightClass = 'max-h-[90dvh]', layerClass = 'z-[100]', style }: {
     title: string;
     close: () => void;
+    beforeClose?: () => boolean;
     children: ReactNode;
     footer?: ReactNode;
     busy?: boolean;
@@ -17,12 +18,13 @@ export function GalleryModal({ title, close, children, footer, busy = false, wid
 }) {
     const overlayRef = useRef<HTMLDivElement>(null);
     const panelRef = useRef<HTMLDivElement>(null);
-    const latest = useRef({ close, busy });
+    const latest = useRef({ close, busy, beforeClose });
     const closing = useRef(false);
-    useLayoutEffect(() => { latest.current = { close, busy }; });
+    useLayoutEffect(() => { latest.current = { close, busy, beforeClose }; });
 
     const dismiss = () => {
         if (latest.current.busy || closing.current) return;
+        if (latest.current.beforeClose && !latest.current.beforeClose()) return;
         closing.current = true;
         const overlay = overlayRef.current;
         const panel = panelRef.current;
@@ -54,7 +56,7 @@ export function GalleryModal({ title, close, children, footer, busy = false, wid
         const handleKeyDown = (event: KeyboardEvent) => {
             if (event.key === 'Escape') {
                 event.preventDefault();
-                if (!latest.current.busy) latest.current.close();
+                if (!latest.current.busy && (!latest.current.beforeClose || latest.current.beforeClose())) latest.current.close();
             }
             if (event.key !== 'Tab') return;
             const elements = [...panel.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), a[href], summary, [tabindex="0"]')].filter((element) => element.getClientRects().length > 0);

@@ -1,9 +1,9 @@
 import { useState } from 'react';
-import { useMutation } from '@tanstack/react-query';
-import { Loader2, Lock, MessageCircle } from 'lucide-react';
+import { useMutation, useQuery } from '@tanstack/react-query';
+import { Download, Loader2, Lock, MessageCircle } from 'lucide-react';
 import clsx from 'clsx';
 
-import { verifyGalleryPin } from '../culling.public';
+import { getEditResultsStatus, verifyEditResultsPassword, verifyGalleryPin } from '../culling.public';
 import type { PublicGallery } from '../culling.types';
 
 import { BLACK_THEME, WHITE_THEME } from './constants';
@@ -14,21 +14,26 @@ import type { GalleryTheme } from './types';
 export function PinGate({
     galleryId,
     onUnlocked,
+    onEditResultsUnlocked,
     theme,
     onToggleTheme,
 }: {
     galleryId: string;
     onUnlocked: (token: string, gallery: PublicGallery) => void;
+    onEditResultsUnlocked: (token: string) => void;
     theme: GalleryTheme;
     onToggleTheme: () => void;
 }) {
     const [pin, setPin] = useState('');
+    const [editResultsPassword, setEditResultsPassword] = useState('');
+    const [mode, setMode] = useState<'gallery' | 'edited'>('gallery');
     const [error, setError] = useState('');
     const [contactUrl, setContactUrl] = useState<string | null>(null);
     const [lockCode, setLockCode] = useState<'GALLERY_CLOSED' | 'GALLERY_EXPIRED' | null>(null);
     const [isRateLimited, setIsRateLimited] = useState(false);
     const isClosed = lockCode !== null;
     const isExpired = lockCode === 'GALLERY_EXPIRED';
+    const editResultsStatus = useQuery({ queryKey: ['public-edit-results-status', galleryId], queryFn: () => getEditResultsStatus(galleryId), staleTime: 60_000 });
     const lockedMessage = isExpired
         ? 'The selection deadline has ended. Please contact the admin if you need more time.'
         : isRateLimited
@@ -60,6 +65,11 @@ export function PinGate({
             }
         },
     });
+    const verifyEdited = useMutation({
+        mutationFn: () => verifyEditResultsPassword(galleryId, editResultsPassword),
+        onSuccess: (data) => onEditResultsUnlocked(data.token),
+        onError: (mutationError) => setError(mutationError instanceof Error ? mutationError.message : 'Unable to unlock edited photos.'),
+    });
 
     return (
         <main style={theme === 'black' ? BLACK_THEME : WHITE_THEME} className="min-h-screen bg-[var(--bg-deep)] font-sans text-[var(--text-primary)]">
@@ -71,18 +81,19 @@ export function PinGate({
                         setError('');
                         setContactUrl(null);
                         setIsRateLimited(false);
-                        verifyMutation.mutate();
+                        if (mode === 'edited') verifyEdited.mutate();
+                        else verifyMutation.mutate();
                     }}
-                    className="box-border h-[330px] w-full max-w-sm border border-[var(--border)] bg-[var(--bg-card)] px-6 py-10 text-center shadow-2xl"
+                    className="box-border min-h-[330px] w-full max-w-sm border border-[var(--border)] bg-[var(--bg-card)] px-6 py-10 text-center shadow-2xl"
                 >
                     <div className="mb-6 flex justify-center">
                         <OrbitLogo theme={theme} />
                     </div>
 
                     <p className="label-xs text-[var(--accent)]">PRIVATE CLIENT GALLERY</p>
-                    <h1 className="mt-3 font-display text-2xl font-medium text-[var(--text-primary)]">{isExpired ? 'Selection Closed' : isClosed ? 'Gallery Locked' : isRateLimited ? 'Access Locked' : 'Enter PIN'}</h1>
+                    <h1 className="mt-3 font-display text-2xl font-medium text-[var(--text-primary)]">{mode === 'edited' ? 'Edited Photos' : isExpired ? 'Selection Closed' : isClosed ? 'Gallery Locked' : isRateLimited ? 'Access Locked' : 'Enter PIN'}</h1>
                     
-                    {!isClosed && !isRateLimited && (
+                    {mode === 'gallery' && !isClosed && !isRateLimited && (
                         <div className="relative mt-7">
                             <input
                                 value={pin}
@@ -99,17 +110,32 @@ export function PinGate({
                             </p>
                         </div>
                     )}
-                    {contactUrl && <a href={contactUrl} target="_blank" rel="noreferrer" className="mt-4 inline-flex h-10 w-full items-center justify-center rounded-lg border border-[var(--border)] bg-[var(--bg-card)] text-xs font-bold text-[var(--text-primary)] transition-colors hover:border-[var(--accent)]">Contact admin on WhatsApp</a>}
-                    {(isClosed || isRateLimited) && (
+                    {mode === 'edited' && (
+                        <div className="relative mt-7">
+                            <input type="password" value={editResultsPassword} onChange={(event) => { setEditResultsPassword(event.currentTarget.value.slice(0, 64)); setError(''); }} autoCapitalize="none" autoComplete="current-password" placeholder="Edited photos password" className="h-11 w-full rounded-lg border border-[var(--border)] bg-[var(--bg-deep)] px-4 text-center text-sm font-semibold text-[var(--text-primary)] outline-none focus:border-[var(--accent)]" />
+                            <p aria-live="polite" className={clsx('mt-1 min-h-5 text-xs leading-5 text-rose-400', error ? 'opacity-100' : 'opacity-0')}>{error || ' '}</p>
+                        </div>
+                    )}
+                    {mode === 'gallery' && contactUrl && <a href={contactUrl} target="_blank" rel="noreferrer" className="mt-4 inline-flex h-10 w-full items-center justify-center rounded-lg border border-[var(--border)] bg-[var(--bg-card)] text-xs font-bold text-[var(--text-primary)] transition-colors hover:border-[var(--accent)]">Contact admin on WhatsApp</a>}
+                    {mode === 'gallery' && (isClosed || isRateLimited) && (
                         <p className="mx-auto mt-6 max-w-xs text-xs leading-5 text-[var(--text-muted)]">{lockedMessage}</p>
                     )}
+                    {mode === 'gallery' && isRateLimited && !isClosed && <button type="button" onClick={() => { setIsRateLimited(false); setError(''); setContactUrl(null); setPin(''); }} className="mt-4 inline-flex h-11 items-center justify-center rounded-md border border-[var(--border)] px-4 text-xs font-semibold text-[var(--text-primary)]">Try PIN Again</button>}
                     
-                    {!isClosed && !isRateLimited && (
+                    {mode === 'gallery' && !isClosed && !isRateLimited && (
                         <button type="submit" disabled={verifyMutation.isPending || pin.length < 4} className="mt-6 flex h-10 w-full items-center justify-center gap-2 rounded-lg bg-[var(--accent)] text-[10px] font-black uppercase tracking-[0.14em] text-[var(--bg-deep)] transition-opacity disabled:opacity-45">
                             {verifyMutation.isPending ? <Loader2 size={14} className="animate-spin" /> : <Lock size={14} />}
                             Unlock gallery
                         </button>
                     )}
+                    {mode === 'edited' && (
+                        <button type="submit" disabled={verifyEdited.isPending || editResultsPassword.trim().length < 6} className="mt-2 flex h-10 w-full items-center justify-center gap-2 rounded-lg bg-[var(--accent)] text-[10px] font-black uppercase tracking-[0.14em] text-[var(--bg-deep)] disabled:opacity-45">
+                            {verifyEdited.isPending ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />} Open Edited Photos
+                        </button>
+                    )}
+                    {editResultsStatus.data?.available && <button type="button" onClick={() => { setMode((current) => current === 'gallery' ? 'edited' : 'gallery'); setError(''); }} className="mt-4 text-xs font-semibold text-[var(--text-secondary)] underline underline-offset-4">
+                        {mode === 'gallery' ? 'Have an edited photos password?' : 'Back to gallery PIN'}
+                    </button>}
                 </form>
             </section>
         </main>
@@ -121,21 +147,26 @@ export function GalleryLockedScreen({
     contactUrl,
     theme,
     onToggleTheme,
+    hasEditResults = false,
+    onAccessEditedPhotos,
 }: {
     expired: boolean;
     contactUrl: string | null;
     theme: GalleryTheme;
     onToggleTheme: () => void;
+    hasEditResults?: boolean;
+    onAccessEditedPhotos?: () => void;
 }) {
     return (
         <main style={theme === 'black' ? BLACK_THEME : WHITE_THEME} className="min-h-screen bg-[var(--bg-deep)] font-sans text-[var(--text-primary)]">
             <div className="absolute right-5 top-5"><ThemeToggle theme={theme} onToggle={onToggleTheme} /></div>
             <section className="flex min-h-screen items-center justify-center px-5 py-12 text-center">
-                <div className="box-border h-[330px] w-full max-w-sm border border-[var(--border)] bg-[var(--bg-card)] px-6 py-10 shadow-2xl">
+                <div className="box-border min-h-[330px] w-full max-w-sm border border-[var(--border)] bg-[var(--bg-card)] px-6 py-8 shadow-2xl">
                     <div className="mb-6 flex justify-center"><OrbitLogo theme={theme} /></div>
                     <p className="label-xs text-[var(--accent)]">PRIVATE CLIENT GALLERY</p>
                     <h1 className="mt-3 font-display text-2xl font-medium">{expired ? 'Selection Closed' : 'Gallery Locked'}</h1>
                     {contactUrl && <a href={contactUrl} target="_blank" rel="noreferrer" className="mt-4 inline-flex h-10 w-full items-center justify-center gap-2 rounded-lg border border-[var(--border)] bg-[var(--bg-card)] text-xs font-bold text-[var(--text-primary)] transition-colors hover:border-[var(--accent)]"><MessageCircle size={14} /> Contact admin on WhatsApp</a>}
+                    {hasEditResults && onAccessEditedPhotos && <button type="button" onClick={onAccessEditedPhotos} className="mt-4 inline-flex h-10 w-full items-center justify-center gap-2 rounded-lg border border-[var(--border)] bg-[var(--bg-card)] text-xs font-bold text-[var(--text-primary)] transition-colors hover:border-[var(--accent)]"><Download size={14} /> Access edited photos</button>}
                     <p className="mx-auto mt-6 max-w-xs text-xs leading-5 text-[var(--text-muted)]">{expired ? 'The selection deadline has ended. Please contact the admin if you need more time.' : 'This gallery is currently locked. Please contact the admin to unlock access.'}</p>
                 </div>
             </section>

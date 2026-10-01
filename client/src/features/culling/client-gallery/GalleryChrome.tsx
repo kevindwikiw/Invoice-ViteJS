@@ -1,9 +1,38 @@
 import { memo } from 'react';
-import { Moon, Sun } from 'lucide-react';
+import { CheckSquare, ImageIcon, Images, Moon, Sun } from 'lucide-react';
+import clsx from 'clsx';
 
 import orbitLogo from '../../../assets/pdf/logo.png';
 
 import type { GalleryTheme } from './types';
+
+export type GalleryView = 'gallery' | 'picked' | 'edit-results';
+
+export function GalleryViewTabs({ value, pickedCount, editedAvailable, submittedOnly = false, onChange }: {
+    value: GalleryView;
+    pickedCount: number;
+    editedAvailable: boolean;
+    submittedOnly?: boolean;
+    onChange: (view: GalleryView) => void;
+}) {
+    const views = [
+        { value: 'gallery', label: submittedOnly ? 'Submitted' : 'All Photos', compactLabel: submittedOnly ? 'Submitted' : 'All', Icon: ImageIcon },
+        { value: 'picked', label: `Picked (${pickedCount})`, compactLabel: `Picked (${pickedCount})`, Icon: CheckSquare },
+        { value: 'edit-results', label: 'Edited Photos', compactLabel: 'Edited', Icon: Images },
+    ] as const;
+    return <nav aria-label="Gallery views" className="grid min-w-0 flex-1 grid-cols-3 gap-1 sm:w-auto sm:flex-none">
+        {views.map(({ value: view, label, compactLabel, Icon }) => <button
+            key={view}
+            type="button"
+            aria-label={label}
+            aria-pressed={value === view}
+            disabled={view === 'edit-results' && !editedAvailable}
+            title={view === 'edit-results' && !editedAvailable ? 'Edited photos are not published yet' : label}
+            onClick={() => onChange(view)}
+            className={clsx('inline-flex min-h-11 min-w-0 items-center justify-center gap-1 rounded-md border px-1 text-[11px] font-semibold transition-[color,background-color,border-color,transform] duration-150 active:scale-[0.98] motion-reduce:transition-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)] disabled:opacity-40 sm:gap-1.5 sm:px-3 sm:text-[13px]', value === view ? 'border-[var(--accent)] bg-[var(--accent)] text-[var(--bg-deep)]' : 'border-[var(--border)] bg-transparent text-[var(--text-secondary)] hover:border-[var(--text-muted)] hover:text-[var(--text-primary)]')}
+        ><Icon size={14} className="hidden shrink-0 sm:block" /><span className="truncate sm:hidden">{compactLabel}</span><span className="hidden sm:inline">{label}</span></button>)}
+    </nav>;
+}
 
 export const OrbitLogo = memo(function OrbitLogo({ 
     className = "", 
@@ -31,7 +60,7 @@ export const OrbitLogo = memo(function OrbitLogo({
 export function ThemeToggle({ theme, onToggle }: { theme: GalleryTheme; onToggle: () => void }) {
     const nextTheme = theme === 'black' ? 'white' : 'black';
     return (
-        <button type="button" onClick={onToggle} title={`Switch to ${nextTheme} mode`} aria-label={`Switch to ${nextTheme} mode`} className="flex h-8 w-8 items-center justify-center rounded-full border border-[var(--border)] bg-[var(--bg-card)] text-[var(--text-secondary)] transition-colors hover:border-[var(--accent)] hover:text-[var(--accent)] sm:h-8.5 sm:w-8.5">
+        <button type="button" onClick={onToggle} title={`Switch to ${nextTheme} mode`} aria-label={`Switch to ${nextTheme} mode`} className="flex h-11 w-11 shrink-0 items-center justify-center rounded-md text-[var(--text-secondary)] transition-[color,background-color,transform] duration-150 hover:bg-[var(--bg-card)] hover:text-[var(--text-primary)] active:scale-[0.97] motion-reduce:transition-none">
             {theme === 'black' ? <Sun size={14} /> : <Moon size={14} />}
         </button>
     );

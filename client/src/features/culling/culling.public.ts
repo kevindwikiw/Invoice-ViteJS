@@ -1,7 +1,7 @@
 // File: src/features/culling/culling.public.ts
 
 import { apiFetch, apiUrl } from '../../lib/api';
-import type { PublicGallery, PublicGalleryPhotoManifest, PublicGalleryPhotos, DiscountRule } from './culling.types';
+import type { EditResults, PublicGallery, PublicGalleryPhotoManifest, PublicGalleryPhotos, DiscountRule } from './culling.types';
 
 // 1. Fungsi penangkap error (digunakan oleh public dan admin)
 export class GalleryApiError extends Error {
@@ -50,6 +50,46 @@ export async function verifyGalleryPin(id: string, pin: string): Promise<{ token
     });
     if (!response.ok) throw await parseError(response, 'Unable to unlock gallery.');
     return response.json();
+}
+
+export async function getEditResultsStatus(id: string): Promise<{ available: boolean; photoCount: number }> {
+    const response = await apiFetch(`/public/galleries/${encodeURIComponent(id)}/edit-results/status`);
+    if (!response.ok) throw await parseError(response, 'Unable to check edited photos.');
+    return response.json();
+}
+
+export async function verifyEditResultsPassword(id: string, password: string): Promise<{ token: string; expiresIn: number }> {
+    const response = await apiFetch(`/public/galleries/${encodeURIComponent(id)}/edit-results/verify`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password }),
+    });
+    if (!response.ok) throw await parseError(response, 'Unable to unlock edited photos.');
+    return response.json();
+}
+
+export async function getEditResults(id: string, token: string): Promise<EditResults> {
+    const response = await apiFetch(`/public/galleries/${encodeURIComponent(id)}/edit-results?token=${encodeURIComponent(token)}`);
+    if (!response.ok) throw await parseError(response, 'Unable to load edited photos.');
+    const data = await response.json() as EditResults;
+    return {
+        ...data,
+        archive: data.archive ?? null,
+        photos: data.photos.map((photo) => ({
+            ...photo,
+            thumbnailUrl: editResultImageUrl(id, photo.driveFileId, token, 'thumbnail'),
+            previewUrl: editResultImageUrl(id, photo.driveFileId, token, 'preview'),
+            comparison: photo.comparison ? {
+                thumbnailUrl: editResultImageUrl(id, photo.driveFileId, token, 'before/thumbnail'),
+                previewUrl: editResultImageUrl(id, photo.driveFileId, token, 'before/preview'),
+            } : null,
+        })),
+    };
+}
+
+function editResultImageUrl(galleryId: string, driveFileId: string, token: string, variant: 'thumbnail' | 'preview' | 'before/thumbnail' | 'before/preview'): string {
+    const params = new URLSearchParams({ token });
+    return apiUrl(`/public/galleries/${encodeURIComponent(galleryId)}/edit-results/photos/${encodeURIComponent(driveFileId)}/${variant}?${params.toString()}`);
 }
 
 export async function getPublicGalleryPhotos(id: string, token: string, page = 1, pageSize = 60, includeSelectedPhotos = false, includeSelections = false): Promise<PublicGalleryPhotos> {

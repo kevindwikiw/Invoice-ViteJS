@@ -11,6 +11,11 @@ export type DrivePhoto = {
     mimeType: string;
     thumbnailLink?: string;
     webViewLink?: string;
+    webContentLink?: string;
+    resourceKey?: string;
+    copyRequiresWriterPermission?: boolean;
+    canDownload?: boolean;
+    viewerDownloadRestricted?: boolean;
     size?: string;
     md5Checksum?: string;
     modifiedTime?: string;
@@ -145,7 +150,7 @@ export async function listDrivePhotos(folderId: string): Promise<DrivePhoto[]> {
             q: driveSearchQuery(folderId),
             pageSize: "1000",
             orderBy: "name_natural",
-            fields: "nextPageToken,files(id,name,mimeType,thumbnailLink,webViewLink,size,md5Checksum,modifiedTime,imageMediaMetadata(width,height))",
+            fields: "nextPageToken,files(id,name,mimeType,thumbnailLink,webViewLink,webContentLink,resourceKey,copyRequiresWriterPermission,size,md5Checksum,modifiedTime,imageMediaMetadata(width,height))",
             supportsAllDrives: "true",
             includeItemsFromAllDrives: "true",
         });
@@ -168,6 +173,9 @@ export async function listDrivePhotos(folderId: string): Promise<DrivePhoto[]> {
                 mimeType: file.mimeType,
                 thumbnailLink: file.thumbnailLink,
                 webViewLink: file.webViewLink,
+                webContentLink: file.webContentLink,
+                resourceKey: file.resourceKey,
+                copyRequiresWriterPermission: file.copyRequiresWriterPermission,
                 size: file.size,
                 md5Checksum: file.md5Checksum,
                 modifiedTime: file.modifiedTime,
@@ -183,10 +191,15 @@ export async function listDrivePhotos(folderId: string): Promise<DrivePhoto[]> {
 
 export async function getDrivePhotoMetadata(fileId: string): Promise<DrivePhoto> {
     const token = await getDriveAccessToken();
-    const response = await fetch(`${DRIVE_API_BASE}/files/${encodeURIComponent(fileId)}?supportsAllDrives=true&fields=id,name,mimeType,thumbnailLink,webViewLink,size,imageMediaMetadata(width,height)`, {
+    const response = await fetch(`${DRIVE_API_BASE}/files/${encodeURIComponent(fileId)}?supportsAllDrives=true&fields=id,name,mimeType,thumbnailLink,webViewLink,webContentLink,resourceKey,copyRequiresWriterPermission,capabilities(canDownload),downloadRestrictions(effectiveDownloadRestrictionWithContext),size,imageMediaMetadata(width,height)`, {
         headers: { Authorization: `Bearer ${token}` },
     });
-    const data = await response.json().catch(() => ({})) as DrivePhoto & { error?: { message?: string }; imageMediaMetadata?: { width?: number; height?: number } };
+    const data = await response.json().catch(() => ({})) as DrivePhoto & {
+        error?: { message?: string };
+        capabilities?: { canDownload?: boolean };
+        downloadRestrictions?: { effectiveDownloadRestrictionWithContext?: { restrictedForReaders?: boolean; restrictedForWriters?: boolean } };
+        imageMediaMetadata?: { width?: number; height?: number };
+    };
     if (!response.ok || !data.id) throw new Error(data.error?.message || `Unable to refresh Google Drive photo (${response.status}).`);
     return {
         id: data.id,
@@ -194,10 +207,29 @@ export async function getDrivePhotoMetadata(fileId: string): Promise<DrivePhoto>
         mimeType: data.mimeType,
         thumbnailLink: data.thumbnailLink,
         webViewLink: data.webViewLink,
+        webContentLink: data.webContentLink,
+        resourceKey: data.resourceKey,
+        copyRequiresWriterPermission: data.copyRequiresWriterPermission,
+        canDownload: data.capabilities?.canDownload,
+        viewerDownloadRestricted: Boolean(data.downloadRestrictions?.effectiveDownloadRestrictionWithContext?.restrictedForReaders
+            || data.downloadRestrictions?.effectiveDownloadRestrictionWithContext?.restrictedForWriters),
         size: data.size,
         width: data.imageMediaMetadata?.width ?? null,
         height: data.imageMediaMetadata?.height ?? null,
     };
+}
+
+export async function hasAnyoneViewerFolderAccess(folderId: string): Promise<boolean | null> {
+    const token = await getDriveAccessToken();
+    const response = await fetch(`${DRIVE_API_BASE}/files/${encodeURIComponent(folderId)}/permissions?supportsAllDrives=true&fields=permissions(type,role)`, {
+        headers: { Authorization: `Bearer ${token}` },
+    });
+    const data = await response.json().catch(() => ({})) as { permissions?: Array<{ type?: string; role?: string }>; error?: { message?: string } };
+    // Google allows a reader to list files while sometimes denying permission
+    // audits. Let the caller verify public access using the download URLs.
+    if (response.status === 403) return null;
+    if (!response.ok) throw new Error(data.error?.message || "Unable to verify Google Drive folder sharing settings.");
+    return (data.permissions || []).some((permission) => permission.type === "anyone" && permission.role === "reader");
 }
 
 function resizedThumbnailUrl(thumbnailLink: string, width: number, preferWebp = true, preserveAspectRatio = false): string {

@@ -4,6 +4,8 @@ import { fetchWithAuth } from '../../lib/api';
 import { parseError } from './culling.public';
 import type { 
     GallerySummary, 
+    EditResultPair,
+    EditResultPairing,
     GalleryListResponse, 
     GalleryDetail, 
     GalleryStatus, 
@@ -49,7 +51,7 @@ export async function createGallery(input: { title: string; driveFolderUrl: stri
     return response.json();
 }
 
-export async function updateGallery(input: { id: number; title?: string; driveFolderId?: string; driveFolderUrl?: string; pin?: string; status?: GalleryStatus; contactWhatsappUrl?: string; maxSelections?: number; selectionDurationHours?: number; additionalSelectionLimit?: number; editAddonStatus?: string; editAddonPricingMode?: string; editAddonPrice?: number; editAddonPackageId?: number | null; qrisEnabled?: boolean; tutorialBeforeDriveFileId?: string; tutorialAfterDriveFileId?: string; tutorialBefore2DriveFileId?: string; tutorialAfter2DriveFileId?: string; tutorialBefore3DriveFileId?: string; tutorialAfter3DriveFileId?: string }): Promise<void> {
+export async function updateGallery(input: { id: number; title?: string; comparisonEnabled?: boolean; comparisonPairs?: EditResultPair[]; driveFolderId?: string; driveFolderUrl?: string; editResultsFolderId?: string; editResultsZipFileId?: string; pin?: string; status?: GalleryStatus; contactWhatsappUrl?: string; maxSelections?: number; selectionDurationHours?: number; additionalSelectionLimit?: number; editAddonStatus?: string; editAddonPricingMode?: string; editAddonPrice?: number; editAddonPackageId?: number | null; qrisEnabled?: boolean; tutorialBeforeDriveFileId?: string; tutorialAfterDriveFileId?: string; tutorialBefore2DriveFileId?: string; tutorialAfter2DriveFileId?: string; tutorialBefore3DriveFileId?: string; tutorialAfter3DriveFileId?: string }): Promise<void> {
     const { id, ...body } = input;
     const response = await fetchWithAuth(`/galleries/${id}`, {
         method: 'PATCH',
@@ -151,6 +153,26 @@ export async function downloadGallerySelectionsXlsx(id: number): Promise<void> {
     link.click();
     link.remove();
     window.setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+
+export async function getEditResultPairing(id: number): Promise<EditResultPairing> {
+    const response = await fetchWithAuth(`/galleries/${id}/edit-results/pairing`);
+    if (!response.ok) throw await parseError(response, 'Unable to load comparison photos.');
+    return response.json();
+}
+
+export async function publishEditResults(input: { id: number; password: string }): Promise<{ publishedAt: string; photoCount: number; warnings?: string[] }> {
+    const response = await fetchWithAuth(`/galleries/${input.id}/edit-results/publish`, {
+        method: 'POST',
+        body: JSON.stringify({ password: input.password }),
+    });
+    if (!response.ok) throw await parseError(response, 'Unable to publish edited photos.');
+    return response.json();
+}
+
+export async function unpublishEditResults(id: number): Promise<void> {
+    const response = await fetchWithAuth(`/galleries/${id}/edit-results/unpublish`, { method: 'POST' });
+    if (!response.ok) throw await parseError(response, 'Unable to unpublish edited photos.');
 }
 
 export async function downloadGallerySelectionCopyScript(id: number): Promise<void> {

@@ -56,6 +56,15 @@ const GALLERY_SCHEMA = [
         edit_addon_pricing_mode TEXT NOT NULL DEFAULT 'per_photo',
         edit_addon_price INTEGER NOT NULL DEFAULT 10000,
         qris_enabled INTEGER NOT NULL DEFAULT 0,
+        edit_results_folder_id TEXT,
+        edit_results_zip_file_id TEXT,
+        edit_results_zip_filename TEXT,
+        edit_results_zip_download_url TEXT,
+        edit_results_key_hash TEXT,
+        edit_results_published_at TEXT,
+        edit_results_photo_count INTEGER NOT NULL DEFAULT 0,
+        edit_results_version INTEGER NOT NULL DEFAULT 0,
+        edit_results_comparison_enabled INTEGER NOT NULL DEFAULT 0,
          edit_addon_package_id INTEGER,
          drive_folder_id TEXT NOT NULL,
          tutorial_before_drive_file_id TEXT,
@@ -100,6 +109,27 @@ const GALLERY_SCHEMA = [
         submitted_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
         UNIQUE(gallery_id, selected_drive_file_id)
     )`,
+    `CREATE TABLE IF NOT EXISTS gallery_edit_result_pairs (
+        gallery_id INTEGER NOT NULL REFERENCES galleries(id) ON DELETE CASCADE,
+        edited_drive_file_id TEXT NOT NULL,
+        before_drive_file_id TEXT NOT NULL,
+        PRIMARY KEY (gallery_id, edited_drive_file_id)
+    )`,
+    `CREATE TABLE IF NOT EXISTS gallery_edit_result_photos (
+        gallery_id INTEGER NOT NULL REFERENCES galleries(id) ON DELETE CASCADE,
+        drive_file_id TEXT NOT NULL,
+        filename TEXT NOT NULL,
+        mime_type TEXT NOT NULL,
+        thumbnail_url TEXT,
+        web_content_link TEXT NOT NULL,
+        resource_key TEXT,
+        before_photo TEXT,
+        width INTEGER,
+        height INTEGER,
+        display_order INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY (gallery_id, drive_file_id)
+    )`,
+    "CREATE INDEX IF NOT EXISTS idx_gallery_edit_result_photos_order ON gallery_edit_result_photos(gallery_id, display_order)",
     `CREATE TABLE IF NOT EXISTS face_index_jobs (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         gallery_id INTEGER NOT NULL REFERENCES galleries(id) ON DELETE CASCADE,
@@ -165,6 +195,15 @@ const GALLERY_REQUIRED_COLUMNS: Array<readonly [string, string]> = [
     ["edit_addon_pricing_mode", "TEXT NOT NULL DEFAULT 'per_photo'"],
     ["edit_addon_price", "INTEGER NOT NULL DEFAULT 10000"],
     ["qris_enabled", "INTEGER NOT NULL DEFAULT 0"],
+    ["edit_results_folder_id", "TEXT"],
+    ["edit_results_zip_file_id", "TEXT"],
+    ["edit_results_zip_filename", "TEXT"],
+    ["edit_results_zip_download_url", "TEXT"],
+    ["edit_results_key_hash", "TEXT"],
+    ["edit_results_published_at", "TEXT"],
+    ["edit_results_photo_count", "INTEGER NOT NULL DEFAULT 0"],
+    ["edit_results_version", "INTEGER NOT NULL DEFAULT 0"],
+    ["edit_results_comparison_enabled", "INTEGER NOT NULL DEFAULT 0"],
     ["edit_addon_package_id", "INTEGER"],
     ["contact_whatsapp_url", "TEXT"],
     ["tutorial_before_drive_file_id", "TEXT"],
@@ -216,7 +255,9 @@ const FACE_INDEX_PHOTO_REQUIRED_COLUMNS: Array<readonly [string, string]> = [
     ["is_solo", "INTEGER NOT NULL DEFAULT 0"],
 ];
 
-type GalleryTableWithMigrations = "galleries" | "gallery_selections" | "gallery_photos" | "face_index_jobs" | "face_index_photos";
+const EDIT_RESULT_REQUIRED_COLUMNS: Array<readonly [string, string]> = [["before_photo", "TEXT"]];
+
+type GalleryTableWithMigrations = "galleries" | "gallery_selections" | "gallery_photos" | "face_index_jobs" | "face_index_photos" | "gallery_edit_result_photos";
 
 async function ensureTursoColumns(tableName: GalleryTableWithMigrations, columns: Array<readonly [string, string]>): Promise<void> {
     if (!galleryTurso) return;
@@ -252,6 +293,7 @@ async function initializeGalleryStorage(): Promise<void> {
         await ensureTursoColumns("gallery_photos", GALLERY_PHOTO_REQUIRED_COLUMNS);
         await ensureTursoColumns("face_index_jobs", FACE_INDEX_JOB_REQUIRED_COLUMNS);
         await ensureTursoColumns("face_index_photos", FACE_INDEX_PHOTO_REQUIRED_COLUMNS);
+        await ensureTursoColumns("gallery_edit_result_photos", EDIT_RESULT_REQUIRED_COLUMNS);
         await galleryTurso.batch(FACE_SOURCE_SCHEMA, "write");
         const counterBackfill = await galleryTurso.execute({
             sql: "SELECT value FROM gallery_settings WHERE key = ?",
@@ -299,6 +341,7 @@ async function initializeGalleryStorage(): Promise<void> {
     await ensureSqliteColumns("gallery_photos", GALLERY_PHOTO_REQUIRED_COLUMNS);
     await ensureSqliteColumns("face_index_jobs", FACE_INDEX_JOB_REQUIRED_COLUMNS);
     await ensureSqliteColumns("face_index_photos", FACE_INDEX_PHOTO_REQUIRED_COLUMNS);
+    await ensureSqliteColumns("gallery_edit_result_photos", EDIT_RESULT_REQUIRED_COLUMNS);
     for (const query of FACE_SOURCE_SCHEMA) await run(query);
     const counterBackfill = await one<{ value: string }>("SELECT value FROM gallery_settings WHERE key = ?", [GALLERY_COUNTER_BACKFILL_KEY]);
     if (!counterBackfill) {

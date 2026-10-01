@@ -1,20 +1,26 @@
 import { useCallback, useEffect, useRef, useState, memo } from 'react';
-import { Check, ChevronLeft, ChevronRight, ImageOff, X } from 'lucide-react';
+import { Check, ChevronLeft, ChevronRight, Download, ImageOff, X } from 'lucide-react';
 import clsx from 'clsx';
 
 import { galleryPreviewUrl, galleryThumbnailUrl } from '../culling.public';
-import type { GalleryPhoto } from '../culling.types';
+import type { GalleryDisplayPhoto } from '../culling.types';
 
 import { displayPhotoLabel, photoDisplayIndex } from './photo-labels';
-import { isPreviewImageReady, preloadPreviewImage } from './preview-cache';
+import { canPrefetchPreview, isPreviewImageReady, preloadPreviewImage } from './preview-cache';
+import { BeforeAfterSlider } from './BeforeAfterSlider';
 
-export const Lightbox = memo(function Lightbox({
+function LightboxView<T extends GalleryDisplayPhoto>({
     galleryId,
     token,
     photos,
     displayStartIndex,
     currentPhotoId,
     selectedIds,
+    mode = 'selection',
+    getPreviewUrl,
+    getThumbnailUrl,
+    getDownloadUrl,
+    getComparison,
     hasPreviousPage = false,
     hasNextPage = false,
     totalCount,
@@ -26,10 +32,15 @@ export const Lightbox = memo(function Lightbox({
 }: {
     galleryId: string;
     token: string;
-    photos: GalleryPhoto[];
+    photos: T[];
     displayStartIndex: number;
     currentPhotoId: string | null;
-    selectedIds: Set<string>;
+    selectedIds?: Set<string>;
+    mode?: 'selection' | 'delivery';
+    getPreviewUrl?: (photo: T) => string;
+    getThumbnailUrl?: (photo: T) => string;
+    getDownloadUrl?: (photo: T) => string;
+    getComparison?: (photo: T) => { thumbnailUrl: string; previewUrl: string } | null | undefined;
     hasPreviousPage?: boolean;
     hasNextPage?: boolean;
     totalCount?: number;
@@ -37,16 +48,24 @@ export const Lightbox = memo(function Lightbox({
     onMove: (driveFileId: string) => void;
     onPreviousPage?: () => void;
     onNextPage?: () => void;
-    onToggle: (photo: GalleryPhoto) => void;
+    onToggle?: (photo: T) => void;
 }) {
     const currentIndex = currentPhotoId ? photos.findIndex((item) => item.driveFileId === currentPhotoId) : -1;
     const photo = currentIndex >= 0 ? photos[currentIndex] : null;
-    const selected = photo ? selectedIds.has(photo.driveFileId) : false;
-    const currentUrl = photo ? galleryPreviewUrl(galleryId, photo.driveFileId, token, photo.photoToken) : '';
-    const placeholderUrl = photo ? galleryThumbnailUrl(galleryId, photo.driveFileId, token, photo.photoToken) : '';
+    const selected = photo ? selectedIds?.has(photo.driveFileId) : false;
+    const previewUrlFor = useCallback((item: T) => getPreviewUrl ? getPreviewUrl(item) : galleryPreviewUrl(galleryId, item.driveFileId, token, item.photoToken), [galleryId, token, getPreviewUrl]);
+    const currentUrl = photo ? previewUrlFor(photo) : '';
+    const placeholderUrl = photo ? (getThumbnailUrl ? getThumbnailUrl(photo) : galleryThumbnailUrl(galleryId, photo.driveFileId, token, photo.photoToken)) : '';
     const displayLabel = photo ? displayPhotoLabel(photo, photoDisplayIndex(photo, displayStartIndex + currentIndex)) : '';
     const [loadedUrl, setLoadedUrl] = useState('');
     const [failedUrl, setFailedUrl] = useState('');
+    const [comparisonEnabled, setComparisonEnabled] = useState(false);
+    const comparison = photo && mode === 'delivery' ? getComparison?.(photo) : null;
+    useEffect(() => {
+        // Also reset when a tab change closes the lightbox from its parent.
+        // eslint-disable-next-line react-hooks/set-state-in-effect
+        if (!currentPhotoId) setComparisonEnabled(false);
+    }, [currentPhotoId]);
     const moveRequestRef = useRef(0);
     const swipeStartXRef = useRef<number | null>(null);
     const currentImageReady = Boolean(currentUrl) && (loadedUrl === currentUrl || isPreviewImageReady(currentUrl));
@@ -56,6 +75,7 @@ export const Lightbox = memo(function Lightbox({
     const displayTotal = totalCount || photos.length;
 
     const closeLightbox = useCallback(() => {
+        setComparisonEnabled(false);
         moveRequestRef.current += 1;
         onClose();
     }, [onClose]);
@@ -81,11 +101,11 @@ export const Lightbox = memo(function Lightbox({
 
         const nextPhoto = photos[nextIndex];
         if (!nextPhoto) return;
-        const nextUrl = galleryPreviewUrl(galleryId, nextPhoto.driveFileId, token, nextPhoto.photoToken);
+        const nextUrl = previewUrlFor(nextPhoto);
         moveRequestRef.current += 1;
         onMove(nextPhoto.driveFileId);
         void preloadPreviewImage(nextUrl, 'high').catch(() => undefined);
-    }, [currentIndex, galleryId, hasNextPage, hasPreviousPage, onMove, onNextPage, onPreviousPage, photos, token]);
+    }, [currentIndex, previewUrlFor, hasNextPage, hasPreviousPage, onMove, onNextPage, onPreviousPage, photos]);
 
     useEffect(() => {
         if (!currentUrl || isPreviewImageReady(currentUrl)) return;
@@ -105,7 +125,7 @@ export const Lightbox = memo(function Lightbox({
     }, [currentUrl]);
 
     useEffect(() => {
-        if (currentIndex < 0) return;
+        if (currentIndex < 0 || !canPrefetchPreview()) return;
 
         const neighborOffsets = [1, 2, 3, 4, 5, -1, -2];
         const timers: number[] = [];
@@ -114,17 +134,17 @@ export const Lightbox = memo(function Lightbox({
             const neighborIndex = currentIndex + offset;
             const neighbor = photos[neighborIndex];
             if (!neighbor) return;
-            const neighborUrl = galleryPreviewUrl(galleryId, neighbor.driveFileId, token, neighbor.photoToken);
+            const neighborUrl = previewUrlFor(neighbor);
             if (isPreviewImageReady(neighborUrl)) return;
 
             const timer = window.setTimeout(() => {
-                void preloadPreviewImage(neighborUrl, 'low').catch(() => undefined);
+                if (canPrefetchPreview()) void preloadPreviewImage(neighborUrl, 'low').catch(() => undefined);
             }, index * 60);
             timers.push(timer);
         });
 
         return () => timers.forEach((timer) => window.clearTimeout(timer));
-    }, [currentIndex, galleryId, photos, token]);
+    }, [currentIndex, previewUrlFor, photos]);
 
     useEffect(() => {
         if (!photo || currentIndex < 0) return;
@@ -138,13 +158,14 @@ export const Lightbox = memo(function Lightbox({
             }
 
             const target = event.target;
+            if (event.defaultPrevented || (target instanceof Element && target.closest('[role="slider"]'))) return;
             if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || (target instanceof HTMLElement && target.isContentEditable)) return;
 
             if (event.key === 'ArrowLeft') requestMove(currentIndex - 1);
             if (event.key === 'ArrowRight') requestMove(currentIndex + 1);
-            if (event.key === ' ') {
+            if (event.key === ' ' && mode === 'selection') {
                 event.preventDefault();
-                onToggle(photo);
+                onToggle?.(photo);
             }
         };
         
@@ -153,7 +174,7 @@ export const Lightbox = memo(function Lightbox({
             document.body.style.overflow = previousOverflow;
             document.removeEventListener('keydown', handleKey);
         };
-    }, [closeLightbox, currentIndex, onToggle, photo, requestMove]);
+    }, [closeLightbox, currentIndex, onToggle, photo, requestMove, mode]);
 
     if (!photo || currentIndex < 0) return null;
 
@@ -205,6 +226,9 @@ export const Lightbox = memo(function Lightbox({
                             <span className="mt-2 text-[10px] font-bold uppercase tracking-[0.14em]">Failed to load preview</span>
                         </div>
                     )}
+                    {comparisonEnabled && comparison && <div className="absolute inset-y-2 left-10 right-10 z-20 sm:inset-y-5 sm:left-16 sm:right-16">
+                        <BeforeAfterSlider key={`${photo.driveFileId}-${comparison.previewUrl}`} testId="delivery" beforeUrl={comparison.previewUrl} afterUrl={currentUrl} fallbackUrl={currentUrl} frameClass="h-full" aspectRatio={photo.width && photo.height ? photo.width / photo.height : undefined} />
+                    </div>}
                     <img 
                         data-testid="gallery-lightbox-image"
                         key={currentUrl}
@@ -229,13 +253,20 @@ export const Lightbox = memo(function Lightbox({
                         <p className="mt-0.5 text-[9px] uppercase tracking-[0.14em] text-white/50 sm:mt-1 sm:text-[10px]">{displayPosition} / {displayTotal}</p>
                     </div>
                     <div className="flex w-full flex-col gap-2 sm:w-auto sm:min-w-[220px]">
-                        <button type="button" onClick={() => onToggle(photo)} className={clsx('flex h-9 items-center justify-center gap-2 rounded-lg px-4 text-[10px] font-black uppercase tracking-[0.12em] transition-colors sm:h-10 sm:px-5 sm:tracking-[0.14em]', selected ? 'bg-white text-black' : 'border border-white/30 bg-black/30 text-white hover:border-white/60 hover:bg-white/10')}>
+                        {comparison && <label className="flex min-h-11 cursor-pointer items-center gap-3 text-sm font-medium"><input type="checkbox" checked={comparisonEnabled} onChange={(event) => setComparisonEnabled(event.target.checked)} style={{ width: 16, height: 16, padding: 0, flexShrink: 0 }} className="accent-white" /> <span>Before / After</span></label>}
+                        {mode === 'delivery' ? (
+                            <a href={getDownloadUrl?.(photo)} target="_blank" rel="noreferrer" referrerPolicy="no-referrer" className="flex min-h-11 items-center justify-center gap-2 rounded-md bg-white px-4 text-sm font-semibold text-black">
+                                <Download size={14} /> Download Original
+                            </a>
+                        ) : <button type="button" onClick={() => onToggle?.(photo)} className={clsx('flex h-9 items-center justify-center gap-2 rounded-lg px-4 text-[10px] font-black uppercase tracking-[0.12em] transition-colors sm:h-10 sm:px-5 sm:tracking-[0.14em]', selected ? 'bg-white text-black' : 'border border-white/30 bg-black/30 text-white hover:border-white/60 hover:bg-white/10')}>
                             {selected ? <X size={14} /> : <Check size={14} />}
                             {selected ? 'Remove selection' : 'Select photo'}
-                        </button>
+                        </button>}
                     </div>
                 </footer>
             </div>
         </div>
     );
-});
+}
+
+export const Lightbox = memo(LightboxView) as typeof LightboxView;

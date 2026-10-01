@@ -65,6 +65,7 @@ export const resetGalleryPinAttempts = async (identifiers: string[]) => {
         await resetRateLimitSuffixes("gallery_pin", identifiers.filter(Boolean));
     } catch (error) {
         logRateLimitStorageError("gallery_pin", "Unable to reset gallery PIN rate limits.", error);
+        throw error;
     }
 };
 

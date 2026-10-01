@@ -162,6 +162,7 @@ app.use("/api/auth/me", authMiddleware);
 app.route("/api/auth", authRoutes);
 app.route("/api/public/feedback", publicFeedbackRoutes);
 app.use("/api/public/galleries/:id/verify", galleryPinRateLimiter);
+app.use("/api/public/galleries/:id/edit-results/verify", galleryPinRateLimiter);
 app.use("/api/public/galleries/:id/face-search", faceSearchRateLimiter);
 app.route("/api/public/galleries", publicGalleriesRouter);
 

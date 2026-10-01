@@ -32,6 +32,15 @@ for (const legacy of [true, false]) {
             assert(db.query('PRAGMA table_info(rate_limits)').all().some(c => c.name === 'rate_key'));
             assert(db.query('PRAGMA table_info(galleries)').all().some(c => c.name === 'face_source_version'));
             assert(db.query('PRAGMA table_info(galleries)').all().some(c => c.name === 'face_source_revision'));
+            assert(db.query('PRAGMA table_info(galleries)').all().some(c => c.name === 'edit_results_key_hash'));
+            assert(db.query('PRAGMA table_info(galleries)').all().some(c => c.name === 'edit_results_folder_id'));
+            for (const name of ['edit_results_zip_file_id', 'edit_results_zip_filename', 'edit_results_zip_download_url']) {
+                assert(db.query('PRAGMA table_info(galleries)').all().some(c => c.name === name && c.notnull === 0));
+            }
+            assert(db.query("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'gallery_edit_result_photos'").get());
+            assert(db.query('PRAGMA table_info(gallery_edit_result_photos)').all().some(c => c.name === 'before_photo'));
+            assert(db.query('PRAGMA table_info(galleries)').all().some(c => c.name === 'edit_results_comparison_enabled'));
+            assert(db.query("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'gallery_edit_result_pairs'").get());
             assert(db.query('PRAGMA table_info(face_index_photos)').all().some(c => c.name === 'is_solo'));
             assert.equal(db.query("SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'trigger' AND name IN ('face_source_insert', 'face_source_delete', 'face_source_update')").get().n, 3);
             if (${legacy}) {
@@ -51,10 +60,13 @@ for (const legacy of [true, false]) {
             await resetRateLimitSuffixes('gallery_pin', ['gallery']);
             assert.equal(await remainingRateLimit('gallery_pin:ip:gallery', 2, 1000), 2);
             await galleryRun("INSERT INTO galleries (id, title, drive_folder_id, pin_hash) VALUES (1, 'test', 'folder', 'hash')");
+            assert.deepEqual(db.query('SELECT edit_results_zip_file_id, edit_results_zip_filename, edit_results_zip_download_url FROM galleries WHERE id = 1').get(),
+                { edit_results_zip_file_id: null, edit_results_zip_filename: null, edit_results_zip_download_url: null });
             await galleryRun("INSERT INTO gallery_photos (gallery_id, drive_file_id, filename, mime_type) VALUES (1, 'photo', 'photo.jpg', 'image/jpeg')");
             await galleryRun("INSERT INTO gallery_selections (gallery_id, selected_drive_file_id, selected_filename) VALUES (1, 'photo', 'photo.jpg')");
             process.env.FACE_WORKER_URL = 'http://worker.test';
             process.env.FACE_WORKER_TOKEN = 'test';
+            process.env.FACE_WORKER_INTERNAL_TOKEN = 'test-internal';
             const { FACE_MODEL_VERSION } = await import('./lib/face-model');
             globalThis.fetch = async () => Response.json({ model: FACE_MODEL_VERSION, capabilities: ['embedding-cache-v1', 'drive-direct-v1', 'solo-filter-v1', 'solo-person-filter-v1'] });
             const { publicFaceSearchStatus } = await import('./routes/face-index');

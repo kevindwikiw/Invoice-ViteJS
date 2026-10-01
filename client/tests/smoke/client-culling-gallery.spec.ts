@@ -114,8 +114,44 @@ async function expectMobileGalleryViewport(page: Page, width: number, height: nu
 
     expect(layout.scrollWidth).toBeLessThanOrEqual(layout.viewportWidth + 1);
     expect(layout.submitRight).toBeLessThanOrEqual(layout.viewportWidth + 1);
-    expect(layout.gridTop).toBeLessThan(125);
+    expect(layout.gridTop).toBeLessThan(180);
     expect(layout.visibleTiles).toBeGreaterThanOrEqual(6);
+}
+
+async function expectSubmissionActionLayout(page: Page, compact: boolean) {
+    const action = page.getByTestId('submission-action');
+    const status = page.getByTestId('submission-status');
+    const submit = page.getByRole('button', { name: 'Submit', exact: true });
+    const [actionBox, statusBox, submitBox] = await Promise.all([
+        action.boundingBox(),
+        status.boundingBox(),
+        submit.boundingBox(),
+    ]);
+
+    expect(actionBox).not.toBeNull();
+    expect(statusBox).not.toBeNull();
+    expect(submitBox).not.toBeNull();
+    expect(Math.abs(statusBox!.y - submitBox!.y)).toBeLessThanOrEqual(1);
+    expect(actionBox!.height).toBeGreaterThanOrEqual(44);
+    expect(statusBox!.x + statusBox!.width).toBeLessThanOrEqual(submitBox!.x + 1);
+    expect(actionBox!.width).toBe(compact ? 188 : 228);
+}
+
+async function expectCompactCountdown(page: Page, width: number, height: number) {
+    await page.setViewportSize({ width, height });
+    const icon = await page.getByTestId('gallery-countdown-icon').boundingBox();
+    const value = await page.getByTestId(width >= 640 ? 'gallery-countdown-value-desktop' : 'gallery-countdown-value').boundingBox();
+    const themeToggle = page.getByRole('button', { name: /Switch to (white|black) mode/ });
+    const themeBefore = await themeToggle.boundingBox();
+    expect(icon).not.toBeNull();
+    expect(value).not.toBeNull();
+    const iconGap = (value?.x ?? 0) - ((icon?.x ?? 0) + (icon?.width ?? 0));
+    expect(iconGap).toBeGreaterThanOrEqual(0);
+    expect(iconGap).toBeLessThanOrEqual(6);
+    await page.waitForTimeout(1_100);
+    const themeAfter = await themeToggle.boundingBox();
+    expect(Math.abs((themeAfter?.x ?? 0) - (themeBefore?.x ?? 0))).toBeLessThanOrEqual(1);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
 }
 
 test('opens photo 101 on page 2 by driveFileId and keeps the full frame above the footer', async ({ page }) => {
@@ -168,10 +204,15 @@ test('opens photo 101 on page 2 by driveFileId and keeps the full frame above th
     await expect(page.getByRole('link', { name: '@theorbitphoto on Instagram' })).toContainText('@theorbitphoto');
     expect(await page.evaluate(async () => (await document.fonts.load('400 16px Inter')).length)).toBeGreaterThan(0);
     expect(externalFontRequests).toEqual([]);
+    await expectMobileGalleryViewport(page, 320, 568);
     await expectMobileGalleryViewport(page, 375, 667);
     await expectMobileGalleryViewport(page, 390, 844);
+    await expectCompactCountdown(page, 320, 568);
+    await expectSubmissionActionLayout(page, true);
+    await expectCompactCountdown(page, 390, 844);
     await page.screenshot({ path: 'test-results/culling-local-fonts-mobile.png' });
-    await page.setViewportSize({ width: 1440, height: 900 });
+    await expectCompactCountdown(page, 1440, 900);
+    await expectSubmissionActionLayout(page, false);
     await page.screenshot({ path: 'test-results/culling-local-fonts-desktop.png' });
     await expectMobileGalleryViewport(page, 414, 896);
 
@@ -372,6 +413,47 @@ test('keeps long Google Drive filenames below the image without covering the pho
     expect(layout.labelIsTruncated).toBe(true);
 });
 
+test('toggles All Photos to the last submitted snapshot without changing the Picked draft', async ({ page }) => {
+    const id = 'submitted-toggle-gallery';
+    await installSession(page, id);
+    const allPhotos = [photo(1), photo(2), photo(3)];
+    const submitted = [photo(1), photo(2)];
+
+    await page.route(`**/api/public/galleries/${id}/contact`, (route) => route.fulfill({ json: {} }));
+    await page.route(`**/api/public/galleries/${id}/photos?*`, (route) => {
+        const submittedRequest = new URL(route.request().url()).searchParams.get('includeSelectedPhotos') === '1';
+        return route.fulfill({ json: {
+            gallery: { ...gallery('2026-09-05T03:00:00.000Z'), selectionCount: submitted.length },
+            photos: submittedRequest ? [] : allPhotos,
+            page: 1,
+            pageSize: 54,
+            total: allPhotos.length,
+            totalPages: 1,
+            selectedDriveFileIds: submitted.map((item) => item.driveFileId),
+            selectedPhotos: submittedRequest ? submitted : [],
+        } });
+    });
+    await page.route(`**/api/public/galleries/${id}/photos/*/thumbnail?*`, (route) => fulfillImage(route, 320, 320));
+    await page.route(`**/api/public/galleries/${id}/photos/*/preview?*`, (route) => fulfillImage(route, 1600, 1067));
+
+    await page.goto(`/culling/${id}`);
+    await expect(page.getByRole('button', { name: 'Picked (2)', exact: true })).toBeVisible();
+    await page.getByRole('button', { name: 'Remove photo-001.jpg', exact: true }).click();
+    await expect(page.getByRole('button', { name: 'Picked (1)', exact: true })).toBeVisible();
+
+    await page.getByRole('button', { name: 'All Photos', exact: true }).click();
+    await expect(page.getByRole('button', { name: 'Submitted', exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: /^Open photo-/ })).toHaveCount(2);
+    await expect(page.getByRole('button', { name: 'Open photo-001.jpg', exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Select photo-001.jpg', exact: true })).toBeVisible();
+
+    await page.getByRole('button', { name: 'Select photo-001.jpg', exact: true }).click();
+    await expect(page.getByRole('button', { name: 'Picked (2)', exact: true })).toBeVisible();
+    await page.getByRole('button', { name: 'Submitted', exact: true }).click();
+    await expect(page.getByRole('button', { name: 'All Photos', exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: /^Open photo-/ })).toHaveCount(3);
+});
+
 test('keeps draft selections through reload and clears the unsaved status after submit', async ({ page }) => {
     const id = 'draft-safety-gallery';
     await installSession(page, id);
@@ -464,7 +546,7 @@ test('shows the before and edited tutorial slider with pointer and keyboard cont
     });
 
     await page.goto(`/culling/${id}`);
-    await page.getByRole('button', { name: 'How to submit' }).click();
+    await page.getByRole('button', { name: 'How to Submit' }).click();
     await expect(page.getByTestId('tutorial-confidence-step')).toBeVisible();
     await expect(page.getByText('Sample 01 / 03')).toBeVisible();
     const beforeImage = page.getByAltText('Before editing sample');
@@ -565,21 +647,22 @@ test('shows the before and edited tutorial slider with pointer and keyboard cont
     expect(scrollMetrics.scrollHeight).toBeGreaterThan(scrollMetrics.clientHeight);
     expect(scrollMetrics.scrollTop).toBeGreaterThan(0);
 
-    await page.getByRole('button', { name: 'How to submit', exact: true }).last().click();
+    await page.getByRole('button', { name: 'How to Submit', exact: true }).last().click();
     await expect(page.getByTestId('tutorial-submit-step')).toBeVisible();
     await expect(page.getByRole('heading', { name: 'How to Submit' })).toBeVisible();
-    await expect(page.getByTestId('tutorial-submit-steps').getByRole('listitem')).toHaveCount(5);
+    await expect(page.getByTestId('tutorial-submit-steps').getByRole('listitem')).toHaveCount(6);
     await expect.poll(async () => page.getByTestId('tutorial-scroll-area').evaluate((element) => element.scrollTop)).toBe(0);
-    const selfieStep = page.getByTestId('tutorial-submit-steps').getByRole('listitem').filter({ hasText: 'Filter by Selfie' });
+    const selfieStep = page.getByTestId('tutorial-submit-steps').getByRole('listitem').filter({ hasText: 'Find and Choose Favorites' });
     await expect(selfieStep).toHaveCount(1);
-    await expect(selfieStep).toContainText('Tap All Photos');
+    await expect(selfieStep).toContainText('Use a clear selfie');
     await selfieStep.scrollIntoViewIfNeeded();
     await expect(selfieStep).toBeVisible();
     expect((await panel.boundingBox())?.height).toBeCloseTo(compactPanelBox?.height ?? 0, 0);
     await page.getByRole('button', { name: 'Ready to choose' }).click();
     await expect(page.getByTestId('tutorial-ready-step')).toBeVisible();
     await expect(page.getByRole('heading', { name: 'Ready to Choose' })).toBeVisible();
-    await expect(page.getByTestId('tutorial-ready-checklist').locator(':scope > div')).toHaveCount(3);
+    await expect(page.getByTestId('tutorial-ready-step')).toContainText("Choose the moments that matter, review them in Picked, then submit when you're ready.");
+    await expect(page.getByTestId('tutorial-ready-checklist')).toHaveCount(0);
     expect((await panel.boundingBox())?.height).toBeCloseTo(compactPanelBox?.height ?? 0, 0);
 
     const dialog = page.getByRole('dialog', { name: 'How photo selection works' });
@@ -612,7 +695,7 @@ test('shows only complete tutorial sample slots', async ({ page }) => {
     await page.route(`**/api/public/galleries/${id}/tutorial/*/after?*`, (route) => fulfillImage(route, 1600, 1067));
 
     await page.goto(`/culling/${id}`);
-    await page.getByRole('button', { name: 'How to submit' }).click();
+    await page.getByRole('button', { name: 'How to Submit' }).click();
     await expect(page.getByText('Sample 01 / 02')).toBeVisible();
     await page.getByRole('button', { name: 'Next sample' }).click();
     await expect(page.getByText('Sample 02 / 02')).toBeVisible();
@@ -638,7 +721,7 @@ test('skips the awareness step when no tutorial samples are configured', async (
     await page.route(`**/api/public/galleries/${id}/photos/*/thumbnail?*`, (route) => fulfillImage(route, 320, 320));
 
     await page.goto(`/culling/${id}`);
-    await page.getByRole('button', { name: 'How to submit' }).click();
+    await page.getByRole('button', { name: 'How to Submit' }).click();
     await expect(page.getByTestId('tutorial-submit-step')).toBeVisible();
     await expect(page.getByTestId('tutorial-confidence-step')).toHaveCount(0);
 });
@@ -682,7 +765,7 @@ for (const theme of ['black', 'white'] as const) {
             await expect(page.getByTestId('tutorial-submit-step')).toBeVisible({ timeout: 4500 });
             await expect(intro).toHaveCount(0);
             await page.getByRole('button', { name: 'Close tutorial' }).click();
-            await page.getByRole('button', { name: 'How to submit' }).click();
+            await page.getByRole('button', { name: 'How to Submit' }).click();
             await expect(page.getByTestId('tutorial-submit-step')).toBeVisible();
             await expect(intro).toHaveCount(0);
         });
@@ -799,6 +882,7 @@ test('filters immediately from a selfie and keeps selection submit working', asy
     const id = 'face-filter-gallery';
     await page.setViewportSize({ width: 390, height: 844 });
     await installSession(page, id);
+    await page.route('**/edit-results/status', (route) => route.fulfill({ json: { available: true, photoCount: 1 } }));
     await page.unroute('**/face-search/status');
     let indexingStarted = false;
     let statusPolls = 0;
@@ -926,13 +1010,28 @@ test('filters immediately from a selfie and keeps selection submit working', asy
     await dialog.getByRole('button', { name: 'Show 1 photos' }).click();
     await page.setViewportSize({ width: 390, height: 844 });
 
-    await expect(page.getByRole('button', { name: 'Face (1)' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Clear selfie filter' })).toBeVisible();
     await expect(page.getByRole('button', { name: /^Open photo-/ })).toHaveCount(1);
     await expect(page.getByRole('button', { name: 'Next' })).toHaveCount(0);
 
     await page.getByRole('button', { name: 'Select photo-002.jpg' }).click();
+    await page.getByRole('button', { name: 'Picked (1)', exact: true }).click();
+    await expect(page.getByRole('button', { name: /^Open photo-/ })).toHaveCount(1);
+    await page.getByRole('button', { name: 'Edited Photos', exact: true }).click();
+    await expect(page.getByPlaceholder('Edited photos password')).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Clear selfie filter' })).toHaveCount(0);
+    await page.getByRole('button', { name: 'Picked (1)', exact: true }).click();
+    await expect(page.getByRole('button', { name: 'Remove photo-002.jpg' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Clear selfie filter' })).toBeVisible();
     await page.getByRole('button', { name: 'All Photos', exact: true }).click();
+    await expect(page.getByRole('button', { name: 'Clear selfie filter' })).toBeVisible();
+    await page.getByRole('button', { name: 'Clear selfie filter' }).click();
     await expect(page.getByRole('button', { name: 'Filter by selfie' })).toBeVisible();
+    await page.getByRole('button', { name: 'Picked (1)', exact: true }).click();
+    await page.getByRole('button', { name: 'Filter by selfie' }).click();
+    await expect(page.getByRole('dialog', { name: 'Filter by selfie' })).toBeVisible();
+    await page.getByRole('button', { name: 'Close Filter by selfie' }).click();
+    await page.getByRole('button', { name: 'All Photos', exact: true }).click();
     await expect(page.getByRole('button', { name: /^Open photo-/ })).toHaveCount(54);
     await expect(page.getByRole('button', { name: 'Next' })).toBeVisible();
     await expect(page.getByText('Not submitted')).toBeVisible();
@@ -1119,11 +1218,15 @@ test('hides selfie filtering offline and reveals its mobile label when the worke
     ready = true;
     const filter = page.getByRole('button', { name: 'Filter by selfie' });
     await expect(filter).toBeVisible({ timeout: 8_000 });
-    await expect(filter.getByText('Selfie', { exact: true })).toBeVisible();
+    await expect(filter).toHaveAttribute('title', 'Filter by selfie');
     for (const width of [320, 390]) {
         await page.setViewportSize({ width, height: 740 });
         const bounds = await filter.boundingBox();
+        const tabs = await page.getByRole('navigation', { name: 'Gallery views' }).boundingBox();
         expect(bounds).not.toBeNull();
+        expect(tabs).not.toBeNull();
+        expect(bounds!.y).toBeCloseTo(tabs!.y, 0);
+        expect(bounds!.height).toBeGreaterThanOrEqual(44);
         expect(bounds!.x).toBeGreaterThanOrEqual(0);
         expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(width);
         await page.screenshot({ path: `test-results/selfie-toolbar-${width}.png`, animations: 'disabled' });

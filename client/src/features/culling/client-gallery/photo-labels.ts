@@ -1,10 +1,10 @@
-import type { GalleryPhoto } from '../culling.types';
+import type { GalleryDisplayPhoto } from '../culling.types';
 
-export function displayPhotoLabel(photo: GalleryPhoto, displayIndex: number): string {
+export function displayPhotoLabel(photo: GalleryDisplayPhoto, displayIndex: number): string {
     return photo.filename?.trim() || `Photo ${String(displayIndex + 1).padStart(2, '0')}`;
 }
 
-export function photoDisplayIndex(photo: GalleryPhoto, fallbackIndex: number): number {
+export function photoDisplayIndex(photo: GalleryDisplayPhoto, fallbackIndex: number): number {
     const displayOrder = Number(photo.displayOrder);
     return Number.isFinite(displayOrder) && displayOrder >= 0 && displayOrder < Number.MAX_SAFE_INTEGER
         ? displayOrder

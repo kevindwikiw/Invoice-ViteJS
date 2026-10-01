@@ -45,19 +45,29 @@ export interface GallerySummary {
         discountRules?: DiscountRule[]; // <-- Aturan diskon dinamis dari backend
     };
     addonStatus?: string;
+    editResultsFolderId?: string | null;
+    editResultsZipFileId?: string | null;
+    comparisonEnabled?: boolean;
+    comparisonPairs?: EditResultPair[];
+    editResultsPublishedAt?: string | null;
+    editResultsPhotoCount?: number;
+    hasEditResults?: boolean;
 }
 
-export interface GalleryPhoto {
-    id: number;
-    galleryId: number;
+export interface GalleryDisplayPhoto {
     driveFileId: string;
     filename: string;
-    mimeType: string;
     width?: number | null;
     height?: number | null;
     displayOrder: number;
-    createdAt: string;
     photoToken?: string;
+}
+
+export interface GalleryPhoto extends GalleryDisplayPhoto {
+    id: number;
+    galleryId: number;
+    mimeType: string;
+    createdAt: string;
 }
 
 export interface GallerySelection {
@@ -112,7 +122,26 @@ export interface PublicGallery {
         status?: string;
         discountRules?: DiscountRule[]; // <-- Aturan diskon dinamis dari backend
     };
+    hasEditResults?: boolean;
     tutorialSampleSlots?: number[];
+}
+
+export interface EditResultPhoto extends GalleryDisplayPhoto {
+    mimeType: string;
+    thumbnailUrl: string;
+    previewUrl: string;
+    downloadUrl: string;
+    comparison?: { thumbnailUrl: string; previewUrl: string } | null;
+}
+
+export type EditResultPair = { editedDriveFileId: string; beforeDriveFileId: string };
+export type PairingPhoto = { driveFileId: string; filename: string; thumbnailUrl: string | null; width?: number | null; height?: number | null };
+export type EditResultPairing = { comparisonEnabled: boolean; comparisonPairs: EditResultPair[]; submitted: PairingPhoto[]; edited: PairingPhoto[] };
+
+export interface EditResults {
+    photos: EditResultPhoto[];
+    publishedAt: string;
+    archive: { filename: string; downloadUrl: string } | null;
 }
 
 export interface PublicGalleryPhotos {
