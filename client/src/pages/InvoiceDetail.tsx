@@ -120,8 +120,11 @@ export const InvoiceDetail = () => {
             queryClient.invalidateQueries({ queryKey: ['analytics'] })
             queryClient.invalidateQueries({ queryKey: ['sequence'] })
             
-            // Navigate to the newly saved/updated invoice instead of history
-            navigate({ to: `/invoices/${newInvoiceId}` })
+            if (isEdit) {
+                navigate({ to: '/history' })
+            } else {
+                navigate({ to: '/invoices/$invoiceId', params: { invoiceId: newInvoiceId } })
+            }
         },
         onError: (error: unknown) => {
             addToast(error instanceof Error ? error.message : 'Failed to save invoice', 'error')
@@ -207,7 +210,7 @@ export const InvoiceDetail = () => {
                             <ArrowLeft className="h-5 w-5 group-hover:-translate-x-0.5 transition-transform" />
                         </button>
                     ) : (
-                        <Link to="/" className="p-2 hover:bg-[var(--bg-elevated)] text-[var(--text-muted)] hover:text-[var(--text-primary)] rounded-lg transition-colors group">
+                        <Link to="/history" className="p-2 hover:bg-[var(--bg-elevated)] text-[var(--text-muted)] hover:text-[var(--text-primary)] rounded-lg transition-colors group">
                             <ArrowLeft className="h-5 w-5 group-hover:-translate-x-0.5 transition-transform" />
                         </Link>
                     )}

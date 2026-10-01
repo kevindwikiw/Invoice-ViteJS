@@ -36,7 +36,12 @@ export interface PackageBundleSection {
     details: string;
 }
 
-const BUNDLE_HEADING = /^\s*(?:[-*•]\s*)?\*\*(.+?)\*\*\s*$/;
+const BULLET_PREFIX = String.raw`(?:[-*\u2022\u00b7\u2023\u25aa\u25e6]|\u00e2\u20ac\u00a2)`;
+const BUNDLE_HEADING = new RegExp(
+    String.raw`^\s*(?:${BULLET_PREFIX}\s*)?\*\*(.+?)\*\*\s*$`,
+    'u',
+);
+const DETAIL_PREFIX = new RegExp(String.raw`^(?:${BULLET_PREFIX})\s*`, 'u');
 
 export function parsePackageBundleDescription(description: string): PackageBundleSection[] {
     const sections: PackageBundleSection[] = [];
@@ -50,12 +55,12 @@ export function parsePackageBundleDescription(description: string): PackageBundl
             continue;
         }
         if (!current) continue;
-        const detail = rawLine.trim().replace(/^(?:[-*]|•)\s*/, '');
+        const detail = rawLine.trim().replace(DETAIL_PREFIX, '');
         if (detail) current.details.push(detail);
     }
 
     if (current) sections.push({ title: current.title, details: current.details.join('\n') });
-    return sections.filter((section) => section.title && section.details);
+    return sections.filter((section) => section.title);
 }
 
 function uniqueItemId(packageId: number): string {

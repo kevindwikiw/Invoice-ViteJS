@@ -20,7 +20,7 @@ import { PaymentDetails } from '../components/PaymentDetails';
 import { DatePicker } from '../components/DatePicker';
 import { TimeRangePicker } from '../components/TimeRangePicker';
 import { compressImage } from '../utils/image';
-import { invoiceItemFromPackage, packageRowId } from '../lib/packageCatalog';
+import { invoiceItemFromPackage, packageRowId, parsePackageBundleDescription } from '../lib/packageCatalog';
 
 // Utility
 const safeNumber = (value: unknown, fallback = 0) => {
@@ -134,17 +134,28 @@ const normalizeInvoiceItem = (item: unknown, index: number): InvoiceItem => {
     ]);
     const details = firstText(record, ['details', 'Details', 'packageDetails', 'package_details']);
     const catalogDescription = firstText(record, ['description']);
+    const parsedBundle = parsePackageBundleDescription(details || catalogDescription);
+    const normalizedBundleSrc = bundleSrc?.length
+        ? bundleSrc
+        : parsedBundle.map((section, bundleIndex) => ({
+            id: `${id}_bundle_${bundleIndex}`,
+            desc: section.title,
+            details: section.details,
+            price: 0,
+            qty: 1,
+        }));
+    const isBundle = Boolean(record.isBundle || record.is_bundle) || normalizedBundleSrc.length > 0;
 
     return {
         ...record,
         id,
         desc: description || 'Untitled item',
-        details: details || (catalogDescription !== description ? catalogDescription : ''),
+        details: isBundle ? undefined : details || (catalogDescription !== description ? catalogDescription : ''),
         price: safeNumber(record.price ?? record.Price ?? record.unitPrice ?? record.unit_price),
         qty: Math.max(1, safeNumber(record.qty ?? record.Qty ?? record.quantity, 1)),
-        isBundle: Boolean(record.isBundle ?? record.is_bundle),
+        isBundle,
         _rowId: String(record._rowId || record.packageId || record.package_id || id),
-        ...(bundleSrc ? { _bundleSrc: bundleSrc } : {}),
+        ...(normalizedBundleSrc.length ? { _bundleSrc: normalizedBundleSrc } : {}),
     } as InvoiceItem;
 };
 

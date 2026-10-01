@@ -17,6 +17,7 @@ import IconMail from "../assets/pdf/Email.png";
 import IconIG from "../assets/pdf/IG.png";
 import IconPhone from "../assets/pdf/Phonecall.png";
 import { parsePackageBundleDescription } from "../lib/packageCatalog";
+import { shouldUseDenseInvoiceLayout } from "../lib/invoicePdfDensity";
 
 // IMPORTANT FIX: Stop weird word-splitting
 Font.registerHyphenationCallback((word) => [word]);
@@ -49,6 +50,8 @@ const DEFAULT_TIMEZONE = "Asia/Jakarta";
 const COLORS = {
     BLACK: "#1a1a1a",
     DARK_GRAY: "#4a4a4a",
+    DETAIL: "#5f5f5f",
+    LEGAL: "#686868",
     WHITE: "#ffffff",
     RED: "#b91c1c",
     BORDER: "#000000",
@@ -155,6 +158,64 @@ const splitLinesSafe = (v: unknown): string[] => {
         .split("\n")
         .map((x) => x.trim())
         .filter(Boolean);
+};
+
+const splitTermsSafe = (value: unknown): string[] => {
+    const text = s(value, "");
+    if (!text) return [];
+
+    return text
+        .replace(/\r\n?/g, "\n")
+        .replace(/[ \t]+(?=\d+[.)]\s+)/g, "\n")
+        .split("\n")
+        .map((line) => line.trim().replace(/^\d+[.)]\s*/, ""))
+        .filter(Boolean);
+};
+
+type InvoiceLayoutMetrics = {
+    cellPadding: number;
+    itemTitleFont: number;
+    itemDescriptionFont: number;
+    sectionTitleFont: number;
+    detailFont: number;
+    detailLineHeight: number;
+    postMarginMm: number;
+    infoHeaderFont: number;
+    infoFont: number;
+    termsFont: number;
+    legalLineHeight: number;
+};
+
+const invoiceLayoutMetrics = (useDenseLayout: boolean): InvoiceLayoutMetrics => {
+    if (useDenseLayout) {
+        return {
+            cellPadding: 6,
+            itemTitleFont: 8.5,
+            itemDescriptionFont: 7.25,
+            sectionTitleFont: 7.25,
+            detailFont: 6.25,
+            detailLineHeight: 1.18,
+            postMarginMm: 4.5,
+            infoHeaderFont: 7.25,
+            infoFont: 6.5,
+            termsFont: 5.75,
+            legalLineHeight: 1.16,
+        };
+    }
+
+    return {
+        cellPadding: 8,
+        itemTitleFont: 9.25,
+        itemDescriptionFont: 7.75,
+        sectionTitleFont: 7.75,
+        detailFont: 7,
+        detailLineHeight: 1.22,
+        postMarginMm: 5,
+        infoHeaderFont: 8,
+        infoFont: 7,
+        termsFont: 6.5,
+        legalLineHeight: 1.2,
+    };
 };
 
 const formatHoursWithDuration = (hoursStr: string): string => {
@@ -267,7 +328,14 @@ const normalizeItems = (data: InvoiceData): InvoiceItem[] => {
 
     return data.items.map((rawValue) => {
         const raw = asRecord(rawValue);
-        const details = s(raw?.details ?? raw?.Details, "");
+        const details = s(
+            raw?.details
+            ?? raw?.Details
+            ?? raw?.packageDetails
+            ?? raw?.package_details
+            ?? raw?.description,
+            "",
+        );
         const parsedBundle = parsePackageBundleDescription(details);
 
         const bundleSrcRaw = Array.isArray(raw._bundleSrc)
@@ -279,8 +347,8 @@ const normalizeItems = (data: InvoiceData): InvoiceItem[] => {
         const storedBundleSrc: BundleSrc[] = (bundleSrcRaw ?? []).map((bundleValue) => {
             const bundle = asRecord(bundleValue);
             return {
-                desc: s(bundle.desc ?? bundle.Description, ""),
-                details: s(bundle.details ?? bundle.Details, ""),
+                desc: s(bundle.desc ?? bundle.Description ?? bundle.title, ""),
+                details: s(bundle.details ?? bundle.Details ?? bundle.description, ""),
             };
         });
         const bundleSrc = storedBundleSrc.length > 0
@@ -289,8 +357,8 @@ const normalizeItems = (data: InvoiceData): InvoiceItem[] => {
         const isBundle = Boolean(raw.isBundle || raw._bundle || bundleSrc.length > 0);
 
         return {
-            name: s(raw?.name ?? raw?.Name, ""),
-            desc: s(raw?.desc ?? raw?.Description, ""),
+            name: s(raw?.name ?? raw?.Name ?? raw?.packageName ?? raw?.package_name, ""),
+            desc: s(raw?.desc ?? raw?.Description ?? raw?.name ?? raw?.Name, ""),
             details,
             price: n(raw?.price ?? raw?.Price, 0),
             qty: Math.max(1, n(raw?.qty ?? raw?.Qty, 1)),
@@ -534,6 +602,7 @@ const styles = StyleSheet.create({
         fontSize: 8,
         fontFamily: "Helvetica-Bold",
         textAlign: "center",
+        letterSpacing: 0.15,
     },
     c1: { width: COL_WIDTHS[0] },
     c2: { width: COL_WIDTHS[1] },
@@ -545,7 +614,7 @@ const styles = StyleSheet.create({
     postLeft: {
         width: LEFT_INFO_W,
         paddingRight: mm(6),
-        marginTop: mm(8),
+        marginTop: mm(5),
     },
     postRight: { width: SUM_COL_WIDTHS, marginTop: 0 },
 
@@ -564,18 +633,20 @@ const styles = StyleSheet.create({
     textMed: { fontSize: 10 },
     textItalic: { fontFamily: "Helvetica-Oblique" },
 
-    infoBlock: { marginBottom: mm(4) },
+    infoBlock: { marginBottom: mm(2.5) },
     infoHeader: {
-        fontSize: 9,
+        fontSize: 8,
         fontFamily: "Helvetica-Bold",
+        letterSpacing: 0.1,
         borderBottomWidth: 1,
         borderBottomColor: COLORS.BLACK,
-        marginBottom: 3,
+        marginBottom: 2,
         alignSelf: "flex-start",
     },
-    infoRow: { flexDirection: "row", marginBottom: 2 },
-    infoLabel: { width: mm(18), fontSize: 8, fontFamily: "Helvetica-Bold" },
-    infoVal: { fontSize: 8, fontFamily: "Helvetica" },
+    infoRow: { flexDirection: "row", marginBottom: 1 },
+    infoLabel: { width: mm(18), fontSize: 7, fontFamily: "Helvetica-Bold" },
+    infoColon: { width: 10, textAlign: "center", fontSize: 7 },
+    infoVal: { fontSize: 7, fontFamily: "Helvetica" },
 
     footerBar: {
         position: "absolute",
@@ -780,6 +851,7 @@ export const InvoicePDF = ({ invoice, proofs = [] }: { invoice: Invoice; proofs?
         const data = parseInvoiceData(invoice?.invoiceData);
         // ... (rest of data parsing) ...
         const items = normalizeItems(data);
+        const layout = invoiceLayoutMetrics(shouldUseDenseInvoiceLayout(items));
         const paymentTerms = normalizePaymentTerms(data);
         const displayPaymentTerms = paymentTerms.length
             ? paymentTerms
@@ -809,7 +881,7 @@ export const InvoicePDF = ({ invoice, proofs = [] }: { invoice: Invoice; proofs?
 
         const defaultTerms =
             "Booking fee is non-refundable.\nFull payment is required before event.\nEdit process takes 2-4 weeks.";
-        const termsLines = splitLinesSafe(s(data.terms, defaultTerms));
+        const termsLines = splitTermsSafe(s(data.terms, defaultTerms));
 
         const clientName = s(invoice?.clientName, "");
         const invoiceNo = s(invoice?.invoiceNo, "");
@@ -907,45 +979,44 @@ export const InvoicePDF = ({ invoice, proofs = [] }: { invoice: Invoice; proofs?
 
                                 return (
                                     <View key={`${i}-${item.desc || "item"}`} style={styles.row} wrap={false}>
-                                        <View style={[styles.cell, styles.c1]}>
+                                        <View style={[styles.cell, styles.c1, { paddingTop: layout.cellPadding, paddingBottom: layout.cellPadding }]}>
                                             <Text style={{ fontSize: 8, textAlign: "center" }}>{String(i + 1)}</Text>
                                         </View>
 
-                                        <View style={[styles.cell, styles.c2]}>
+                                        <View style={[styles.cell, styles.c2, { paddingTop: layout.cellPadding, paddingBottom: layout.cellPadding }]}>
                                             {!item.isBundle ? (
                                                 <View style={{ flexDirection: 'column', alignItems: 'flex-start' }}>
-                                                    {/* 1. Item Name/Title */}
-                                                    <Text style={{ fontSize: 9, fontFamily: "Helvetica-Bold", marginBottom: 2 }}>
+                                                    <Text style={{ fontSize: layout.itemTitleFont, fontFamily: "Helvetica-Bold", marginBottom: layout.cellPadding >= 8 ? 3 : 2, lineHeight: 1.12 }}>
                                                         {item.name || "Item"}
                                                     </Text>
 
-                                                    {/* 2. Item Description (if exists and different) */}
                                                     {item.desc && item.desc !== item.name ? (
-                                                        <Text style={{ fontSize: 8, fontFamily: "Helvetica", color: COLORS.DARK_GRAY, marginBottom: 2 }}>
+                                                        <Text style={{ fontSize: layout.itemDescriptionFont, fontFamily: "Helvetica", color: COLORS.DARK_GRAY, marginBottom: layout.cellPadding >= 8 ? 3 : 2, lineHeight: 1.18 }}>
                                                             {item.desc}
                                                         </Text>
                                                     ) : null}
 
-                                                    {/* 3. Item Details (Bullets) */}
                                                     {item.details ? (
-                                                        splitLinesSafe(item.details).map((l, idx) => (
-                                                            <Text key={idx} style={{ fontSize: 8, color: COLORS.DARK_GRAY, marginLeft: 4 }}>
-                                                                • {l}
+                                                        splitLinesSafe(item.details).map((line, detailIndex) => (
+                                                            <Text key={detailIndex} style={{ fontSize: layout.detailFont, color: COLORS.DETAIL, marginLeft: 6, lineHeight: layout.detailLineHeight }}>
+                                                                {`\u2022 ${line}`}
                                                             </Text>
                                                         ))
                                                     ) : null}
                                                 </View>
                                             ) : (
                                                 <View>
-                                                    <Text style={{ fontSize: 8, fontFamily: "Helvetica-Bold" }}>
+                                                    <Text style={{ fontSize: layout.itemTitleFont, fontFamily: "Helvetica-Bold", lineHeight: 1.12 }}>
                                                         {item.desc || "BUNDLING"}
                                                     </Text>
-                                                    {item.bundleSrc.map((sub, idx) => (
-                                                        <View key={idx} style={{ marginTop: 2 }}>
-                                                            <Text style={{ fontSize: 8, fontFamily: "Helvetica-Bold" }}>• {sub.desc}</Text>
-                                                            {splitLinesSafe(sub.details).map((l, li) => (
-                                                                <Text key={li} style={{ fontSize: 7, color: "#666666", marginLeft: 5 }}>
-                                                                    - {l}
+                                                    {item.bundleSrc.map((sub, sectionIndex) => (
+                                                        <View key={sectionIndex} style={{ marginTop: layout.cellPadding >= 8 ? 3 : 2 }}>
+                                                            <Text style={{ fontSize: layout.sectionTitleFont, fontFamily: "Helvetica-Bold", lineHeight: 1.15 }}>
+                                                                {`\u2022 ${sub.desc}`}
+                                                            </Text>
+                                                            {splitLinesSafe(sub.details).map((line, detailIndex) => (
+                                                                <Text key={detailIndex} style={{ fontSize: layout.detailFont, color: COLORS.DETAIL, marginLeft: 7, lineHeight: layout.detailLineHeight }}>
+                                                                    {`- ${line}`}
                                                                 </Text>
                                                             ))}
                                                         </View>
@@ -954,15 +1025,15 @@ export const InvoicePDF = ({ invoice, proofs = [] }: { invoice: Invoice; proofs?
                                             )}
                                         </View>
 
-                                        <View style={[styles.cell, styles.c3]}>
+                                        <View style={[styles.cell, styles.c3, { paddingTop: layout.cellPadding, paddingBottom: layout.cellPadding }]}>
                                             <Text style={{ fontSize: 8, textAlign: "center" }}>{fmtCurrency(item.price)}</Text>
                                         </View>
 
-                                        <View style={[styles.cell, styles.c4]}>
+                                        <View style={[styles.cell, styles.c4, { paddingTop: layout.cellPadding, paddingBottom: layout.cellPadding }]}>
                                             <Text style={{ fontSize: 8, textAlign: "center" }}>{String(item.qty)}</Text>
                                         </View>
 
-                                        <View style={[styles.cell, styles.c5, styles.cellLast]}>
+                                        <View style={[styles.cell, styles.c5, styles.cellLast, { paddingTop: layout.cellPadding, paddingBottom: layout.cellPadding }]}>
                                             <Text style={{ fontSize: 8, textAlign: "center" }}>{fmtCurrency(lineTotal)}</Text>
                                         </View>
                                     </View>
@@ -973,62 +1044,72 @@ export const InvoicePDF = ({ invoice, proofs = [] }: { invoice: Invoice; proofs?
 
                     {/* Post-table */}
                     <View style={styles.postTable} wrap={false}>
-                        <View style={styles.postLeft}>
+                        <View style={[styles.postLeft, { marginTop: mm(layout.postMarginMm) }]}>
                             {hasEventDetails ? (
-                                <View style={styles.infoBlock}>
-                                    <Text style={styles.infoHeader}>EVENT DETAILS:</Text>
+                                <View style={[styles.infoBlock, { marginBottom: mm(Math.max(1, layout.postMarginMm / 2)) }]}>
+                                    <Text style={[styles.infoHeader, { fontSize: layout.infoHeaderFont }]}>EVENT DETAILS:</Text>
 
                                     {dateStr ? (
                                         <View style={styles.infoRow}>
-                                            <Text style={styles.infoLabel}>Date</Text>
-                                            <Text style={{ width: 10, textAlign: "center", fontSize: 8 }}>:</Text>
-                                            <Text style={styles.infoVal}>{dateStr}</Text>
+                                            <Text style={[styles.infoLabel, { fontSize: layout.infoFont }]}>Date</Text>
+                                            <Text style={[styles.infoColon, { fontSize: layout.infoFont }]}>:</Text>
+                                            <Text style={[styles.infoVal, { fontSize: layout.infoFont }]}>{dateStr}</Text>
                                         </View>
                                     ) : null}
 
                                     {venue ? (
                                         <View style={styles.infoRow}>
-                                            <Text style={styles.infoLabel}>Venue</Text>
-                                            <Text style={{ width: 10, textAlign: "center", fontSize: 8 }}>:</Text>
-                                            <Text style={[styles.infoVal, { flex: 1 }]}>{venue}</Text>
+                                            <Text style={[styles.infoLabel, { fontSize: layout.infoFont }]}>Venue</Text>
+                                            <Text style={[styles.infoColon, { fontSize: layout.infoFont }]}>:</Text>
+                                            <Text style={[styles.infoVal, { flex: 1, fontSize: layout.infoFont }]}>{venue}</Text>
                                         </View>
                                     ) : null}
 
                                     {hours ? (
                                         <View style={styles.infoRow}>
-                                            <Text style={styles.infoLabel}>Time</Text>
-                                            <Text style={{ width: 10, textAlign: "center", fontSize: 8 }}>:</Text>
-                                            <Text style={styles.infoVal}>{formatHoursWithDuration(hours)}</Text>
+                                            <Text style={[styles.infoLabel, { fontSize: layout.infoFont }]}>Time</Text>
+                                            <Text style={[styles.infoColon, { fontSize: layout.infoFont }]}>:</Text>
+                                            <Text style={[styles.infoVal, { fontSize: layout.infoFont }]}>{formatHoursWithDuration(hours)}</Text>
                                         </View>
                                     ) : null}
                                 </View>
                             ) : null}
 
-                            <View style={styles.infoBlock}>
-                                <Text style={styles.infoHeader}>PAYMENT INFO:</Text>
+                            <View style={[styles.infoBlock, { marginBottom: mm(Math.max(1, layout.postMarginMm / 2)) }]}>
+                                <Text style={[styles.infoHeader, { fontSize: layout.infoHeaderFont }]}>PAYMENT INFO:</Text>
 
                                 <View style={styles.infoRow}>
-                                    <Text style={styles.infoLabel}>Bank</Text>
-                                    <Text style={{ width: 10, textAlign: "center", fontSize: 8 }}>:</Text>
-                                    <Text style={styles.infoVal}>{s(data.bankName, "BCA")} </Text>
+                                    <Text style={[styles.infoLabel, { fontSize: layout.infoFont }]}>Bank</Text>
+                                    <Text style={[styles.infoColon, { fontSize: layout.infoFont }]}>:</Text>
+                                    <Text style={[styles.infoVal, { fontSize: layout.infoFont }]}>{s(data.bankName, "BCA")} </Text>
                                 </View>
 
                                 <View style={styles.infoRow}>
-                                    <Text style={styles.infoLabel}>Account</Text>
-                                    <Text style={{ width: 10, textAlign: "center", fontSize: 8 }}>:</Text>
-                                    <Text style={styles.infoVal}>{s(data.bankAcc, "1392839213")}</Text>
+                                    <Text style={[styles.infoLabel, { fontSize: layout.infoFont }]}>Account</Text>
+                                    <Text style={[styles.infoColon, { fontSize: layout.infoFont }]}>:</Text>
+                                    <Text style={[styles.infoVal, { fontSize: layout.infoFont }]}>{s(data.bankAcc, "1392839213")}</Text>
                                 </View>
 
                                 <View style={styles.infoRow}>
-                                    <Text style={styles.infoLabel}>A/N</Text>
-                                    <Text style={{ width: 10, textAlign: "center", fontSize: 8 }}>:</Text>
-                                    <Text style={styles.infoVal}>{s(data.bankHolder, "The Orbit Photography")}</Text>
+                                    <Text style={[styles.infoLabel, { fontSize: layout.infoFont }]}>A/N</Text>
+                                    <Text style={[styles.infoColon, { fontSize: layout.infoFont }]}>:</Text>
+                                    <Text style={[styles.infoVal, { fontSize: layout.infoFont }]}>{s(data.bankHolder, "The Orbit Photography")}</Text>
                                 </View>
                             </View>
 
-                            {/* NOTES moved to right column below pricing */}
-
-                            {/* TERMS moved to parallel row below */}
+                            {termsLines.length ? (
+                                <View style={[styles.infoBlock, { marginBottom: 0 }]}>
+                                    <Text style={[styles.infoHeader, { fontSize: layout.infoHeaderFont }]}>TERMS & CONDITIONS:</Text>
+                                    {termsLines.map((line, index) => (
+                                        <View key={index} style={{ flexDirection: "row", marginBottom: layout.cellPadding > 3 ? 0.75 : 0.35 }}>
+                                            <Text style={{ width: 10, fontSize: layout.termsFont }}>{`${index + 1}.`}</Text>
+                                            <Text style={{ flex: 1, fontSize: layout.termsFont, color: COLORS.LEGAL, lineHeight: layout.legalLineHeight }}>
+                                                {line}
+                                            </Text>
+                                        </View>
+                                    ))}
+                                </View>
+                            ) : null}
                         </View>
 
                         <View style={styles.postRight}>
@@ -1042,8 +1123,8 @@ export const InvoicePDF = ({ invoice, proofs = [] }: { invoice: Invoice; proofs?
                                     </View>
 
                                     <View style={[styles.sumRow, { paddingVertical: 5 }]}>
-                                        <Text style={[styles.sumLabel, styles.textBold, { color: COLORS.DARK_GRAY }]}>Cashback:</Text>
-                                        <Text style={[styles.sumValue, styles.textBold, { color: COLORS.DARK_GRAY }]}>
+                                        <Text style={[styles.sumLabel, styles.textBold, { color: COLORS.DARK_GRAY, fontSize: layout.infoFont }]}>Cashback:</Text>
+                                        <Text style={[styles.sumValue, styles.textBold, { color: COLORS.DARK_GRAY, fontSize: layout.infoFont }]}>
                                             {cashback > 0 ? `- ${fmtPaymentRow(cashback)}` : "-"}
                                         </Text>
                                     </View>
@@ -1062,7 +1143,7 @@ export const InvoicePDF = ({ invoice, proofs = [] }: { invoice: Invoice; proofs?
                                     <Text
                                         style={[
                                             styles.sumLabel,
-                                            { color: COLORS.DARK_GRAY, fontSize: 8, paddingTop: mm(1), fontFamily: "Helvetica-BoldOblique" },
+                                            { color: COLORS.DARK_GRAY, fontSize: layout.infoHeaderFont, paddingTop: mm(1), fontFamily: "Helvetica-BoldOblique" },
                                         ]}
                                     >
                                         PAYMENT HISTORY
@@ -1071,8 +1152,8 @@ export const InvoicePDF = ({ invoice, proofs = [] }: { invoice: Invoice; proofs?
 
                                 {displayPaymentTerms.map((t, i) => (
                                     <View key={`${t.label}-${i}`} style={[styles.sumRow, { paddingVertical: 1 }]}>
-                                        <Text style={[styles.sumLabel, { color: COLORS.DARK_GRAY, fontSize: 7.5 }]}>{t.label}:</Text>
-                                        <Text style={[styles.sumValue, { color: COLORS.DARK_GRAY, fontSize: 7.5 }]}>
+                                        <Text style={[styles.sumLabel, { color: COLORS.DARK_GRAY, fontSize: layout.infoFont }]}>{t.label}:</Text>
+                                        <Text style={[styles.sumValue, { color: COLORS.DARK_GRAY, fontSize: layout.infoFont }]}>
                                             {t.amount > 0 ? `- ${fmtPaymentRow(t.amount)}` : "-"}
                                         </Text>
                                     </View>
@@ -1080,46 +1161,26 @@ export const InvoicePDF = ({ invoice, proofs = [] }: { invoice: Invoice; proofs?
                             </View>
 
                             <View style={[styles.sumRow, { marginTop: 0, paddingTop: mm(1) }]}>
-                                <Text style={[styles.sumLabel, { color: COLORS.RED, fontFamily: "Helvetica-Bold" }]}>
+                                <Text style={[styles.sumLabel, { color: COLORS.RED, fontFamily: "Helvetica-Bold", fontSize: layout.infoFont }]}>
                                     SISA TAGIHAN (REMAINING):
                                 </Text>
-                                <Text style={[styles.sumValue, { color: COLORS.RED, fontFamily: "Helvetica-Bold" }]}>
+                                <Text style={[styles.sumValue, { color: COLORS.RED, fontFamily: "Helvetica-Bold", fontSize: layout.infoFont }]}>
                                     {remaining <= 0 ? "LUNAS" : fmtCurrency(remaining)}
                                 </Text>
                             </View>
 
-                            {/* NOTES moved to parallel row below */}
+                            {notes ? (
+                                <View style={{ marginTop: mm(Math.max(1.5, layout.postMarginMm * 0.6)) }}>
+                                    <Text style={[styles.infoHeader, { fontSize: layout.infoHeaderFont, marginBottom: 2 }]}>NOTES:</Text>
+                                    <Text style={{ fontSize: layout.termsFont, color: COLORS.LEGAL, lineHeight: layout.legalLineHeight }}>
+                                        {notes}
+                                    </Text>
+                                </View>
+                            ) : null}
 
                             {/* Closed the postRight view */}
                         </View>
                         {/* Closed the postTable view */}
-                    </View>
-
-                    {/* PARALLEL ROW: TERMS (Left) & NOTES (Right) */}
-                    <View style={{ flexDirection: "row", marginTop: mm(4) }} wrap={false}>
-                        <View style={{ width: LEFT_INFO_W, paddingRight: mm(6) }}>
-                            {termsLines.length ? (
-                                <View style={styles.infoBlock}>
-                                    <Text style={styles.infoHeader}>TERMS & CONDITIONS:</Text>
-                                    {termsLines.map((l, i) => (
-                                        <View key={i} style={{ flexDirection: "row", marginBottom: 1 }}>
-                                            <Text style={{ width: 12, fontSize: 6.5 }}>{String(i + 1)}.</Text>
-                                            <Text style={{ flex: 1, fontSize: 6.5, color: COLORS.DARK_GRAY, maxLines: 1 }}>{l}</Text>
-                                        </View>
-                                    ))}
-                                </View>
-                            ) : null}
-                        </View>
-
-                        {/* RIGHT: Notes */}
-                        <View style={{ width: SUM_COL_WIDTHS }}>
-                            {notes ? (
-                                <View style={{ marginTop: 0 }}>
-                                    <Text style={[styles.infoHeader, { fontSize: 8, marginBottom: 2 }]}>NOTES:</Text>
-                                    <Text style={{ fontSize: 7.5, color: COLORS.DARK_GRAY, lineHeight: 1.2 }}>{notes}</Text>
-                                </View>
-                            ) : null}
-                        </View>
                     </View>
 
                     <Footer

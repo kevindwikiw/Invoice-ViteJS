@@ -36,6 +36,27 @@ describe('package bundle descriptions', () => {
         ]);
     });
 
+    test('accepts list-prefixed headings from current and legacy descriptions', () => {
+        const variants = [
+            '- **Wedding**',
+            '* **Wedding**',
+            '\u2022 **Wedding**',
+            '\u00e2\u20ac\u00a2 **Wedding**',
+        ];
+
+        for (const heading of variants) {
+            assert.deepEqual(parsePackageBundleDescription(`${heading}\n\u2022 1 Photographer`), [
+                { title: 'Wedding', details: '1 Photographer' },
+            ]);
+        }
+    });
+
+    test('keeps a bundle heading even when it has no detail lines', () => {
+        assert.deepEqual(parsePackageBundleDescription('**Wedding**'), [
+            { title: 'Wedding', details: '' },
+        ]);
+    });
+
     test('keeps ordinary packages unchanged', () => {
         const item = invoiceItemFromPackage({
             id: 8,
