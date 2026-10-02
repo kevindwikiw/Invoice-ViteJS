@@ -47,14 +47,14 @@ export function SubmissionAction({ status, disabled, overLimit, onSubmit }: {
         <div
             ref={actionRef}
             data-testid="submission-action"
-            className="flex h-11 w-[188px] shrink-0 items-stretch overflow-hidden rounded-md border border-[var(--border)] bg-[var(--bg-card)] sm:w-[228px]"
+            className="flex h-9 w-[144px] shrink-0 items-stretch overflow-hidden rounded-md border border-[var(--border)] bg-[var(--bg-card)] sm:h-11 sm:w-[228px]"
         >
             <span
                 ref={statusRef}
                 data-testid="submission-status"
                 role="status"
                 className={clsx(
-                    'flex min-w-0 flex-1 items-center gap-1 whitespace-nowrap px-2 text-[10px] font-medium sm:gap-1.5 sm:px-3 sm:text-[11px]',
+                    'flex min-w-0 flex-1 items-center gap-1 whitespace-nowrap px-1 text-[9px] font-medium sm:gap-1.5 sm:px-3 sm:text-[11px]',
                     status === 'dirty' ? 'text-[var(--accent)]' : status === 'submitted' ? 'text-[var(--text-primary)]' : 'text-[var(--text-muted)]',
                 )}
             >
@@ -67,7 +67,7 @@ export function SubmissionAction({ status, disabled, overLimit, onSubmit }: {
                 disabled={disabled}
                 onClick={onSubmit}
                 className={clsx(
-                    'flex w-[88px] shrink-0 items-center justify-center gap-1.5 whitespace-nowrap px-2 text-[13px] font-semibold transition-[color,background-color,opacity,transform] duration-150 active:scale-[0.97] disabled:opacity-45 disabled:active:scale-100 motion-reduce:transition-none sm:w-24',
+                    'flex w-[66px] shrink-0 items-center justify-center gap-1 whitespace-nowrap px-1 text-[11px] font-semibold transition-[color,background-color,opacity,transform] duration-150 active:scale-[0.97] disabled:opacity-45 disabled:active:scale-100 motion-reduce:transition-none sm:w-24 sm:gap-1.5 sm:px-2 sm:text-[13px]',
                     overLimit ? 'bg-rose-500/10 text-rose-400 hover:bg-rose-500/15' : 'bg-[var(--accent)] text-[var(--bg-deep)] hover:opacity-90',
                 )}
             >

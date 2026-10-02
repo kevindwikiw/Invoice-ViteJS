@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, useCallback } from 'react';
 import { useParams } from '@tanstack/react-router';
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { AlertCircle, Check, CheckSquare, ChevronLeft, ChevronRight, HelpCircle, ImageIcon, Instagram, Loader2, Lock, Plus, ScanFace } from 'lucide-react';
+import { AlertCircle, Check, CheckSquare, ChevronLeft, ChevronRight, HelpCircle, ImageIcon, Instagram, Loader2, Lock, Plus, ScanFace, Send, X } from 'lucide-react';
 import clsx from 'clsx';
 
 import {
@@ -56,6 +56,8 @@ import type {
     GalleryTheme,
 } from '../features/culling/client-gallery/types';
 
+type GalleryRefineMode = 'none' | 'submitted';
+
 export default function ClientCullingGallery() {
     const { galleryId } = useParams({ from: '/culling/$galleryId' });
     const queryClient = useQueryClient();
@@ -71,7 +73,6 @@ export default function ClientCullingGallery() {
     }));
     const [page, setPage] = useState(1);
     const [activeTab, setActiveTab] = useState<GalleryView>(() => !token && editResultsToken ? 'edit-results' : 'gallery');
-    const [submittedOnly, setSubmittedOnly] = useState(false);
     const [downloadTarget, setDownloadTarget] = useState<HTMLDivElement | null>(null);
     const showSelected = activeTab === 'picked';
     const [selectionTouched, setSelectionTouched] = useState(() => readSelectionDraft(galleryId).length > 0);
@@ -86,9 +87,15 @@ export default function ClientCullingGallery() {
     const [knownPhotosById, setKnownPhotosById] = useState<Record<string, GalleryPhoto>>({});
     const [pendingLightboxPageMove, setPendingLightboxPageMove] = useState<'first' | 'last' | null>(null);
     const [showFaceSearch, setShowFaceSearch] = useState(false);
+    const [showRefine, setShowRefine] = useState(false);
+    const allPhotosMenuRef = useRef<HTMLDivElement>(null);
+    const allPhotosButtonRef = useRef<HTMLButtonElement>(null);
+    const allPhotosDropdownRef = useRef<HTMLDivElement>(null);
+    const [refineMode, setRefineMode] = useState<GalleryRefineMode>('none');
     const [faceFilteredPhotos, setFaceFilteredPhotos] = useState<GalleryPhoto[] | null>(null);
     const [faceFilterTotal, setFaceFilterTotal] = useState(0);
     const selectedIds = selectionDraft.selectedIds;
+    const submittedOnly = refineMode === 'submitted';
     const selectedPhotoMetaById = selectionDraft.photoMetaById;
     // Ref so the photos-cache effect can read current selection without adding it as a dep
     const selectedIdsRef = useRef(selectedIds);
@@ -159,21 +166,30 @@ export default function ClientCullingGallery() {
                 return (selectionOrder.get(left.driveFileId) ?? 0) - (selectionOrder.get(right.driveFileId) ?? 0);
             });
     }, [knownPhotosById, selectedPhotoMetaMap, selectionList, submittedPhotos]);
-    const isFaceFilterActive = faceFilteredPhotos !== null && activeTab === 'gallery';
+    const isFaceFilterActive = faceFilteredPhotos !== null && activeTab === 'selfie';
     const faceSearchAvailable = faceSearchStatusQuery.data?.available === true;
     const faceSearchControlVisible = faceSearchAvailable || faceFilteredPhotos !== null;
-    const visiblePhotos = useMemo(() => submittedOnly && activeTab === 'gallery'
-        ? submittedPhotos
-        : isFaceFilterActive ? faceFilteredPhotos : showSelected ? pickedPhotos : photos,
-    [activeTab, faceFilteredPhotos, isFaceFilterActive, photos, pickedPhotos, showSelected, submittedOnly, submittedPhotos]);
+    const visiblePhotos = useMemo(() => {
+        if (activeTab === 'picked') return pickedPhotos;
+        if (activeTab !== 'gallery' && activeTab !== 'selfie') return photos;
+        if (isFaceFilterActive) {
+            const matched = faceFilteredPhotos || [];
+            if (submittedOnly) {
+                const submittedIds = new Set(submittedPhotos.map((photo) => photo.driveFileId));
+                return matched.filter((photo) => submittedIds.has(photo.driveFileId));
+            }
+            return matched;
+        }
+        return activeTab === 'selfie' ? [] : submittedOnly ? submittedPhotos : photos;
+    }, [activeTab, faceFilteredPhotos, isFaceFilterActive, photos, pickedPhotos, submittedOnly, submittedPhotos]);
     const displayGallery = photosQuery.data?.gallery || unlockedGallery;
     const countdown = useSelectionCountdown(displayGallery?.selectionDeadlineAt, displayGallery?.serverTime);
     const galleryError = photosQuery.error as (Error & { code?: string; contactUrl?: string | null }) | null;
     const galleryLockCode = galleryError?.code === 'GALLERY_EXPIRED' || galleryError?.code === 'GALLERY_CLOSED' ? galleryError.code : null;
     const totalPages = photosQuery.data?.totalPages || 0;
     const totalPhotos = isFaceFilterActive ? visiblePhotos.length : photosQuery.data?.total || visiblePhotos.length;
-    const hasPreviousGalleryPage = !showSelected && !submittedOnly && !isFaceFilterActive && totalPages > 0 && page > 1;
-    const hasNextGalleryPage = !showSelected && !submittedOnly && !isFaceFilterActive && totalPages > 0 && page < totalPages;
+    const hasPreviousGalleryPage = activeTab === 'gallery' && !submittedOnly && !isFaceFilterActive && totalPages > 0 && page > 1;
+    const hasNextGalleryPage = activeTab === 'gallery' && !submittedOnly && !isFaceFilterActive && totalPages > 0 && page < totalPages;
     const hasSubmittedPhotos = Number(displayGallery?.selectionCount || submittedCount || selectedDriveFileIds.length) > 0;
 
     useEffect(() => {
@@ -190,8 +206,63 @@ export default function ClientCullingGallery() {
     const resetFaceFilter = useCallback(() => {
         setFaceFilteredPhotos(null);
         setFaceFilterTotal(0);
+        setRefineMode('none');
         setLightboxPhotoId(null);
     }, []);
+
+    const openAllPhotosMenu = () => setShowRefine((current) => !current);
+    useEffect(() => {
+        if (!showRefine) return;
+        const handlePointerDown = (event: PointerEvent) => {
+            if (allPhotosMenuRef.current && !allPhotosMenuRef.current.contains(event.target as Node)) {
+                setShowRefine(false);
+                allPhotosButtonRef.current?.focus();
+            }
+        };
+        const handleKeyDown = (event: KeyboardEvent) => {
+            if (event.key === 'Escape') {
+                event.preventDefault();
+                setShowRefine(false);
+                allPhotosButtonRef.current?.focus();
+                return;
+            }
+            if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+                event.preventDefault();
+                const items = Array.from(allPhotosDropdownRef.current?.querySelectorAll<HTMLButtonElement>('button:not(:disabled)') || []);
+                if (!items.length) return;
+                const currentIndex = items.indexOf(document.activeElement as HTMLButtonElement);
+                const nextIndex = event.key === 'ArrowDown'
+                    ? (currentIndex + 1) % items.length
+                    : (currentIndex - 1 + items.length) % items.length;
+                items[nextIndex]?.focus();
+            }
+        };
+        document.addEventListener('pointerdown', handlePointerDown);
+        document.addEventListener('keydown', handleKeyDown);
+        return () => {
+            document.removeEventListener('pointerdown', handlePointerDown);
+            document.removeEventListener('keydown', handleKeyDown);
+        };
+    }, [showRefine]);
+    useEffect(() => {
+        if (showRefine) requestAnimationFrame(() => allPhotosDropdownRef.current?.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus());
+    }, [showRefine]);
+    const chooseRefineMode = (mode: GalleryRefineMode) => {
+        setShowRefine(false);
+        setPage(1);
+        setLightboxPhotoId(null);
+        setPendingLightboxPageMove(null);
+        if (mode === 'submitted') {
+            setActiveTab('gallery');
+            setRefineMode('submitted');
+            return;
+        }
+        if (mode === 'none') {
+            resetFaceFilter();
+            setRefineMode('none');
+            setActiveTab('gallery');
+        }
+    };
 
     const goToGalleryPage = useCallback((nextPage: number) => {
         const clampedPage = totalPages ? Math.min(totalPages, Math.max(1, nextPage)) : Math.max(1, nextPage);
@@ -475,8 +546,12 @@ export default function ClientCullingGallery() {
                 : 'ready';
     const changeView = (view: GalleryView) => {
         if (view === 'gallery') {
-            if (activeTab === 'gallery' && hasSubmittedPhotos) setSubmittedOnly((current) => !current);
-            else setSubmittedOnly(false);
+            setRefineMode('none');
+        } else if (view === 'picked') {
+            setRefineMode('none');
+        } else if (view === 'selfie') {
+            setRefineMode('none');
+            if (faceFilteredPhotos === null) setShowFaceSearch(true);
         }
         setActiveTab(view);
         setLightboxPhotoId(null);
@@ -488,7 +563,7 @@ export default function ClientCullingGallery() {
     };
 
     if (!token && editResultsToken && activeTab === 'edit-results') {
-        return <EditResultsGrid galleryId={galleryId} theme={theme} token={editResultsToken} onToken={updateEditResultsToken} onExit={exitEditResults} onToggleTheme={toggleTheme} pickedCount={selectedCount} onViewChange={changeView} standalone />;
+        return <EditResultsGrid galleryId={galleryId} theme={theme} token={editResultsToken} onToken={updateEditResultsToken} onExit={exitEditResults} onToggleTheme={toggleTheme} onViewChange={changeView} standalone />;
     }
 
     if (!token) {
@@ -496,7 +571,7 @@ export default function ClientCullingGallery() {
     }
 
     if (countdown.isExpired || displayGallery?.isExpired || galleryLockCode) {
-        if (activeTab === 'edit-results' && (editResultsToken || showEditResultsGate)) return <EditResultsGrid galleryId={galleryId} theme={theme} token={editResultsToken} onToken={updateEditResultsToken} onExit={exitEditResults} onToggleTheme={toggleTheme} pickedCount={selectedCount} onViewChange={changeView} standalone />;
+        if (activeTab === 'edit-results' && (editResultsToken || showEditResultsGate)) return <EditResultsGrid galleryId={galleryId} theme={theme} token={editResultsToken} onToken={updateEditResultsToken} onExit={exitEditResults} onToggleTheme={toggleTheme} onViewChange={changeView} standalone />;
         return <GalleryLockedScreen expired={countdown.isExpired || Boolean(displayGallery?.isExpired) || galleryLockCode === 'GALLERY_EXPIRED'} contactUrl={galleryError?.contactUrl || fallbackContactUrl} theme={theme} onToggleTheme={toggleTheme} hasEditResults={editResultsStatusQuery.data?.available || Boolean(displayGallery?.hasEditResults)} onAccessEditedPhotos={() => { setShowEditResultsGate(true); changeView('edit-results'); }} />;
     }
 
@@ -511,7 +586,7 @@ export default function ClientCullingGallery() {
                         <ThemeToggle theme={theme} onToggle={toggleTheme} />
                     </div>
 
-                    <div className="flex items-center gap-2 sm:gap-3">
+                    <div className="flex min-w-0 items-center gap-1 sm:gap-3">
                         <div className="flex min-h-11 items-center">
                             <CountdownLabel countdown={countdown} />
                             {activeTab !== 'edit-results' && requestMoreUrl && shouldShowRequestMore && <>
@@ -524,10 +599,10 @@ export default function ClientCullingGallery() {
                                     }}
                                     title="Request More"
                                     aria-label="Request More"
-                                    className="flex h-11 w-11 items-center justify-center rounded-md text-xs font-medium text-[var(--text-secondary)] transition-[color,background-color,transform] duration-150 hover:bg-[var(--bg-card)] hover:text-[var(--text-primary)] active:scale-[0.97] motion-reduce:transition-none sm:w-auto sm:gap-2 sm:px-2"
+                                    className="flex h-9 w-auto items-center justify-center gap-1 rounded-md px-1 text-[9px] font-medium text-[var(--text-secondary)] transition-[color,background-color,transform] duration-150 hover:bg-[var(--bg-card)] hover:text-[var(--text-primary)] active:scale-[0.97] motion-reduce:transition-none sm:h-11 sm:gap-2 sm:px-2 sm:text-xs"
                                 >
                                     <Plus size={13} />
-                                    <span className="hidden sm:inline">Request More</span>
+                                    <span>Request More</span>
                                 </button>
                             </>}
                             {activeTab !== 'edit-results' && <>
@@ -537,10 +612,10 @@ export default function ClientCullingGallery() {
                                     onClick={() => setShowTutorial(true)}
                                     title="How to Submit"
                                     aria-label="How to Submit"
-                                    className="flex h-11 w-11 items-center justify-center rounded-md text-xs font-medium text-[var(--text-secondary)] transition-[color,background-color,transform] duration-150 hover:bg-[var(--bg-card)] hover:text-[var(--text-primary)] active:scale-[0.97] motion-reduce:transition-none sm:w-auto sm:gap-2 sm:px-2"
+                                    className="flex h-9 w-auto items-center justify-center gap-1 rounded-md px-1 text-[9px] font-medium text-[var(--text-secondary)] transition-[color,background-color,transform] duration-150 hover:bg-[var(--bg-card)] hover:text-[var(--text-primary)] active:scale-[0.97] motion-reduce:transition-none sm:h-11 sm:gap-2 sm:px-2 sm:text-xs"
                                 >
                                     <HelpCircle size={13} />
-                                    <span className="hidden sm:inline">How to Submit</span>
+                                    <span>How to Submit</span>
                                 </button>
                             </>}
                         </div>
@@ -549,30 +624,29 @@ export default function ClientCullingGallery() {
             </header>
 
             <div data-testid="gallery-toolbar" className="sticky top-14 z-30 border-b border-[var(--border)] bg-[var(--bg-deep)] px-2 py-1.5 sm:px-8 sm:py-2">
-                <div className="mx-auto flex max-w-[1600px] flex-wrap items-center gap-y-1.5 sm:flex-nowrap sm:gap-x-2">
-                    <div className="flex w-full min-w-0 items-center gap-1 sm:w-auto sm:shrink-0 sm:gap-2">
-                        <GalleryViewTabs value={activeTab} pickedCount={selectedCount} editedAvailable={editResultsStatusQuery.data?.available ?? Boolean(displayGallery?.hasEditResults)} submittedOnly={submittedOnly} onChange={changeView} />
-                        {activeTab !== 'edit-results' && faceSearchControlVisible && <button
-                            type="button"
-                            aria-label={faceFilteredPhotos !== null ? 'Clear selfie filter' : 'Filter by selfie'}
-                            title={faceFilteredPhotos !== null ? `Clear selfie filter (${faceFilteredPhotos.length} matches)` : 'Filter by selfie'}
-                            onClick={() => faceFilteredPhotos !== null ? resetFaceFilter() : setShowFaceSearch(true)}
-                            className={clsx(
-                                'flex h-11 w-11 shrink-0 items-center justify-center rounded-md border text-xs font-medium transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)] sm:w-auto sm:gap-1.5 sm:px-3',
-                                faceFilteredPhotos !== null
-                                    ? 'border-[var(--accent)] bg-[var(--accent)] text-[var(--bg-deep)]'
-                                    : 'border-[var(--border)] bg-[var(--bg-card)] text-[var(--text-secondary)] hover:border-[var(--accent)]'
-                            )}
-                        >
-                            <ScanFace size={15} />
-                            <span className="hidden sm:inline">{faceFilteredPhotos !== null ? `Clear Selfie (${faceFilteredPhotos.length})` : 'Filter by Selfie'}</span>
-                        </button>}
+                <div className="mx-auto flex max-w-[1600px] items-center gap-1 sm:gap-x-2">
+                    <div ref={allPhotosMenuRef} className="relative flex min-w-0 flex-1 items-center gap-1 sm:w-auto sm:flex-none sm:gap-2">
+                        <GalleryViewTabs value={activeTab === 'picked' ? 'gallery' : activeTab} galleryLabel={activeTab === 'picked' ? 'Picked' : submittedOnly ? 'Submitted' : 'All Photos'} editedAvailable={editResultsStatusQuery.data?.available ?? Boolean(displayGallery?.hasEditResults)} allPhotosMenuOpen={showRefine} allPhotosButtonRef={allPhotosButtonRef} onAllPhotos={openAllPhotosMenu} onChange={changeView} />
+                        {showRefine && activeTab !== 'edit-results' && (
+                            <div ref={allPhotosDropdownRef} className="absolute left-0 top-[calc(100%+8px)] z-[80] w-[min(204px,calc(100vw-16px))] rounded-lg border border-[var(--border)] bg-[var(--bg-deep)] p-1.5 shadow-xl transition-[opacity,transform] duration-150 motion-reduce:transition-none" role="menu" aria-label="All Photos views">
+                                <button type="button" role="menuitemradio" aria-checked={refineMode === 'none' && activeTab === 'gallery'} onClick={() => chooseRefineMode('none')} className={clsx('flex min-h-10 w-full items-center justify-between gap-2 rounded-md px-2.5 text-left text-xs font-medium', refineMode === 'none' && activeTab === 'gallery' ? 'bg-[var(--accent)] text-[var(--bg-deep)]' : 'text-[var(--text-secondary)] hover:bg-[var(--bg-card)]')}>
+                                    <span className="flex items-center gap-2"><ImageIcon size={15} />All Photos</span>{refineMode === 'none' && activeTab === 'gallery' && <Check size={14} />}
+                                </button>
+                                <button type="button" role="menuitem" onClick={() => { setShowRefine(false); changeView('picked'); }} className="flex min-h-10 w-full items-center justify-between gap-2 rounded-md px-2.5 text-left text-xs font-medium text-[var(--text-secondary)] hover:bg-[var(--bg-card)]">
+                                    <span className="flex items-center gap-2"><CheckSquare size={15} />Picked</span><ChevronRight size={14} />
+                                </button>
+                                <button type="button" role="menuitemradio" aria-checked={refineMode === 'submitted'} disabled={!hasSubmittedPhotos} onClick={() => chooseRefineMode('submitted')} className={clsx('flex min-h-10 w-full items-center justify-between gap-2 rounded-md px-2.5 text-left text-xs font-medium disabled:opacity-40', refineMode === 'submitted' ? 'bg-[var(--accent)] text-[var(--bg-deep)]' : 'text-[var(--text-secondary)] hover:bg-[var(--bg-card)]')}>
+                                    <span className="flex items-center gap-2"><Send size={15} />Submitted</span>{refineMode === 'submitted' && <Check size={14} />}
+                                </button>
+                                {refineMode === 'submitted' && <button type="button" role="menuitem" onClick={() => chooseRefineMode('none')} className="mt-1 flex min-h-9 w-full items-center rounded-md px-2.5 text-left text-[11px] text-[var(--text-muted)] hover:bg-[var(--bg-card)]">Clear filters</button>}
+                            </div>
+                        )}
                     </div>
 
-                    {activeTab !== 'edit-results' && <div className="flex w-full min-w-0 items-center justify-between gap-2 sm:w-auto sm:flex-1">
+                    {activeTab !== 'edit-results' && <div className="flex min-w-0 shrink-0 items-center gap-1 sm:w-auto sm:flex-1 sm:justify-between sm:gap-2">
                         <span
                             className={clsx(
-                                'flex min-h-11 min-w-0 items-center whitespace-nowrap text-[11px] font-normal text-[var(--text-muted)] sm:px-1',
+                                'hidden min-h-9 min-w-0 items-center whitespace-nowrap text-[10px] font-normal text-[var(--text-muted)] sm:flex sm:min-h-11 sm:px-1 sm:text-[11px]',
                                 isOverLimit ? 'border-rose-500/45 text-rose-400' : 'border-[var(--border)] text-[var(--text-secondary)]'
                             )}
                         >
@@ -634,10 +708,10 @@ export default function ClientCullingGallery() {
                     </div>
                 ) : !visiblePhotos.length ? (
                     <div className="flex min-h-[60vh] flex-col items-center justify-center text-center">
-                        {isFaceFilterActive ? <ScanFace size={30} className="mb-4 text-[var(--text-muted)]" /> : showSelected ? <CheckSquare size={30} className="mb-4 text-[var(--text-muted)]" /> : <ImageIcon size={30} className="mb-4 text-[var(--text-muted)]" />}
-                        <p className="font-display text-2xl text-[var(--text-primary)]">{isFaceFilterActive ? 'No face matches found' : showSelected ? 'No Picked Photos' : submittedOnly ? 'No Submitted Photos' : 'No photos synced yet'}</p>
+                        {activeTab === 'selfie' || isFaceFilterActive ? <ScanFace size={30} className="mb-4 text-[var(--text-muted)]" /> : showSelected ? <CheckSquare size={30} className="mb-4 text-[var(--text-muted)]" /> : <ImageIcon size={30} className="mb-4 text-[var(--text-muted)]" />}
+                        <p className="font-display text-2xl text-[var(--text-primary)]">{activeTab === 'selfie' ? (isFaceFilterActive ? 'No face matches found' : 'Find Your Photos') : showSelected ? 'No Picked Photos' : submittedOnly ? 'No Submitted Photos' : 'No photos synced yet'}</p>
                         <p className="mt-2 max-w-sm text-sm leading-6 text-[var(--text-muted)]">
-                            {isFaceFilterActive ? 'Try a brighter front-facing selfie or use Wide sensitivity.' : showSelected ? 'Select photos from the gallery to see them here before submitting.' : submittedOnly ? 'Submit your current picks to update this list.' : 'The studio needs to sync this Drive folder before selection opens.'}
+                            {activeTab === 'selfie' ? 'Choose a clear selfie to find matching moments in this gallery.' : isFaceFilterActive ? 'Try a brighter front-facing selfie or use Wide sensitivity.' : showSelected ? 'Select photos from the gallery to see them here before submitting.' : submittedOnly ? 'Submit your current picks to update this list.' : 'The studio needs to sync this Drive folder before selection opens.'}
                         </p>
                         {isFaceFilterActive && (
                             <button type="button" onClick={resetFaceFilter} className="mt-6 flex h-9 items-center justify-center rounded-lg border border-[var(--border)] px-4 text-[10px] font-bold uppercase tracking-wider text-[var(--text-secondary)] transition-colors hover:border-[var(--accent)] hover:text-[var(--text-primary)]">
@@ -668,7 +742,7 @@ export default function ClientCullingGallery() {
                     </div>
                 )}
                 
-                {activeTab !== 'edit-results' && !showSelected && !submittedOnly && !isFaceFilterActive && !photosQuery.isLoading && !photosQuery.isError && photosQuery.data && totalPages > 1 && (
+                {activeTab === 'gallery' && !showSelected && !submittedOnly && !isFaceFilterActive && !photosQuery.isLoading && !photosQuery.isError && photosQuery.data && totalPages > 1 && (
                     <nav className="mt-8 flex items-center justify-center gap-4" aria-label="Gallery pages">
                         <button type="button" disabled={page === 1} onClick={() => goToGalleryPage(page - 1)} className="flex h-9 items-center gap-2 rounded-lg border border-[var(--border)] px-4 text-[10px] font-bold uppercase tracking-wider text-[var(--text-secondary)] disabled:opacity-35"><ChevronLeft size={14} /> Previous</button>
                         <span className="text-xs text-[var(--text-muted)]">Page {page} of {totalPages}</span>
@@ -730,6 +804,38 @@ export default function ClientCullingGallery() {
                 />
             )}
 
+            {false && (
+                <div
+                    className="fixed inset-0 z-[120] flex items-end bg-black/45 sm:items-center sm:justify-center"
+                    role="dialog"
+                    aria-modal="true"
+                    aria-labelledby="refine-title"
+                    onMouseDown={(event) => { if (event.target === event.currentTarget) setShowRefine(false); }}
+                >
+                    <div className="w-full max-w-md rounded-t-2xl border border-[var(--border)] bg-[var(--bg-deep)] p-4 shadow-2xl sm:rounded-xl">
+                        <div className="mb-3 flex items-center justify-between">
+                            <div>
+                                <p id="refine-title" className="text-sm font-semibold text-[var(--text-primary)]">All Photos</p>
+                                <p className="mt-0.5 text-xs text-[var(--text-muted)]">Choose what you want to see.</p>
+                            </div>
+                            <button type="button" aria-label="Close refine filters" onClick={() => setShowRefine(false)} className="flex h-9 w-9 items-center justify-center rounded-md text-[var(--text-secondary)] hover:bg-[var(--bg-card)]"><X size={16} /></button>
+                        </div>
+                        <div className="grid gap-2">
+                            <button type="button" onClick={() => chooseRefineMode('none')} className={clsx('flex min-h-11 items-center justify-between rounded-md border px-3 text-left text-sm', refineMode === 'none' ? 'border-[var(--accent)] bg-[var(--accent)] text-[var(--bg-deep)]' : 'border-[var(--border)] text-[var(--text-secondary)]')}>
+                                <span className="flex items-center gap-2"><ImageIcon size={16} />All Photos</span><span aria-hidden="true">{refineMode === 'none' && <Check size={15} />}</span>
+                            </button>
+                            <button type="button" onClick={() => chooseRefineMode('submitted')} disabled={!hasSubmittedPhotos} className={clsx('flex min-h-11 items-center justify-between rounded-md border px-3 text-left text-sm disabled:opacity-40', refineMode === 'submitted' ? 'border-[var(--accent)] bg-[var(--accent)] text-[var(--bg-deep)]' : 'border-[var(--border)] text-[var(--text-secondary)]')}>
+                                <span className="flex items-center gap-2"><Send size={16} />Submitted</span><span aria-hidden="true">{refineMode === 'submitted' && <Check size={15} />}</span>
+                            </button>
+                            <button type="button" onClick={() => { setShowRefine(false); changeView('picked'); }} className="flex min-h-11 items-center justify-between rounded-md border border-[var(--border)] px-3 text-left text-sm text-[var(--text-secondary)]">
+                                <span className="flex items-center gap-2"><CheckSquare size={16} />Picked</span><span aria-hidden="true">→</span>
+                            </button>
+                        </div>
+                        {refineMode !== 'none' && <button type="button" onClick={() => chooseRefineMode('none')} className="mt-3 h-10 w-full rounded-md text-sm font-medium text-[var(--text-secondary)] hover:bg-[var(--bg-card)]">Clear filters</button>}
+                    </div>
+                </div>
+            )}
+
             {showFaceSearch && faceSearchControlVisible && (
                 <FaceSearchModal
                     theme={theme}
@@ -740,9 +846,10 @@ export default function ClientCullingGallery() {
                     onApply={(matchedPhotos, total) => {
                         setFaceFilteredPhotos(matchedPhotos);
                         setFaceFilterTotal(total);
-                        setActiveTab('gallery');
-                        setSubmittedOnly(false);
+                        setRefineMode('none');
+                        setActiveTab('selfie');
                         setLightboxPhotoId(null);
+                        setShowFaceSearch(false);
                     }}
                     onReset={resetFaceFilter}
                     onClose={() => setShowFaceSearch(false)}

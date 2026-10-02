@@ -1,7 +1,7 @@
 import { useCallback, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useMutation, useQuery } from '@tanstack/react-query';
-import { AlertCircle, ArrowLeft, ChevronLeft, ChevronRight, Download, Loader2, Lock, RotateCcw } from 'lucide-react';
+import { AlertCircle, ArrowLeft, ChevronLeft, ChevronRight, Download, Instagram, Loader2, Lock, RotateCcw } from 'lucide-react';
 import clsx from 'clsx';
 
 import { getEditResults, verifyEditResultsPassword } from '../culling.public';
@@ -31,7 +31,6 @@ export function EditResultsGrid({
     onToggleTheme,
     standalone = false,
     downloadTarget,
-    pickedCount = 0,
     onViewChange,
 }: {
     galleryId: string;
@@ -42,7 +41,6 @@ export function EditResultsGrid({
     onToggleTheme?: () => void;
     standalone?: boolean;
     downloadTarget?: HTMLElement | null;
-    pickedCount?: number;
     onViewChange?: (view: GalleryView) => void;
 }) {
     const [password, setPassword] = useState('');
@@ -93,7 +91,7 @@ export function EditResultsGrid({
     ) : null;
 
     const content = !token || expired ? (
-        <section className="mx-auto flex min-h-[55dvh] max-w-md flex-col items-center justify-center px-5 py-10 text-center">
+        <section className="mx-auto flex min-h-[60vh] max-w-md flex-col items-center justify-center px-5 py-10 text-center">
             <Lock size={24} className="mb-5 text-[var(--accent)]" />
             <h1 className="mt-2 font-display text-2xl text-[var(--text-primary)]">Edited Photos</h1>
             <p className="mt-2 max-w-sm text-sm leading-6 text-[var(--text-muted)]">Enter your edited photos password.</p>
@@ -108,7 +106,7 @@ export function EditResultsGrid({
             {onExit && <button type="button" onClick={onExit} className="mt-5 inline-flex h-10 items-center gap-2 rounded-md border border-[var(--border)] px-4 text-xs font-semibold text-[var(--text-secondary)]"><ArrowLeft size={14} /> Back to gallery</button>}
         </section>
     ) : results.isPending ? (
-        <div role="status" className="flex min-h-[55dvh] items-center justify-center gap-2 text-sm text-[var(--text-muted)]"><Loader2 size={18} className="animate-spin" /> Loading edited photos...</div>
+        <div role="status" className="flex min-h-[60vh] items-center justify-center gap-2 text-sm text-[var(--text-muted)]"><Loader2 size={18} className="animate-spin" /> Loading edited photos...</div>
     ) : results.isError ? (
         <div role="alert" className="mx-auto flex min-h-[45dvh] max-w-md flex-col items-center justify-center px-5 text-center">
             <AlertCircle size={24} className="mb-4 text-rose-400" />
@@ -116,7 +114,7 @@ export function EditResultsGrid({
             <button type="button" onClick={() => void results.refetch()} className="mt-4 inline-flex h-10 items-center gap-2 rounded-md border border-[var(--border)] px-4 text-xs font-semibold"><RotateCcw size={14} /> Retry</button>
         </div>
     ) : (
-        <div className={clsx('mx-auto max-w-[1600px]', standalone && 'px-2.5 pb-10 pt-4 sm:px-4 sm:pt-5 md:px-8')}>
+        <div className={clsx('mx-auto max-w-[1664px]', standalone && 'px-2.5 pb-10 pt-3 sm:px-8 sm:pt-5 sm:pb-12 md:pt-6')}>
             {photos.length ? <div ref={gridRef} data-testid="edited-gallery-grid" className="grid scroll-mt-36 grid-cols-2 gap-1.5 sm:grid-cols-3 sm:gap-2 md:grid-cols-4 md:gap-3 xl:grid-cols-5 2xl:grid-cols-6">
                 {visiblePhotos.map((photo, index) => <PhotoTile
                     key={photo.driveFileId}
@@ -156,17 +154,27 @@ export function EditResultsGrid({
     );
 
     if (!standalone) return <>{downloadTarget && createPortal(archiveAction, downloadTarget)}{content}</>;
-    return <main style={theme === 'black' ? BLACK_THEME : WHITE_THEME} className={clsx('min-h-screen bg-[var(--bg-deep)] font-sans text-[var(--text-primary)]', !token && 'flex flex-col')}>
-        <header className="sticky top-0 z-20 flex h-14 items-center justify-between border-b border-[var(--border)] bg-[var(--bg-deep)] px-2.5 sm:px-8">
-            <OrbitLogo theme={theme} />
-            <div className="flex items-center gap-2">{onExit && <button type="button" onClick={onExit} aria-label="Back to gallery" title="Back to gallery" className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-[var(--border)]"><ArrowLeft size={16} /></button>}{onToggleTheme && <ThemeToggle theme={theme} onToggle={onToggleTheme} />}</div>
+    return <main style={theme === 'black' ? BLACK_THEME : WHITE_THEME} className="min-h-screen bg-[var(--bg-deep)] font-sans text-[var(--text-primary)]">
+        <header data-testid="gallery-header" className="sticky top-0 z-40 h-14 border-b border-[var(--border)] bg-[var(--bg-deep)] px-2.5 sm:px-8">
+            <div className="mx-auto flex h-full max-w-[1600px] items-center justify-between gap-1.5 sm:gap-2">
+                <div className="flex items-center gap-1"><OrbitLogo theme={theme} />{onToggleTheme && <ThemeToggle theme={theme} onToggle={onToggleTheme} />}</div>
+                {onExit && <button type="button" onClick={onExit} aria-label="Back to gallery" title="Back to gallery" className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-[var(--border)]"><ArrowLeft size={16} /></button>}
+            </div>
         </header>
-        <div data-testid="gallery-toolbar" className="sticky top-14 z-20 border-b border-[var(--border)] bg-[var(--bg-deep)] px-2.5 py-2 sm:px-8">
-            <div className="mx-auto flex max-w-[1600px] flex-wrap items-center justify-between gap-2">
-                <GalleryViewTabs value="edit-results" pickedCount={pickedCount} editedAvailable onChange={(view) => { closePhoto(); onViewChange?.(view); }} />
-                {archiveAction && <div className="ml-auto">{archiveAction}</div>}
+        <div data-testid="gallery-toolbar" className="sticky top-14 z-30 border-b border-[var(--border)] bg-[var(--bg-deep)] px-2 py-1.5 sm:px-8 sm:py-2">
+            <div className="mx-auto flex max-w-[1600px] items-center gap-1 sm:gap-x-2">
+                <GalleryViewTabs value="edit-results" editedAvailable onAllPhotos={() => onViewChange?.('gallery')} onChange={(view) => { closePhoto(); onViewChange?.(view); }} />
+                {archiveAction && <div className="ml-auto flex min-w-0 justify-end">{archiveAction}</div>}
             </div>
         </div>
         {content}
+        <footer className="border-t border-[var(--border)] px-4 py-5 text-[10px] text-[var(--text-muted)] md:px-8">
+            <div className="mx-auto flex max-w-[1600px] flex-col items-center justify-between gap-3 sm:flex-row">
+                <p>&copy; {new Date().getFullYear()} The Orbit Photo. All rights reserved.</p>
+                <a href="https://www.instagram.com/theorbitphoto/" target="_blank" rel="noreferrer" aria-label="@theorbitphoto on Instagram" className="inline-flex items-center gap-1.5 text-[var(--text-secondary)] transition-colors hover:text-[var(--text-primary)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)]">
+                    <Instagram size={13} /> @theorbitphoto
+                </a>
+            </div>
+        </footer>
     </main>;
 }
