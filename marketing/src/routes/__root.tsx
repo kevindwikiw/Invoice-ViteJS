@@ -7,6 +7,7 @@ import {
 } from '@tanstack/react-router'
 import appCss from '../styles.css?url'
 import { LANDING_CONFIG } from '../config/landing'
+import { MarketingShell } from '../components/MarketingShell'
 
 export const Route = createRootRoute({
   head: () => ({
@@ -23,7 +24,9 @@ export const Route = createRootRoute({
 function RootComponent() {
   return (
     <RootDocument>
-      <Outlet />
+      <MarketingShell>
+        <Outlet />
+      </MarketingShell>
     </RootDocument>
   )
 }

@@ -727,6 +727,9 @@ function GalleryDetailEditor({ data, close }: { data: GallerySummary; close: () 
     wasPairsOpen.current = pairsOpen;
   }, [pairsOpen]);
   const [folderDirty, setFolderDirty] = useState(false);
+  const initialEditDuration = data.editResultsAccessDurationHours;
+  const [editAccessPreset, setEditAccessPreset] = useState(() => initialEditDuration === null ? 'unlimited' : [24, 72, 168, 336].includes(Number(initialEditDuration || 168)) ? String(initialEditDuration || 168) : 'custom');
+  const [editCustomDays, setEditCustomDays] = useState(() => Math.max(1, Math.round(Number(initialEditDuration || 168) / 24)));
   const [publishWarnings, setPublishWarnings] = useState<string[]>([]);
   const markDirty = () => { setDirty(true); setSaved(false); setSaveError(''); };
 
@@ -834,6 +837,9 @@ function GalleryDetailEditor({ data, close }: { data: GallerySummary; close: () 
               <Clock3 size={12} /> {deadlineLabel(data)} · {data.selectionDurationHours ?? (data.selectionDurationDays || 3) * 24} hours
             </p>
           </div>
+          <p className={clsx('mt-1 inline-flex items-center gap-1.5 text-[10px] font-semibold', data.hasEditResults && data.editResultsExpiresAt && Date.parse(data.editResultsExpiresAt) <= Date.now() ? 'text-rose-400' : 'text-[var(--text-muted)]')}>
+            <Clock3 size={12} /> Edited Photos access: {!data.hasEditResults ? 'Not published' : !data.editResultsExpiresAt ? 'Unlimited' : Date.parse(data.editResultsExpiresAt) <= Date.now() ? 'Expired' : `expires ${formatDateValue(data.editResultsExpiresAt, dateFormat, 'Expired')}`}
+          </p>
           <div className="flex flex-wrap gap-2">
             <button
               type="button"
@@ -913,6 +919,7 @@ function GalleryDetailEditor({ data, close }: { data: GallerySummary; close: () 
                driveFolderUrl: String(form.get('driveFolderUrl') || driveUrl).trim(),
                editResultsFolderId: String(form.get('editResultsFolderId') || '').trim(),
                editResultsZipFileId: String(form.get('editResultsZipFileId') || '').trim(),
+               editResultsAccessDurationHours: editAccessPreset === 'unlimited' ? null : editAccessPreset === 'custom' ? editCustomDays * 24 : Number(editAccessPreset),
                comparisonEnabled,
                ...(pairsDirty ? { comparisonPairs } : {}),
                pin: String(form.get('pin') || ''),
@@ -991,6 +998,14 @@ function GalleryDetailEditor({ data, close }: { data: GallerySummary; close: () 
                 <input form="edit-gallery-form" name="editResultsZipFileId" defaultValue={data.editResultsZipFileId || ''} placeholder="Google Drive ZIP file URL or ID" aria-describedby="edited-zip-help" className={inputClass} />
               </Field>
               <p id="edited-zip-help" className="text-xs text-[var(--text-muted)]">Optional ZIP used for the client's Download All button.</p>
+              <Field label="Download access duration">
+                <select form="edit-gallery-form" name="editResultsAccessDurationHours" value={editAccessPreset} onChange={(event) => { setEditAccessPreset(event.currentTarget.value); markDirty(); }} className={inputClass}>
+                  <option value="24">24 hours</option><option value="72">3 days</option><option value="168">7 days</option><option value="336">14 days</option><option value="custom">Custom</option><option value="unlimited">Unlimited</option>
+                </select>
+              </Field>
+              {editAccessPreset === 'custom' && <Field label="Custom duration (days)">
+                <input form="edit-gallery-form" name="editResultsCustomDays" type="number" min="1" max="3650" value={editCustomDays} onChange={(event) => { setEditCustomDays(Math.min(3650, Math.max(1, Number(event.currentTarget.value) || 1))); markDirty(); }} className={inputClass} />
+              </Field>}
               <div className="flex flex-wrap items-center justify-between gap-3 border-t border-[var(--border)] pt-4">
                 <label className="flex min-h-11 cursor-pointer items-center gap-3 text-sm font-medium"><input type="checkbox" checked={comparisonEnabled} onChange={(event) => setComparisonEnabled(event.target.checked)} style={{ width: 16, height: 16, padding: 0, flexShrink: 0 }} className="accent-[var(--accent)]" /><span>Enable Before / After</span></label>
                 <button ref={managePairsRef} type="button" disabled={!comparisonEnabled || folderDirty || !data.editResultsFolderId} title={folderDirty ? 'Save the folder before managing pairs' : undefined} onClick={() => setPairsOpen(true)} className="inline-flex min-h-11 items-center gap-2 rounded-md border border-[var(--border)] px-3 text-sm font-medium disabled:opacity-40"><Images size={16} /> Manage Pairs</button>

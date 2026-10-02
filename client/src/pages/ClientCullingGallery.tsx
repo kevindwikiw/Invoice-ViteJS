@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, useCallback } from 'react';
 import { useParams } from '@tanstack/react-router';
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { AlertCircle, Check, CheckSquare, ChevronLeft, ChevronRight, HelpCircle, ImageIcon, Instagram, Loader2, Lock, Plus, ScanFace, Send, X } from 'lucide-react';
+import { AlertCircle, Check, CheckSquare, ChevronLeft, ChevronRight, HelpCircle, ImageIcon, Instagram, Loader2, Lock, ScanFace, Send, X } from 'lucide-react';
 import clsx from 'clsx';
 
 import {
@@ -583,50 +583,32 @@ export default function ClientCullingGallery() {
                     
                     <div className="flex items-center gap-1">
                         <OrbitLogo theme={theme} />
-                        <ThemeToggle theme={theme} onToggle={toggleTheme} />
                     </div>
 
                     <div className="flex min-w-0 items-center gap-1 sm:gap-3">
-                        <div className="flex min-h-11 items-center">
-                            <CountdownLabel countdown={countdown} />
-                            {activeTab !== 'edit-results' && requestMoreUrl && shouldShowRequestMore && <>
-                                <span aria-hidden="true" className="mx-1.5 h-4 w-px shrink-0 bg-[var(--border)] sm:mx-2" />
-                                <button
-                                    type="button"
-                                    onClick={() => {
-                                        setShowRequestMore(true);
-                                        void photosQuery.refetch();
-                                    }}
-                                    title="Request More"
-                                    aria-label="Request More"
-                                    className="flex h-9 w-auto items-center justify-center gap-1 rounded-md px-1 text-[9px] font-medium text-[var(--text-secondary)] transition-[color,background-color,transform] duration-150 hover:bg-[var(--bg-card)] hover:text-[var(--text-primary)] active:scale-[0.97] motion-reduce:transition-none sm:h-11 sm:gap-2 sm:px-2 sm:text-xs"
-                                >
-                                    <Plus size={13} />
-                                    <span>Request More</span>
-                                </button>
-                            </>}
-                            {activeTab !== 'edit-results' && <>
-                                <span aria-hidden="true" className="mx-1.5 h-4 w-px shrink-0 bg-[var(--border)] sm:mx-2" />
+                    <div className="flex min-h-11 items-center">
+                        {activeTab !== 'edit-results' && <CountdownLabel countdown={countdown} />}
+                            <>
                                 <button
                                     type="button"
                                     onClick={() => setShowTutorial(true)}
                                     title="How to Submit"
                                     aria-label="How to Submit"
-                                    className="flex h-9 w-auto items-center justify-center gap-1 rounded-md px-1 text-[9px] font-medium text-[var(--text-secondary)] transition-[color,background-color,transform] duration-150 hover:bg-[var(--bg-card)] hover:text-[var(--text-primary)] active:scale-[0.97] motion-reduce:transition-none sm:h-11 sm:gap-2 sm:px-2 sm:text-xs"
+                                    className="flex h-11 w-11 items-center justify-center px-2 text-[var(--text-secondary)] transition-[color,transform] duration-150 hover:text-[var(--text-primary)] active:scale-[0.97] motion-reduce:transition-none"
                                 >
-                                    <HelpCircle size={13} />
-                                    <span>How to Submit</span>
+                                    <HelpCircle size={15} />
                                 </button>
-                            </>}
+                            </>
+                            <ThemeToggle theme={theme} onToggle={toggleTheme} />
                         </div>
                     </div>
                 </div>
             </header>
 
-            <div data-testid="gallery-toolbar" className="sticky top-14 z-30 border-b border-[var(--border)] bg-[var(--bg-deep)] px-2 py-1.5 sm:px-8 sm:py-2">
+            <div data-testid="gallery-toolbar" className="sticky top-14 z-30 border-b border-[var(--border)] bg-[var(--bg-deep)] px-2.5 py-1.5 sm:px-8 sm:py-2">
                 <div className="mx-auto flex max-w-[1600px] items-center gap-1 sm:gap-x-2">
                     <div ref={allPhotosMenuRef} className="relative flex min-w-0 flex-1 items-center gap-1 sm:w-auto sm:flex-none sm:gap-2">
-                        <GalleryViewTabs value={activeTab === 'picked' ? 'gallery' : activeTab} galleryLabel={activeTab === 'picked' ? 'Picked' : submittedOnly ? 'Submitted' : 'All Photos'} editedAvailable={editResultsStatusQuery.data?.available ?? Boolean(displayGallery?.hasEditResults)} allPhotosMenuOpen={showRefine} allPhotosButtonRef={allPhotosButtonRef} onAllPhotos={openAllPhotosMenu} onChange={changeView} />
+                        <GalleryViewTabs value={activeTab === 'picked' ? 'gallery' : activeTab} galleryLabel={activeTab === 'picked' ? 'Picked' : submittedOnly ? 'Submitted' : 'All Photos'} editedAvailable={editResultsStatusQuery.data?.available ?? Boolean(displayGallery?.hasEditResults)} allPhotosMenuOpen={showRefine} allPhotosButtonRef={allPhotosButtonRef} onAllPhotos={activeTab === 'edit-results' ? () => changeView('gallery') : openAllPhotosMenu} onChange={changeView} />
                         {showRefine && activeTab !== 'edit-results' && (
                             <div ref={allPhotosDropdownRef} className="absolute left-0 top-[calc(100%+8px)] z-[80] w-[min(204px,calc(100vw-16px))] rounded-lg border border-[var(--border)] bg-[var(--bg-deep)] p-1.5 shadow-xl transition-[opacity,transform] duration-150 motion-reduce:transition-none" role="menu" aria-label="All Photos views">
                                 <button type="button" role="menuitemradio" aria-checked={refineMode === 'none' && activeTab === 'gallery'} onClick={() => chooseRefineMode('none')} className={clsx('flex min-h-10 w-full items-center justify-between gap-2 rounded-md px-2.5 text-left text-xs font-medium', refineMode === 'none' && activeTab === 'gallery' ? 'bg-[var(--accent)] text-[var(--bg-deep)]' : 'text-[var(--text-secondary)] hover:bg-[var(--bg-card)]')}>
@@ -670,7 +652,7 @@ export default function ClientCullingGallery() {
                             onSubmit={handleSubmitSelections}
                         />
                     </div>}
-                    <div ref={setDownloadTarget} className={activeTab === 'edit-results' ? 'ml-auto flex w-full justify-end sm:w-auto' : 'hidden'} />
+                    <div ref={setDownloadTarget} className={activeTab === 'edit-results' ? 'ml-auto flex min-h-11 min-w-0 shrink-0 items-center justify-end' : 'hidden'} />
                 </div>
             </div>
 

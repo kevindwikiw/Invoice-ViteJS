@@ -1,6 +1,12 @@
 import { Link } from '@tanstack/react-router'
 
-export function RoutePlaceholder({ title }: { title: string }) {
+export function RoutePlaceholder({
+  title,
+  summary,
+}: {
+  title: string
+  summary?: string
+}) {
   return (
     <main className="min-h-screen bg-black px-6 py-24 text-white sm:px-10">
       <div className="mx-auto max-w-3xl">
@@ -11,7 +17,8 @@ export function RoutePlaceholder({ title }: { title: string }) {
           {title}
         </h1>
         <p className="mt-6 max-w-xl text-lg leading-8 text-white/70">
-          This public route is ready for its marketing page implementation.
+          {summary ||
+            'This public route is ready for its marketing page implementation.'}
         </p>
         <Link
           to="/"

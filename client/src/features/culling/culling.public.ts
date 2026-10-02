@@ -58,7 +58,7 @@ export async function getEditResultsStatus(id: string): Promise<{ available: boo
     return response.json();
 }
 
-export async function verifyEditResultsPassword(id: string, password: string): Promise<{ token: string; expiresIn: number }> {
+export async function verifyEditResultsPassword(id: string, password: string): Promise<{ token: string; expiresAt: string | null; expiresIn: number | null }> {
     const response = await apiFetch(`/public/galleries/${encodeURIComponent(id)}/edit-results/verify`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },

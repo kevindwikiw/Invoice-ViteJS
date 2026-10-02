@@ -50,6 +50,8 @@ export interface GallerySummary {
     comparisonEnabled?: boolean;
     comparisonPairs?: EditResultPair[];
     editResultsPublishedAt?: string | null;
+    editResultsAccessDurationHours?: number | null;
+    editResultsExpiresAt?: string | null;
     editResultsPhotoCount?: number;
     hasEditResults?: boolean;
 }
@@ -141,6 +143,8 @@ export type EditResultPairing = { comparisonEnabled: boolean; comparisonPairs: E
 export interface EditResults {
     photos: EditResultPhoto[];
     publishedAt: string;
+    expiresAt: string | null;
+    expiresIn: number | null;
     archive: { filename: string; downloadUrl: string } | null;
 }
 

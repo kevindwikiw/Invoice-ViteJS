@@ -13,6 +13,8 @@ const galleryTurso = hasCompleteGalleryTursoConfig
 let schemaPromise: Promise<void> | null = null;
 const GALLERY_COUNTER_BACKFILL_KEY = "gallery_counter_backfill_v1";
 const GALLERY_DURATION_HOURS_BACKFILL_KEY = "gallery_duration_hours_backfill_v1";
+const EDIT_RESULTS_DURATION_BACKFILL_KEY = "edit_results_expiry_duration_backfill_v1";
+const EDIT_RESULTS_EXPIRY_BACKFILL_KEY = "edit_results_publication_expiry_backfill_v2";
 const GALLERY_COUNTER_BACKFILL_SQL = `
     UPDATE galleries
     SET photo_count = (SELECT COUNT(*) FROM gallery_photos WHERE gallery_id = galleries.id),
@@ -22,6 +24,17 @@ const GALLERY_DURATION_HOURS_BACKFILL_SQL = `
     UPDATE galleries
     SET selection_duration_hours = selection_duration_days * 24
     WHERE selection_duration_days IS NOT NULL
+`;
+const EDIT_RESULTS_DURATION_BACKFILL_SQL = `
+    UPDATE galleries
+    SET edit_results_access_duration_hours = 168
+    WHERE edit_results_access_duration_hours IS NULL
+`;
+const EDIT_RESULTS_PUBLICATION_EXPIRY_BACKFILL_SQL = `
+    UPDATE galleries
+    SET edit_results_expires_at = datetime(edit_results_published_at, '+168 hours')
+    WHERE edit_results_published_at IS NOT NULL
+      AND edit_results_expires_at IS NULL
 `;
 
 function tursoArgs(params: unknown[]): InValue[] {
@@ -62,6 +75,8 @@ const GALLERY_SCHEMA = [
         edit_results_zip_download_url TEXT,
         edit_results_key_hash TEXT,
         edit_results_published_at TEXT,
+        edit_results_access_duration_hours INTEGER,
+        edit_results_expires_at TEXT,
         edit_results_photo_count INTEGER NOT NULL DEFAULT 0,
         edit_results_version INTEGER NOT NULL DEFAULT 0,
         edit_results_comparison_enabled INTEGER NOT NULL DEFAULT 0,
@@ -188,6 +203,8 @@ const GALLERY_SCHEMA = [
 ];
 
 const GALLERY_REQUIRED_COLUMNS: Array<readonly [string, string]> = [
+    ["edit_results_access_duration_hours", "INTEGER"],
+    ["edit_results_expires_at", "TEXT"],
     ["public_key", "TEXT"],
     ["max_selections", "INTEGER NOT NULL DEFAULT 0"],
     ["additional_selection_limit", "INTEGER NOT NULL DEFAULT 0"],
@@ -321,6 +338,21 @@ async function initializeGalleryStorage(): Promise<void> {
                 },
             ], "write");
         }
+        const editResultsDurationBackfill = await galleryTurso.execute({ sql: "SELECT value FROM gallery_settings WHERE key = ?", args: [EDIT_RESULTS_DURATION_BACKFILL_KEY] });
+        if (editResultsDurationBackfill.rows.length === 0) {
+            await galleryTurso.batch([
+                { sql: EDIT_RESULTS_DURATION_BACKFILL_SQL, args: [] },
+                { sql: "INSERT INTO gallery_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO NOTHING", args: [EDIT_RESULTS_DURATION_BACKFILL_KEY, new Date().toISOString()] },
+            ], "write");
+        }
+        const editResultsExpiryBackfill = await galleryTurso.execute({ sql: "SELECT value FROM gallery_settings WHERE key = ?", args: [EDIT_RESULTS_EXPIRY_BACKFILL_KEY] });
+        if (editResultsExpiryBackfill.rows.length === 0) {
+            await galleryTurso.batch([
+                { sql: EDIT_RESULTS_PUBLICATION_EXPIRY_BACKFILL_SQL, args: [] },
+                { sql: EDIT_RESULTS_PUBLICATION_EXPIRY_BACKFILL_SQL, args: [] },
+                { sql: "INSERT INTO gallery_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO NOTHING", args: [EDIT_RESULTS_EXPIRY_BACKFILL_KEY, new Date().toISOString()] },
+            ], "write");
+        }
         const rows = await galleryTurso.execute("SELECT id FROM galleries WHERE public_key IS NULL OR public_key = ''");
         for (const row of rows.rows as unknown as Array<{ id: number }>) {
             await galleryTurso.execute({ sql: "UPDATE galleries SET public_key = ? WHERE id = ?", args: [crypto.randomUUID().replaceAll("-", ""), row.id] });
@@ -347,6 +379,17 @@ async function initializeGalleryStorage(): Promise<void> {
     if (!counterBackfill) {
         await run(GALLERY_COUNTER_BACKFILL_SQL);
         await run("INSERT INTO gallery_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO NOTHING", [GALLERY_COUNTER_BACKFILL_KEY, new Date().toISOString()]);
+    }
+    const editResultsDurationBackfill = await one<{ value: string }>("SELECT value FROM gallery_settings WHERE key = ?", [EDIT_RESULTS_DURATION_BACKFILL_KEY]);
+    if (!editResultsDurationBackfill) {
+        await run(EDIT_RESULTS_DURATION_BACKFILL_SQL);
+        await run("INSERT INTO gallery_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO NOTHING", [EDIT_RESULTS_DURATION_BACKFILL_KEY, new Date().toISOString()]);
+    }
+    const editResultsExpiryBackfill = await one<{ value: string }>("SELECT value FROM gallery_settings WHERE key = ?", [EDIT_RESULTS_EXPIRY_BACKFILL_KEY]);
+    if (!editResultsExpiryBackfill) {
+        await run(EDIT_RESULTS_PUBLICATION_EXPIRY_BACKFILL_SQL);
+        await run(EDIT_RESULTS_PUBLICATION_EXPIRY_BACKFILL_SQL);
+        await run("INSERT INTO gallery_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO NOTHING", [EDIT_RESULTS_EXPIRY_BACKFILL_KEY, new Date().toISOString()]);
     }
     const durationHoursBackfill = await one<{ value: string }>("SELECT value FROM gallery_settings WHERE key = ?", [GALLERY_DURATION_HOURS_BACKFILL_KEY]);
     if (!durationHoursBackfill) {

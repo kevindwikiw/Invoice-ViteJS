@@ -1,10 +1,10 @@
 import { createFileRoute } from '@tanstack/react-router'
-import { RoutePlaceholder } from '../components/RoutePlaceholder'
+import { ServiceLocationTemplate } from '../components/ServiceLocationTemplate'
 
 export const Route = createFileRoute('/sangjit-photography-jakarta')({
   component: SangjitPhotographyJakartaPage,
 })
 
 function SangjitPhotographyJakartaPage() {
-  return <RoutePlaceholder title="Sangjit Photography Jakarta" />
+  return <ServiceLocationTemplate serviceId="sangjit-photography" />
 }
