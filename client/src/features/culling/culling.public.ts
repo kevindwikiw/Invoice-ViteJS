@@ -52,7 +52,7 @@ export async function verifyGalleryPin(id: string, pin: string): Promise<{ token
     return response.json();
 }
 
-export async function getEditResultsStatus(id: string): Promise<{ available: boolean; photoCount: number }> {
+export async function getEditResultsStatus(id: string): Promise<{ available: boolean; photoCount: number; status?: 'draft' | 'open' | 'closed'; isExpired?: boolean }> {
     const response = await apiFetch(`/public/galleries/${encodeURIComponent(id)}/edit-results/status`);
     if (!response.ok) throw await parseError(response, 'Unable to check edited photos.');
     return response.json();
@@ -72,9 +72,13 @@ export async function getEditResults(id: string, token: string): Promise<EditRes
     const response = await apiFetch(`/public/galleries/${encodeURIComponent(id)}/edit-results?token=${encodeURIComponent(token)}`);
     if (!response.ok) throw await parseError(response, 'Unable to load edited photos.');
     const data = await response.json() as EditResults;
+    if (!Array.isArray(data.photos) || data.photos.some((photo) => !photo || typeof photo.driveFileId !== 'string' || !photo.driveFileId.trim() || photo.driveFileId === 'undefined')) {
+        throw new Error('Edited photo data is incomplete. Retry to reload the gallery.');
+    }
     return {
         ...data,
         archive: data.archive ?? null,
+        folders: data.folders ?? [],
         photos: data.photos.map((photo) => ({
             ...photo,
             thumbnailUrl: editResultImageUrl(id, photo.driveFileId, token, 'thumbnail'),

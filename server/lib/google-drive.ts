@@ -135,22 +135,26 @@ async function issueDriveToken(scope: string): Promise<DriveToken> {
     return token;
 }
 
-function driveSearchQuery(folderId: string): string {
+function driveSearchQuery(folderId: string, includeFolders = false): string {
     const safeFolderId = folderId.replace(/'/g, "\\'");
-    return `'${safeFolderId}' in parents and trashed = false and mimeType contains 'image/'`;
+    return `'${safeFolderId}' in parents and trashed = false and (mimeType contains 'image/'${includeFolders ? " or mimeType = 'application/vnd.google-apps.folder'" : ''})`;
 }
 
 export async function listDrivePhotos(folderId: string): Promise<DrivePhoto[]> {
+    return listDriveEntries(folderId);
+}
+
+async function listDriveEntries(folderId: string, includeFolders = false): Promise<DrivePhoto[]> {
     const token = await getDriveAccessToken();
     const photos: DrivePhoto[] = [];
     let pageToken = "";
 
     do {
         const params = new URLSearchParams({
-            q: driveSearchQuery(folderId),
+            q: driveSearchQuery(folderId, includeFolders),
             pageSize: "1000",
             orderBy: "name_natural",
-            fields: "nextPageToken,files(id,name,mimeType,thumbnailLink,webViewLink,webContentLink,resourceKey,copyRequiresWriterPermission,size,md5Checksum,modifiedTime,imageMediaMetadata(width,height))",
+            fields: "nextPageToken,incompleteSearch,files(id,name,mimeType,thumbnailLink,webViewLink,webContentLink,resourceKey,copyRequiresWriterPermission,size,md5Checksum,modifiedTime,imageMediaMetadata(width,height))",
             supportsAllDrives: "true",
             includeItemsFromAllDrives: "true",
         });
@@ -158,13 +162,16 @@ export async function listDrivePhotos(folderId: string): Promise<DrivePhoto[]> {
 
         const response = await fetch(`${DRIVE_API_BASE}/files?${params.toString()}`, {
             headers: { Authorization: `Bearer ${token}` },
+            signal: AbortSignal.timeout(30_000),
         });
         const data = await response.json().catch(() => ({})) as {
             nextPageToken?: string;
+            incompleteSearch?: boolean;
             files?: Array<DrivePhoto & { imageMediaMetadata?: { width?: number; height?: number } }>;
             error?: { message?: string };
         };
         if (!response.ok) throw new Error(data.error?.message || "Unable to list Google Drive photos.");
+        if (data.incompleteSearch) throw new Error('Google Drive returned an incomplete folder listing.');
 
         for (const file of data.files || []) {
             photos.push({
@@ -189,10 +196,42 @@ export async function listDrivePhotos(folderId: string): Promise<DrivePhoto[]> {
     return photos;
 }
 
+export type DriveFolder = { id: string; parentId: string | null; name: string };
+export type DriveFolderPhoto = DrivePhoto & { folderId: string | null };
+
+export async function listDrivePhotoTree(rootId: string): Promise<{ folders: DriveFolder[]; photos: DriveFolderPhoto[] }> {
+    const folders: DriveFolder[] = [];
+    const photos: DriveFolderPhoto[] = [];
+    const queue = [{ id: rootId, depth: 0 }];
+    const visited = new Set([rootId]);
+    const fileIds = new Set<string>();
+    for (let index = 0; index < queue.length; index++) {
+        const folder = queue[index]!;
+        const metadata = await getDrivePhotoMetadata(folder.id);
+        if (metadata.mimeType !== 'application/vnd.google-apps.folder') throw new Error('Edited photos source must be a Drive folder.');
+        const parentId = folder.id === rootId ? null : folder.id;
+        for (const entry of await listDriveEntries(folder.id, true)) {
+            if (entry.mimeType === 'application/vnd.google-apps.folder') {
+                if (visited.has(entry.id)) continue;
+                if (folder.depth >= 20 || visited.size >= 500) throw new Error('Edited folder tree exceeds the supported depth or folder count.');
+                visited.add(entry.id);
+                folders.push({ id: entry.id, parentId, name: entry.name });
+                queue.push({ id: entry.id, depth: folder.depth + 1 });
+            } else if (entry.mimeType.startsWith('image/') && !fileIds.has(entry.id)) {
+                fileIds.add(entry.id);
+                photos.push({ ...entry, folderId: parentId });
+                if (photos.length > 100_000) throw new Error('Edited folder tree contains too many photos.');
+            }
+        }
+    }
+    return { folders, photos };
+}
+
 export async function getDrivePhotoMetadata(fileId: string): Promise<DrivePhoto> {
     const token = await getDriveAccessToken();
     const response = await fetch(`${DRIVE_API_BASE}/files/${encodeURIComponent(fileId)}?supportsAllDrives=true&fields=id,name,mimeType,thumbnailLink,webViewLink,webContentLink,resourceKey,copyRequiresWriterPermission,capabilities(canDownload),downloadRestrictions(effectiveDownloadRestrictionWithContext),size,imageMediaMetadata(width,height)`, {
         headers: { Authorization: `Bearer ${token}` },
+        signal: AbortSignal.timeout(30_000),
     });
     const data = await response.json().catch(() => ({})) as DrivePhoto & {
         error?: { message?: string };

@@ -43,6 +43,12 @@ const clientCullingGalleryRoute = createRoute({
     getParentRoute: () => rootRoute,
     path: '/culling/$galleryId',
     component: ClientCullingGalleryRoute,
+    validateSearch: (search: Record<string, unknown>) => ({
+        folder: typeof search.folder === 'string' && search.folder.length <= 256 ? search.folder : undefined,
+        view: (search.view === 'picked' || search.view === 'selfie' || search.view === 'edit-results' ? search.view : 'gallery') as 'gallery' | 'picked' | 'selfie' | 'edit-results',
+        filter: (search.filter === 'submitted' ? 'submitted' : 'none') as 'none' | 'submitted',
+        page: Math.max(1, Number(search.page) || 1),
+    }),
 })
 
 // App Routes (Children of GlobalSidebar/Layout)
@@ -101,6 +107,9 @@ const feedbackInboxRoute = createRoute({
 const clientGalleriesRoute = createRoute({
     getParentRoute: () => layoutRoute,
     path: '/galleries',
+    validateSearch: (search: Record<string, unknown>) => ({
+        mode: search.mode === 'edited' ? 'edited' as const : 'selection' as const,
+    }),
     component: ClientGalleriesRoute,
 })
 

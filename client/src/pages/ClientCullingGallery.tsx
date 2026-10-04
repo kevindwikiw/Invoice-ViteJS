@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, useCallback } from 'react';
-import { useParams } from '@tanstack/react-router';
+import { useNavigate, useParams, useSearch } from '@tanstack/react-router';
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { AlertCircle, Check, CheckSquare, ChevronLeft, ChevronRight, HelpCircle, ImageIcon, Instagram, Loader2, Lock, ScanFace, Send, X } from 'lucide-react';
+import { AlertCircle, Check, CheckSquare, ChevronLeft, ChevronRight, HelpCircle, ImageIcon, Instagram, Loader2, Lock, Plus, ScanFace, Send, X } from 'lucide-react';
 import clsx from 'clsx';
 
 import {
@@ -60,6 +60,8 @@ type GalleryRefineMode = 'none' | 'submitted';
 
 export default function ClientCullingGallery() {
     const { galleryId } = useParams({ from: '/culling/$galleryId' });
+    const navigate = useNavigate({ from: '/culling/$galleryId' });
+    const { view: urlView, filter: urlFilter, page: urlPage } = useSearch({ from: '/culling/$galleryId' });
     const queryClient = useQueryClient();
     const [theme, setTheme] = useState<GalleryTheme>(() => readGalleryTheme(galleryId));
     const [token, setToken] = useState(() => localStorage.getItem(tokenKey(galleryId)) || '');
@@ -71,9 +73,10 @@ export default function ClientCullingGallery() {
         selectedIds: new Set(readSelectionDraft(galleryId)),
         photoMetaById: readSelectedPhotoMetaDraft(galleryId),
     }));
-    const [page, setPage] = useState(1);
-    const [activeTab, setActiveTab] = useState<GalleryView>(() => !token && editResultsToken ? 'edit-results' : 'gallery');
+    const [page, setPage] = useState(urlPage);
+    const [activeTab, setActiveTab] = useState<GalleryView>(() => !token && editResultsToken ? 'edit-results' : urlView as GalleryView);
     const [downloadTarget, setDownloadTarget] = useState<HTMLDivElement | null>(null);
+    const [expiryTarget, setExpiryTarget] = useState<HTMLDivElement | null>(null);
     const showSelected = activeTab === 'picked';
     const [selectionTouched, setSelectionTouched] = useState(() => readSelectionDraft(galleryId).length > 0);
     const [lightboxPhotoId, setLightboxPhotoId] = useState<string | null>(null);
@@ -91,12 +94,35 @@ export default function ClientCullingGallery() {
     const allPhotosMenuRef = useRef<HTMLDivElement>(null);
     const allPhotosButtonRef = useRef<HTMLButtonElement>(null);
     const allPhotosDropdownRef = useRef<HTMLDivElement>(null);
-    const [refineMode, setRefineMode] = useState<GalleryRefineMode>('none');
+    const [refineMode, setRefineMode] = useState<GalleryRefineMode>(urlFilter as GalleryRefineMode);
     const [faceFilteredPhotos, setFaceFilteredPhotos] = useState<GalleryPhoto[] | null>(null);
     const [faceFilterTotal, setFaceFilterTotal] = useState(0);
+    const [currentYear, setCurrentYear] = useState<number | null>(null);
     const selectedIds = selectionDraft.selectedIds;
     const submittedOnly = refineMode === 'submitted';
     const selectedPhotoMetaById = selectionDraft.photoMetaById;
+
+    useEffect(() => {
+        setPage(urlPage);
+        setRefineMode(urlFilter as GalleryRefineMode);
+        setActiveTab(!token && editResultsToken ? 'edit-results' : urlView);
+    }, [token, editResultsToken, urlFilter, urlPage, urlView]);
+
+    useEffect(() => {
+        setCurrentYear(new Date().getFullYear());
+    }, []);
+
+    const syncGalleryUrl = useCallback((next: { view?: GalleryView; filter?: GalleryRefineMode; page?: number }) => {
+        void navigate({
+            search: (current) => ({
+                ...current,
+                view: next.view ?? current.view,
+                filter: next.filter ?? current.filter,
+                page: next.page ?? current.page,
+            }),
+            replace: true,
+        });
+    }, [navigate]);
     // Ref so the photos-cache effect can read current selection without adding it as a dep
     const selectedIdsRef = useRef(selectedIds);
     selectedIdsRef.current = selectedIds;
@@ -186,6 +212,7 @@ export default function ClientCullingGallery() {
     const countdown = useSelectionCountdown(displayGallery?.selectionDeadlineAt, displayGallery?.serverTime);
     const galleryError = photosQuery.error as (Error & { code?: string; contactUrl?: string | null }) | null;
     const galleryLockCode = galleryError?.code === 'GALLERY_EXPIRED' || galleryError?.code === 'GALLERY_CLOSED' ? galleryError.code : null;
+    const galleryAvailable = Boolean(token && photosQuery.isSuccess && !countdown.isExpired && !displayGallery?.isExpired && !galleryLockCode);
     const totalPages = photosQuery.data?.totalPages || 0;
     const totalPhotos = isFaceFilterActive ? visiblePhotos.length : photosQuery.data?.total || visiblePhotos.length;
     const hasPreviousGalleryPage = activeTab === 'gallery' && !submittedOnly && !isFaceFilterActive && totalPages > 0 && page > 1;
@@ -255,12 +282,14 @@ export default function ClientCullingGallery() {
         if (mode === 'submitted') {
             setActiveTab('gallery');
             setRefineMode('submitted');
+            syncGalleryUrl({ view: 'gallery', filter: 'submitted', page: 1 });
             return;
         }
         if (mode === 'none') {
             resetFaceFilter();
             setRefineMode('none');
             setActiveTab('gallery');
+            syncGalleryUrl({ view: 'gallery', filter: 'none', page: 1 });
         }
     };
 
@@ -269,9 +298,10 @@ export default function ClientCullingGallery() {
         if (clampedPage === page) return;
         setPendingLightboxPageMove(null);
         setPage(clampedPage);
+        syncGalleryUrl({ page: clampedPage });
         setLightboxPhotoId(null);
         window.scrollTo({ top: 0, behavior: 'smooth' });
-    }, [page, totalPages]);
+    }, [page, syncGalleryUrl, totalPages]);
 
     const moveLightboxAcrossPage = useCallback((direction: 'previous' | 'next') => {
         if (showSelected || pendingLightboxPageMove) return;
@@ -359,6 +389,16 @@ export default function ClientCullingGallery() {
         }
         return false;
     }, [effectiveSelectedIds, selectedCount, selectedDriveFileIds, selectionTouched, submittedPhotos]);
+
+    useEffect(() => {
+        if (!hasUnsavedChanges) return;
+        const handleBeforeUnload = (event: BeforeUnloadEvent) => {
+            event.preventDefault();
+            event.returnValue = '';
+        };
+        window.addEventListener('beforeunload', handleBeforeUnload);
+        return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+    }, [hasUnsavedChanges]);
 
     useEffect(() => {
         if (!token) return;
@@ -530,12 +570,14 @@ export default function ClientCullingGallery() {
         });
     };
 
-    const updateEditResultsToken = (nextToken: string) => {
-        localStorage.setItem(editResultsStorageKey, nextToken);
+    const updateEditResultsToken = useCallback((nextToken: string) => {
+        if (nextToken) localStorage.setItem(editResultsStorageKey, nextToken);
+        else localStorage.removeItem(editResultsStorageKey);
         setEditResultsToken(nextToken);
-        setShowEditResultsGate(false);
+        setShowEditResultsGate(!nextToken);
         setActiveTab('edit-results');
-    };
+        syncGalleryUrl({ view: 'edit-results' });
+    }, [editResultsStorageKey, syncGalleryUrl]);
 
     const submissionStatus: SubmissionStatus = submitMutation.isPending
         ? 'pending'
@@ -545,6 +587,7 @@ export default function ClientCullingGallery() {
                 ? 'submitted'
                 : 'ready';
     const changeView = (view: GalleryView) => {
+        if (view !== 'edit-results' && !galleryAvailable) return;
         if (view === 'gallery') {
             setRefineMode('none');
         } else if (view === 'picked') {
@@ -554,16 +597,13 @@ export default function ClientCullingGallery() {
             if (faceFilteredPhotos === null) setShowFaceSearch(true);
         }
         setActiveTab(view);
+        syncGalleryUrl({ view, filter: 'none', page: view === 'gallery' ? 1 : undefined });
         setLightboxPhotoId(null);
         setPendingLightboxPageMove(null);
     };
-    const exitEditResults = () => {
-        setShowEditResultsGate(false);
-        changeView('gallery');
-    };
 
-    if (!token && editResultsToken && activeTab === 'edit-results') {
-        return <EditResultsGrid galleryId={galleryId} theme={theme} token={editResultsToken} onToken={updateEditResultsToken} onExit={exitEditResults} onToggleTheme={toggleTheme} onViewChange={changeView} standalone />;
+    if (!token && activeTab === 'edit-results' && (editResultsToken || showEditResultsGate || urlView === 'edit-results')) {
+        return <EditResultsGrid galleryId={galleryId} theme={theme} token={editResultsToken} onToken={updateEditResultsToken} onToggleTheme={toggleTheme} onViewChange={changeView} standalone />;
     }
 
     if (!token) {
@@ -571,14 +611,17 @@ export default function ClientCullingGallery() {
     }
 
     if (countdown.isExpired || displayGallery?.isExpired || galleryLockCode) {
-        if (activeTab === 'edit-results' && (editResultsToken || showEditResultsGate)) return <EditResultsGrid galleryId={galleryId} theme={theme} token={editResultsToken} onToken={updateEditResultsToken} onExit={exitEditResults} onToggleTheme={toggleTheme} onViewChange={changeView} standalone />;
+        if (activeTab === 'edit-results' && (editResultsToken || showEditResultsGate)) return <EditResultsGrid galleryId={galleryId} theme={theme} token={editResultsToken} onToken={updateEditResultsToken} onToggleTheme={toggleTheme} onViewChange={changeView} standalone />;
         return <GalleryLockedScreen expired={countdown.isExpired || Boolean(displayGallery?.isExpired) || galleryLockCode === 'GALLERY_EXPIRED'} contactUrl={galleryError?.contactUrl || fallbackContactUrl} theme={theme} onToggleTheme={toggleTheme} hasEditResults={editResultsStatusQuery.data?.available || Boolean(displayGallery?.hasEditResults)} onAccessEditedPhotos={() => { setShowEditResultsGate(true); changeView('edit-results'); }} />;
     }
 
     return (
         <main style={theme === 'black' ? BLACK_THEME : WHITE_THEME} className="min-h-screen bg-[var(--bg-deep)] font-sans text-[var(--text-primary)]">
+            <a href="#gallery-content" className="sr-only focus:not-sr-only focus:fixed focus:left-3 focus:top-3 focus:z-[100] focus:rounded-md focus:bg-[var(--accent)] focus:px-3 focus:py-2 focus:text-xs focus:font-semibold focus:text-[var(--bg-deep)]">
+                Skip to gallery
+            </a>
             
-            <header data-testid="gallery-header" className="sticky top-0 z-40 h-14 border-b border-[var(--border)] bg-[var(--bg-deep)] px-2.5 sm:px-8">
+            <header data-testid="gallery-header" className="sticky top-0 z-40 h-14 select-none border-b border-[var(--border)] bg-[var(--bg-deep)] px-2.5 sm:px-8">
                 <div className="mx-auto flex h-full max-w-[1600px] items-center justify-between gap-1.5 sm:gap-2">
                     
                     <div className="flex items-center gap-1">
@@ -588,8 +631,9 @@ export default function ClientCullingGallery() {
                     <div className="flex min-w-0 items-center gap-1 sm:gap-3">
                     <div className="flex min-h-11 items-center">
                         {activeTab !== 'edit-results' && <CountdownLabel countdown={countdown} />}
-                            <>
-                                <button
+                        {activeTab === 'edit-results' && <div ref={setExpiryTarget} className="flex min-w-0 items-center" />}
+                        <div className="flex h-11 shrink-0 items-center">
+                            <button
                                     type="button"
                                     onClick={() => setShowTutorial(true)}
                                     title="How to Submit"
@@ -597,33 +641,50 @@ export default function ClientCullingGallery() {
                                     className="flex h-11 w-11 items-center justify-center px-2 text-[var(--text-secondary)] transition-[color,transform] duration-150 hover:text-[var(--text-primary)] active:scale-[0.97] motion-reduce:transition-none"
                                 >
                                     <HelpCircle size={15} />
-                                </button>
-                            </>
+                            </button>
                             <ThemeToggle theme={theme} onToggle={toggleTheme} />
                         </div>
                     </div>
                 </div>
+                </div>
             </header>
 
-            <div data-testid="gallery-toolbar" className="sticky top-14 z-30 border-b border-[var(--border)] bg-[var(--bg-deep)] px-2.5 py-1.5 sm:px-8 sm:py-2">
+            <div data-testid="gallery-toolbar" className="sticky top-14 z-30 select-none border-b border-[var(--border)] bg-[var(--bg-deep)] px-2.5 py-2 [touch-action:manipulation] sm:px-8 sm:py-2.5">
                 <div className="mx-auto flex max-w-[1600px] items-center gap-1 sm:gap-x-2">
                     <div ref={allPhotosMenuRef} className="relative flex min-w-0 flex-1 items-center gap-1 sm:w-auto sm:flex-none sm:gap-2">
-                        <GalleryViewTabs value={activeTab === 'picked' ? 'gallery' : activeTab} galleryLabel={activeTab === 'picked' ? 'Picked' : submittedOnly ? 'Submitted' : 'All Photos'} editedAvailable={editResultsStatusQuery.data?.available ?? Boolean(displayGallery?.hasEditResults)} allPhotosMenuOpen={showRefine} allPhotosButtonRef={allPhotosButtonRef} onAllPhotos={activeTab === 'edit-results' ? () => changeView('gallery') : openAllPhotosMenu} onChange={changeView} />
+                        <GalleryViewTabs value={activeTab === 'picked' ? 'gallery' : activeTab} galleryAvailable={galleryAvailable} galleryLabel={activeTab === 'picked' ? 'Picked' : submittedOnly ? 'Submitted' : 'All Photos'} editedAvailable={editResultsStatusQuery.data?.available ?? Boolean(displayGallery?.hasEditResults)} allPhotosMenuOpen={showRefine} allPhotosButtonRef={allPhotosButtonRef} onAllPhotos={activeTab === 'edit-results' ? () => changeView('gallery') : openAllPhotosMenu} onChange={changeView} />
                         {showRefine && activeTab !== 'edit-results' && (
                             <div ref={allPhotosDropdownRef} className="absolute left-0 top-[calc(100%+8px)] z-[80] w-[min(204px,calc(100vw-16px))] rounded-lg border border-[var(--border)] bg-[var(--bg-deep)] p-1.5 shadow-xl transition-[opacity,transform] duration-150 motion-reduce:transition-none" role="menu" aria-label="All Photos views">
                                 <button type="button" role="menuitemradio" aria-checked={refineMode === 'none' && activeTab === 'gallery'} onClick={() => chooseRefineMode('none')} className={clsx('flex min-h-10 w-full items-center justify-between gap-2 rounded-md px-2.5 text-left text-xs font-medium', refineMode === 'none' && activeTab === 'gallery' ? 'bg-[var(--accent)] text-[var(--bg-deep)]' : 'text-[var(--text-secondary)] hover:bg-[var(--bg-card)]')}>
-                                    <span className="flex items-center gap-2"><ImageIcon size={15} />All Photos</span>{refineMode === 'none' && activeTab === 'gallery' && <Check size={14} />}
+                                    <span className="flex items-center gap-2"><ImageIcon size={15} aria-hidden="true" />All Photos</span>{refineMode === 'none' && activeTab === 'gallery' && <Check size={14} aria-hidden="true" />}
                                 </button>
                                 <button type="button" role="menuitem" onClick={() => { setShowRefine(false); changeView('picked'); }} className="flex min-h-10 w-full items-center justify-between gap-2 rounded-md px-2.5 text-left text-xs font-medium text-[var(--text-secondary)] hover:bg-[var(--bg-card)]">
-                                    <span className="flex items-center gap-2"><CheckSquare size={15} />Picked</span><ChevronRight size={14} />
+                                    <span className="flex items-center gap-2"><CheckSquare size={15} aria-hidden="true" />Picked</span><ChevronRight size={14} aria-hidden="true" />
                                 </button>
                                 <button type="button" role="menuitemradio" aria-checked={refineMode === 'submitted'} disabled={!hasSubmittedPhotos} onClick={() => chooseRefineMode('submitted')} className={clsx('flex min-h-10 w-full items-center justify-between gap-2 rounded-md px-2.5 text-left text-xs font-medium disabled:opacity-40', refineMode === 'submitted' ? 'bg-[var(--accent)] text-[var(--bg-deep)]' : 'text-[var(--text-secondary)] hover:bg-[var(--bg-card)]')}>
-                                    <span className="flex items-center gap-2"><Send size={15} />Submitted</span>{refineMode === 'submitted' && <Check size={14} />}
+                                    <span className="flex items-center gap-2"><Send size={15} aria-hidden="true" />Submitted</span>{refineMode === 'submitted' && <Check size={14} aria-hidden="true" />}
                                 </button>
                                 {refineMode === 'submitted' && <button type="button" role="menuitem" onClick={() => chooseRefineMode('none')} className="mt-1 flex min-h-9 w-full items-center rounded-md px-2.5 text-left text-[11px] text-[var(--text-muted)] hover:bg-[var(--bg-card)]">Clear filters</button>}
                             </div>
                         )}
                     </div>
+
+                    <div className="ml-auto flex min-w-0 shrink-0 items-center gap-2">
+                        {requestMoreUrl && shouldShowRequestMore && (
+                            <button
+                                type="button"
+                                onClick={() => {
+                                    setShowRequestMore(true);
+                                    void photosQuery.refetch();
+                                }}
+                                title="Request more edited photos"
+                                className="inline-flex h-10 shrink-0 items-center justify-center gap-1.5 rounded-md border border-[var(--border)] px-2.5 text-[10px] font-semibold text-[var(--text-secondary)] transition-[color,background-color,transform] duration-150 hover:bg-[var(--bg-card)] hover:text-[var(--text-primary)] active:scale-[0.97] motion-reduce:transition-none sm:h-11 sm:gap-2 sm:px-3 sm:text-xs"
+                            >
+                                <Plus size={13} aria-hidden="true" />
+                                <span className="hidden sm:inline">Request More</span>
+                                <span className="sm:hidden">More</span>
+                            </button>
+                        )}
 
                     {activeTab !== 'edit-results' && <div className="flex min-w-0 shrink-0 items-center gap-1 sm:w-auto sm:flex-1 sm:justify-between sm:gap-2">
                         <span
@@ -652,34 +713,36 @@ export default function ClientCullingGallery() {
                             onSubmit={handleSubmitSelections}
                         />
                     </div>}
-                    <div ref={setDownloadTarget} className={activeTab === 'edit-results' ? 'ml-auto flex min-h-11 min-w-0 shrink-0 items-center justify-end' : 'hidden'} />
+                        <div ref={setDownloadTarget} className={activeTab === 'edit-results' ? 'flex min-w-0 shrink-0 items-center justify-end' : 'hidden'} />
+                    </div>
                 </div>
             </div>
 
-            <section className="mx-auto max-w-[1664px] px-2.5 pt-3 pb-10 sm:px-8 sm:pt-5 sm:pb-12 md:pt-6">
+            <section id="gallery-content" tabIndex={-1} className="scroll-mt-28 mx-auto max-w-[1664px] px-2.5 pt-3 pb-10 outline-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)] sm:px-8 sm:pt-5 sm:pb-12 md:pt-6">
                 {activeTab !== 'edit-results' && limitMessage && (
-                    <div className="mb-4 text-xs text-[var(--text-muted)] border border-[var(--border)] p-3 rounded-lg bg-[var(--bg-card)]">
+                    <div role="alert" className="mb-4 text-xs text-[var(--text-muted)] border border-[var(--border)] p-3 rounded-lg bg-[var(--bg-card)]">
                         {limitMessage} {requestMoreUrl && <button type="button" onClick={() => setShowRequestMore(true)} className="ml-1 font-semibold underline text-[var(--text-primary)]">Request more</button>}
                     </div>
                 )}
                 {activeTab !== 'edit-results' && submittedCount !== null && (
-                    <div className="mb-5 flex items-center gap-3 border border-[var(--border)] bg-[var(--bg-card)] px-4 py-3 text-sm text-[var(--text-primary)]">
-                        <Check size={16} />
+                    <div role="status" aria-live="polite" className="mb-5 flex items-center gap-3 border border-[var(--border)] bg-[var(--bg-card)] px-4 py-3 text-sm text-[var(--text-primary)]">
+                        <Check size={16} aria-hidden="true" />
                         Selection saved. {submittedCount} filenames submitted.
                     </div>
                 )}
                 {activeTab !== 'edit-results' && submitMutation.isError && (
-                    <div className="mb-5 flex items-center gap-3 border border-[var(--border)] bg-[var(--bg-card)] px-4 py-3 text-sm text-[var(--text-primary)]">
-                        <AlertCircle size={16} />
+                    <div role="alert" aria-live="assertive" className="mb-5 flex items-center gap-3 border border-[var(--border)] bg-[var(--bg-card)] px-4 py-3 text-sm text-[var(--text-primary)]">
+                        <AlertCircle size={16} aria-hidden="true" />
                         {submitMutation.error instanceof Error ? submitMutation.error.message : 'Unable to submit selections.'}
                     </div>
                 )}
 
                 {activeTab === 'edit-results' ? (
-                    <EditResultsGrid galleryId={galleryId} theme={theme} token={editResultsToken} onToken={updateEditResultsToken} downloadTarget={downloadTarget} />
+                    <EditResultsGrid galleryId={galleryId} theme={theme} token={editResultsToken} onToken={updateEditResultsToken} downloadTarget={downloadTarget} expiryTarget={expiryTarget} />
                 ) : (submittedOnly ? submittedPhotosQuery.isLoading : photosQuery.isLoading) ? (
-                    <div className="flex min-h-[60vh] items-center justify-center text-[var(--text-muted)]">
-                        <Loader2 size={24} className="animate-spin text-[var(--accent)]" />
+                    <div role="status" aria-live="polite" className="flex min-h-[60vh] items-center justify-center gap-3 text-sm text-[var(--text-muted)]">
+                        <Loader2 size={24} aria-hidden="true" className="animate-spin text-[var(--accent)]" />
+                        <span>Loading photos…</span>
                     </div>
                 ) : (submittedOnly ? submittedPhotosQuery.isError : photosQuery.isError) && !visiblePhotos.length ? (
                     <div className="flex min-h-[60vh] flex-col items-center justify-center text-center">
@@ -702,7 +765,7 @@ export default function ClientCullingGallery() {
                         )}
                     </div>
                 ) : (
-                    <div data-testid="gallery-grid" className="grid grid-cols-2 gap-1.5 sm:grid-cols-3 sm:gap-2 md:grid-cols-4 md:gap-3 xl:grid-cols-5 2xl:grid-cols-6">
+                    <div data-testid="gallery-grid" className="grid [content-visibility:auto] grid-cols-2 gap-1.5 sm:grid-cols-3 sm:gap-2 md:grid-cols-4 md:gap-3 xl:grid-cols-5 2xl:grid-cols-6">
                         {visiblePhotos.map((photo, index) => {
                             const fallbackIndex = showSelected || isFaceFilterActive ? index : (page - 1) * GALLERY_PAGE_SIZE + index;
                             return (
@@ -726,16 +789,16 @@ export default function ClientCullingGallery() {
                 
                 {activeTab === 'gallery' && !showSelected && !submittedOnly && !isFaceFilterActive && !photosQuery.isLoading && !photosQuery.isError && photosQuery.data && totalPages > 1 && (
                     <nav className="mt-8 flex items-center justify-center gap-4" aria-label="Gallery pages">
-                        <button type="button" disabled={page === 1} onClick={() => goToGalleryPage(page - 1)} className="flex h-9 items-center gap-2 rounded-lg border border-[var(--border)] px-4 text-[10px] font-bold uppercase tracking-wider text-[var(--text-secondary)] disabled:opacity-35"><ChevronLeft size={14} /> Previous</button>
+                        <button type="button" disabled={page === 1 || photosQuery.isFetching} onClick={() => goToGalleryPage(page - 1)} className="flex h-9 items-center gap-2 rounded-lg border border-[var(--border)] px-4 text-[10px] font-bold uppercase tracking-wider text-[var(--text-secondary)] disabled:opacity-35"><ChevronLeft size={14} aria-hidden="true" /> Previous</button>
                         <span className="text-xs text-[var(--text-muted)]">Page {page} of {totalPages}</span>
-                        <button type="button" disabled={!hasNextGalleryPage} onClick={() => goToGalleryPage(page + 1)} className="flex h-9 items-center gap-2 rounded-lg border border-[var(--border)] px-4 text-[10px] font-bold uppercase tracking-wider text-[var(--text-secondary)] disabled:opacity-35">Next <ChevronRight size={14} /></button>
+                        <button type="button" disabled={!hasNextGalleryPage || photosQuery.isFetching} onClick={() => goToGalleryPage(page + 1)} className="flex h-9 items-center gap-2 rounded-lg border border-[var(--border)] px-4 text-[10px] font-bold uppercase tracking-wider text-[var(--text-secondary)] disabled:opacity-35">Next <ChevronRight size={14} aria-hidden="true" /></button>
                     </nav>
                 )}
             </section>
 
             <footer className="border-t border-[var(--border)] px-4 py-5 text-[10px] text-[var(--text-muted)] md:px-8">
                 <div className="mx-auto flex max-w-[1600px] flex-col items-center justify-between gap-3 sm:flex-row">
-                    <p>&copy; {new Date().getFullYear()} The Orbit Photo. All rights reserved.</p>
+                    <p>&copy; {currentYear ?? ''} The Orbit Photo. All rights reserved.</p>
                     <a href="https://www.instagram.com/theorbitphoto/" target="_blank" rel="noreferrer" aria-label="@theorbitphoto on Instagram" className="inline-flex items-center gap-1.5 text-[var(--text-secondary)] transition-colors hover:text-[var(--text-primary)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)]">
                         <Instagram size={13} /> @theorbitphoto
                     </a>

@@ -89,3 +89,36 @@ for (const legacy of [true, false]) {
         expect({ code: await child.exited, output, errors }).toEqual({ code: 0, output: "", errors: "" });
     });
 }
+
+test('edited status migration preserves publications and only runs once', async () => {
+    const env: Record<string, string | undefined> = { ...process.env, DATABASE_DRIVER: 'sqlite', SQLITE_PATH: ':memory:' };
+    for (const key of ['GALLERY_DATABASE_URL', 'GALLERY_AUTH_TOKEN', 'TURSO_DATABASE_URL', 'TURSO_AUTH_TOKEN', 'DATABASE_URL', 'SUPABASE_DB_URL']) delete env[key];
+    const script = `
+        import assert from 'node:assert/strict';
+        const { ensureGalleryStorage } = await import('./db/galleries');
+        const { sqlite: db } = await import('./db/runtime');
+        await ensureGalleryStorage();
+        db.run("DELETE FROM gallery_settings WHERE key = 'edit_results_status_v1'");
+        for (const [id, expiry, count] of [[1, '2099-01-01T00:00:00Z', 1], [2, '2000-01-01T00:00:00Z', 1], [3, null, 0]]) {
+            db.run("INSERT INTO galleries (id, title, drive_folder_id, pin_hash, edit_results_key_hash, edit_results_photo_count, edit_results_expires_at) VALUES (?, 'Test', 'folder', 'pin', ?, ?, ?)", [id, count ? 'password' : null, count, expiry]);
+        }
+        db.run("INSERT INTO gallery_edit_result_photos (gallery_id, drive_file_id, filename, mime_type, web_content_link) VALUES (1, 'photo', 'photo.jpg', 'image/jpeg', 'https://drive.google.com/photo')");
+        db.run('ALTER TABLE galleries DROP COLUMN edit_results_status');
+        const before = db.query('SELECT id, edit_results_expires_at FROM galleries ORDER BY id').all();
+        const migration = await import('./db/galleries.ts?status-migration');
+        await migration.ensureGalleryStorage();
+        assert.deepEqual(db.query('SELECT edit_results_status FROM galleries ORDER BY id').all().map(r => r.edit_results_status), ['open', 'closed', 'draft']);
+        assert.deepEqual(db.query('SELECT id, edit_results_expires_at FROM galleries ORDER BY id').all(), before);
+        db.run("UPDATE galleries SET edit_results_status = 'closed' WHERE id = 1");
+        const restart = await import('./db/galleries.ts?status-restart');
+        await restart.ensureGalleryStorage();
+        assert.equal(db.query('SELECT edit_results_status FROM galleries WHERE id = 1').get().edit_results_status, 'closed');
+        assert.equal(db.query('SELECT COUNT(*) as n FROM gallery_edit_result_photos').get().n, 1);
+        assert.deepEqual(db.query('SELECT id, edit_results_expires_at FROM galleries ORDER BY id').all(), before);
+        db.close();
+    `;
+    const child = Bun.spawn([process.execPath, '--no-env-file', '-e', script], { cwd: fileURLToPath(new URL('../', import.meta.url)), env, stdout: 'pipe', stderr: 'pipe' });
+    const output = await new Response(child.stdout).text();
+    const errors = await new Response(child.stderr).text();
+    expect({ code: await child.exited, output, errors }).toEqual({ code: 0, output: '', errors: '' });
+});

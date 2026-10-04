@@ -8,9 +8,10 @@ import type { GalleryTheme } from './types';
 
 export type GalleryView = 'gallery' | 'picked' | 'selfie' | 'edit-results';
 
-export function GalleryViewTabs({ value, galleryLabel = 'All Photos', editedAvailable, allPhotosMenuOpen = false, allPhotosButtonRef, onAllPhotos, onChange }: {
+export function GalleryViewTabs({ value, galleryLabel = 'All Photos', galleryAvailable = true, editedAvailable, allPhotosMenuOpen = false, allPhotosButtonRef, onAllPhotos, onChange }: {
     value: GalleryView;
     galleryLabel?: string;
+    galleryAvailable?: boolean;
     editedAvailable: boolean;
     allPhotosMenuOpen?: boolean;
     allPhotosButtonRef?: RefObject<HTMLButtonElement | null>;
@@ -29,8 +30,8 @@ export function GalleryViewTabs({ value, galleryLabel = 'All Photos', editedAvai
             type="button"
             aria-label={label}
             aria-pressed={value === view}
-            disabled={view === 'edit-results' && !editedAvailable}
-            title={view === 'edit-results' && !editedAvailable ? 'Edited photos are not published yet' : label}
+            disabled={view === 'edit-results' ? !editedAvailable : !galleryAvailable}
+            title={view === 'edit-results' && !editedAvailable ? 'Edited photos are not published yet' : view !== 'edit-results' && !galleryAvailable ? 'Photo selection is unavailable' : label}
             onClick={() => view === 'gallery' ? onAllPhotos() : onChange(view)}
             aria-expanded={view === 'gallery' ? allPhotosMenuOpen : undefined}
             className={clsx('inline-flex min-h-9 min-w-0 items-center justify-center gap-1 rounded-md border px-3 text-[10px] font-semibold transition-[color,background-color,border-color,transform] duration-150 active:scale-[0.98] motion-reduce:transition-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)] disabled:opacity-40 sm:min-h-11 sm:gap-1.5 sm:px-3 sm:text-[13px]', value === view ? 'border-[var(--accent)] bg-[var(--accent)] text-[var(--bg-deep)]' : 'border-[var(--border)] bg-transparent text-[var(--text-secondary)] hover:border-[var(--text-muted)] hover:text-[var(--text-primary)]')}

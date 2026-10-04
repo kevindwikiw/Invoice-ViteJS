@@ -3,7 +3,7 @@ import { Buffer } from "node:buffer";
 import { createHmac } from "node:crypto";
 import writeExcelFile from "write-excel-file/node";
 import { galleryAll, galleryBatch, galleryInsertReturningId, galleryOne, galleryRun } from "../db/galleries";
-import { fetchDriveFile, getDrivePhotoMetadata, hasAnyoneViewerFolderAccess, listDrivePhotos } from "../lib/google-drive";
+import { fetchDriveFile, getDrivePhotoMetadata, hasAnyoneViewerFolderAccess, listDrivePhotos, listDrivePhotoTree, type DriveFolder } from "../lib/google-drive";
 import {
     DEFAULT_SELECTION_DURATION_HOURS,
     isSelectionDeadlineExpired,
@@ -78,6 +78,7 @@ type GalleryRow = {
     editResultsExpiresAt?: string | null;
     editResultsPhotoCount?: number | null;
     editResultsVersion?: number | null;
+    editResultsStatus?: GalleryStatus;
     tutorialBeforeDriveFileId?: string | null;
     tutorialAfterDriveFileId?: string | null;
     tutorialBefore2DriveFileId?: string | null;
@@ -403,6 +404,8 @@ function galleryAdminShape(row: GalleryRow, counts?: { photoCount?: number; sele
         editResultsAccessDurationHours: row.editResultsAccessDurationHours === undefined ? DEFAULT_EDIT_RESULTS_ACCESS_DURATION_HOURS : row.editResultsAccessDurationHours,
         editResultsExpiresAt: row.editResultsExpiresAt || null,
         editResultsPhotoCount: Number(row.editResultsPhotoCount || 0),
+        editResultsStatus: row.editResultsStatus === "open" && editResultsExpired(row.editResultsExpiresAt) ? "closed" : row.editResultsStatus || "draft",
+        editResultsIsExpired: editResultsExpired(row.editResultsExpiresAt),
         hasEditResults: Number(row.editResultsPhotoCount || 0) > 0,
         publicKey: row.publicKey || String(row.id),
         status: isExpired ? "closed" : row.status,
@@ -560,7 +563,7 @@ async function requirePublicGallery(c: Context<Env>): Promise<{ gallery: Gallery
         SELECT id, title, public_key as "publicKey", contact_whatsapp_url as "contactWhatsappUrl", drive_folder_id as "driveFolderId", tutorial_before_drive_file_id as "tutorialBeforeDriveFileId", tutorial_after_drive_file_id as "tutorialAfterDriveFileId", tutorial_before_2_drive_file_id as "tutorialBefore2DriveFileId", tutorial_after_2_drive_file_id as "tutorialAfter2DriveFileId", tutorial_before_3_drive_file_id as "tutorialBefore3DriveFileId", tutorial_after_3_drive_file_id as "tutorialAfter3DriveFileId", pin_hash as "pinHash", status,
                max_selections as "maxSelections", additional_selection_limit as "additionalSelectionLimit",
                edit_addon_status as "editAddonStatus", edit_addon_pricing_mode as "editAddonPricingMode", edit_addon_price as "editAddonPrice", qris_enabled as "qrisEnabled",
-               edit_results_photo_count as "editResultsPhotoCount",
+               edit_results_status as "editResultsStatus", edit_results_photo_count as "editResultsPhotoCount",
                photo_count as "photoCount", selection_count as "selectionCount",
                selection_duration_days as "selectionDurationDays", selection_duration_hours as "selectionDurationHours", selection_deadline_at as "selectionDeadlineAt",
                created_at as "createdAt", updated_at as "updatedAt", synced_at as "syncedAt", access_version as "accessVersion"
@@ -656,19 +659,23 @@ adminGalleriesRouter.get("/", async (c) => {
     const status = normalizeStatus(c.req.query("status"), "draft");
     const hasStatusFilter = c.req.query("status") === "open" || c.req.query("status") === "closed" || c.req.query("status") === "draft";
     const search = String(c.req.query("search") || "").trim().slice(0, 100);
+    const editedMode = c.req.query("mode") === "edited";
     const conditions: string[] = [];
     const params: unknown[] = [];
     if (hasStatusFilter) {
-        const expired = "(g.selection_deadline_at IS NOT NULL AND datetime(g.selection_deadline_at) <= datetime('now'))";
+        const expired = editedMode
+            ? "(g.edit_results_status = 'open' AND g.edit_results_expires_at IS NOT NULL AND datetime(g.edit_results_expires_at) <= datetime('now'))"
+            : "(g.selection_deadline_at IS NOT NULL AND datetime(g.selection_deadline_at) <= datetime('now'))";
+        const statusColumn = editedMode ? "g.edit_results_status" : "g.status";
         if (status === "closed") {
-            conditions.push(`(g.status = 'closed' OR ${expired})`);
+            conditions.push(`(${statusColumn} = 'closed' OR ${expired})`);
         } else {
-            conditions.push(`(g.status = ? AND NOT ${expired})`);
+            conditions.push(`(${statusColumn} = ? AND NOT ${expired})`);
             params.push(status);
         }
     }
     if (search) {
-        conditions.push("(LOWER(g.title) LIKE LOWER(?) OR LOWER(g.drive_folder_id) LIKE LOWER(?))");
+        conditions.push(`(LOWER(g.title) LIKE LOWER(?) OR LOWER(${editedMode ? "g.edit_results_folder_id" : "g.drive_folder_id"}) LIKE LOWER(?))`);
         const pattern = `%${search}%`;
         params.push(pattern, pattern);
     }
@@ -676,7 +683,7 @@ adminGalleriesRouter.get("/", async (c) => {
     const totalRow = await galleryOne<{ total: number }>(`SELECT COUNT(*) as total FROM galleries g ${where}`, params);
     const total = Number(totalRow?.total || 0);
     const rows = await galleryAll<GalleryRow & { photoCount?: number; selectionCount?: number }>(`
-        SELECT g.id, g.title, g.drive_folder_id as "driveFolderId", g.edit_results_folder_id as "editResultsFolderId", g.edit_results_zip_file_id as "editResultsZipFileId", g.edit_results_published_at as "editResultsPublishedAt", g.edit_results_access_duration_hours as "editResultsAccessDurationHours", g.edit_results_expires_at as "editResultsExpiresAt", g.edit_results_photo_count as "editResultsPhotoCount", g.tutorial_before_drive_file_id as "tutorialBeforeDriveFileId", g.tutorial_after_drive_file_id as "tutorialAfterDriveFileId", g.tutorial_before_2_drive_file_id as "tutorialBefore2DriveFileId", g.tutorial_after_2_drive_file_id as "tutorialAfter2DriveFileId", g.tutorial_before_3_drive_file_id as "tutorialBefore3DriveFileId", g.tutorial_after_3_drive_file_id as "tutorialAfter3DriveFileId", g.pin_hash as "pinHash", g.status,
+        SELECT g.id, g.title, g.drive_folder_id as "driveFolderId", g.edit_results_folder_id as "editResultsFolderId", g.edit_results_zip_file_id as "editResultsZipFileId", g.edit_results_published_at as "editResultsPublishedAt", g.edit_results_access_duration_hours as "editResultsAccessDurationHours", g.edit_results_expires_at as "editResultsExpiresAt", g.edit_results_status as "editResultsStatus", g.edit_results_photo_count as "editResultsPhotoCount", g.tutorial_before_drive_file_id as "tutorialBeforeDriveFileId", g.tutorial_after_drive_file_id as "tutorialAfterDriveFileId", g.tutorial_before_2_drive_file_id as "tutorialBefore2DriveFileId", g.tutorial_after_2_drive_file_id as "tutorialAfter2DriveFileId", g.tutorial_before_3_drive_file_id as "tutorialBefore3DriveFileId", g.tutorial_after_3_drive_file_id as "tutorialAfter3DriveFileId", g.pin_hash as "pinHash", g.status,
                g.public_key as "publicKey", g.contact_whatsapp_url as "contactWhatsappUrl",
                g.max_selections as "maxSelections", g.additional_selection_limit as "additionalSelectionLimit",
                g.edit_addon_status as "editAddonStatus", g.edit_addon_pricing_mode as "editAddonPricingMode", g.edit_addon_price as "editAddonPrice", g.qris_enabled as "qrisEnabled",
@@ -855,7 +862,7 @@ adminGalleriesRouter.post("/", async (c) => {
         [title, publicKey, maxSelections, DEFAULT_ADDON_UNIT_PRICE, qrisEnabled ? 1 : 0, driveFolderId, tutorialBeforeDriveFileId, tutorialAfterDriveFileId, tutorialBefore2DriveFileId, tutorialAfter2DriveFileId, tutorialBefore3DriveFileId, tutorialAfter3DriveFileId, pinHash, selectionDurationDays, selectionDurationHours, selectionDeadlineAt, status],
     );
     const row = await galleryOne<GalleryRow>(`
-        SELECT id, title, public_key as "publicKey", contact_whatsapp_url as "contactWhatsappUrl", drive_folder_id as "driveFolderId", edit_results_folder_id as "editResultsFolderId", edit_results_zip_file_id as "editResultsZipFileId", edit_results_published_at as "editResultsPublishedAt", edit_results_access_duration_hours as "editResultsAccessDurationHours", edit_results_expires_at as "editResultsExpiresAt", edit_results_photo_count as "editResultsPhotoCount", tutorial_before_drive_file_id as "tutorialBeforeDriveFileId", tutorial_after_drive_file_id as "tutorialAfterDriveFileId", tutorial_before_2_drive_file_id as "tutorialBefore2DriveFileId", tutorial_after_2_drive_file_id as "tutorialAfter2DriveFileId", tutorial_before_3_drive_file_id as "tutorialBefore3DriveFileId", tutorial_after_3_drive_file_id as "tutorialAfter3DriveFileId", pin_hash as "pinHash", status, max_selections as "maxSelections", additional_selection_limit as "additionalSelectionLimit", edit_addon_status as "editAddonStatus", edit_addon_pricing_mode as "editAddonPricingMode", edit_addon_price as "editAddonPrice", qris_enabled as "qrisEnabled",
+        SELECT id, title, public_key as "publicKey", contact_whatsapp_url as "contactWhatsappUrl", drive_folder_id as "driveFolderId", edit_results_folder_id as "editResultsFolderId", edit_results_zip_file_id as "editResultsZipFileId", edit_results_published_at as "editResultsPublishedAt", edit_results_access_duration_hours as "editResultsAccessDurationHours", edit_results_expires_at as "editResultsExpiresAt", edit_results_status as "editResultsStatus", edit_results_photo_count as "editResultsPhotoCount", tutorial_before_drive_file_id as "tutorialBeforeDriveFileId", tutorial_after_drive_file_id as "tutorialAfterDriveFileId", tutorial_before_2_drive_file_id as "tutorialBefore2DriveFileId", tutorial_after_2_drive_file_id as "tutorialAfter2DriveFileId", tutorial_before_3_drive_file_id as "tutorialBefore3DriveFileId", tutorial_after_3_drive_file_id as "tutorialAfter3DriveFileId", pin_hash as "pinHash", status, max_selections as "maxSelections", additional_selection_limit as "additionalSelectionLimit", edit_addon_status as "editAddonStatus", edit_addon_pricing_mode as "editAddonPricingMode", edit_addon_price as "editAddonPrice", qris_enabled as "qrisEnabled",
                photo_count as "photoCount", selection_count as "selectionCount", selection_duration_days as "selectionDurationDays", selection_duration_hours as "selectionDurationHours", selection_deadline_at as "selectionDeadlineAt", created_at as "createdAt", updated_at as "updatedAt", synced_at as "syncedAt"
         FROM galleries WHERE id = ?
     `, [id]);
@@ -869,7 +876,7 @@ adminGalleriesRouter.get("/:id", async (c) => {
     const id = Number(c.req.param("id"));
     if (!Number.isInteger(id)) return c.json({ error: "Invalid gallery ID" }, 400);
     const gallery = await galleryOne<GalleryRow>(`
-        SELECT id, title, public_key as "publicKey", contact_whatsapp_url as "contactWhatsappUrl", drive_folder_id as "driveFolderId", edit_results_folder_id as "editResultsFolderId", edit_results_zip_file_id as "editResultsZipFileId", edit_results_published_at as "editResultsPublishedAt", edit_results_photo_count as "editResultsPhotoCount", tutorial_before_drive_file_id as "tutorialBeforeDriveFileId", tutorial_after_drive_file_id as "tutorialAfterDriveFileId", tutorial_before_2_drive_file_id as "tutorialBefore2DriveFileId", tutorial_after_2_drive_file_id as "tutorialAfter2DriveFileId", tutorial_before_3_drive_file_id as "tutorialBefore3DriveFileId", tutorial_after_3_drive_file_id as "tutorialAfter3DriveFileId", pin_hash as "pinHash", status, max_selections as "maxSelections", additional_selection_limit as "additionalSelectionLimit", edit_addon_status as "editAddonStatus", edit_addon_pricing_mode as "editAddonPricingMode", edit_addon_price as "editAddonPrice", qris_enabled as "qrisEnabled",
+        SELECT id, title, public_key as "publicKey", contact_whatsapp_url as "contactWhatsappUrl", drive_folder_id as "driveFolderId", edit_results_folder_id as "editResultsFolderId", edit_results_zip_file_id as "editResultsZipFileId", edit_results_published_at as "editResultsPublishedAt", edit_results_access_duration_hours as "editResultsAccessDurationHours", edit_results_expires_at as "editResultsExpiresAt", edit_results_status as "editResultsStatus", edit_results_photo_count as "editResultsPhotoCount", tutorial_before_drive_file_id as "tutorialBeforeDriveFileId", tutorial_after_drive_file_id as "tutorialAfterDriveFileId", tutorial_before_2_drive_file_id as "tutorialBefore2DriveFileId", tutorial_after_2_drive_file_id as "tutorialAfter2DriveFileId", tutorial_before_3_drive_file_id as "tutorialBefore3DriveFileId", tutorial_after_3_drive_file_id as "tutorialAfter3DriveFileId", pin_hash as "pinHash", status, max_selections as "maxSelections", additional_selection_limit as "additionalSelectionLimit", edit_addon_status as "editAddonStatus", edit_addon_pricing_mode as "editAddonPricingMode", edit_addon_price as "editAddonPrice", qris_enabled as "qrisEnabled",
                photo_count as "photoCount", selection_count as "selectionCount", selection_duration_days as "selectionDurationDays", selection_duration_hours as "selectionDurationHours", selection_deadline_at as "selectionDeadlineAt", created_at as "createdAt", updated_at as "updatedAt", synced_at as "syncedAt"
         FROM galleries WHERE id = ?
     `, [id]);
@@ -922,7 +929,7 @@ adminGalleriesRouter.patch("/:id", async (c) => {
     const id = Number(c.req.param("id"));
     if (!Number.isInteger(id)) return c.json({ error: "Invalid gallery ID" }, 400);
     const existing = await galleryOne<GalleryRow>(`
-        SELECT id, title, drive_folder_id as "driveFolderId", edit_results_folder_id as "editResultsFolderId", edit_results_zip_file_id as "editResultsZipFileId", edit_results_access_duration_hours as "editResultsAccessDurationHours", tutorial_before_drive_file_id as "tutorialBeforeDriveFileId", tutorial_after_drive_file_id as "tutorialAfterDriveFileId", tutorial_before_2_drive_file_id as "tutorialBefore2DriveFileId", tutorial_after_2_drive_file_id as "tutorialAfter2DriveFileId", tutorial_before_3_drive_file_id as "tutorialBefore3DriveFileId", tutorial_after_3_drive_file_id as "tutorialAfter3DriveFileId", pin_hash as "pinHash", status, max_selections as "maxSelections", additional_selection_limit as "additionalSelectionLimit", edit_addon_status as "editAddonStatus", edit_addon_pricing_mode as "editAddonPricingMode", edit_addon_price as "editAddonPrice", qris_enabled as "qrisEnabled",
+        SELECT id, title, contact_whatsapp_url as "contactWhatsappUrl", edit_results_status as "editResultsStatus", edit_results_key_hash as "editResultsKeyHash", edit_results_photo_count as "editResultsPhotoCount", edit_results_expires_at as "editResultsExpiresAt", drive_folder_id as "driveFolderId", edit_results_folder_id as "editResultsFolderId", edit_results_zip_file_id as "editResultsZipFileId", edit_results_access_duration_hours as "editResultsAccessDurationHours", tutorial_before_drive_file_id as "tutorialBeforeDriveFileId", tutorial_after_drive_file_id as "tutorialAfterDriveFileId", tutorial_before_2_drive_file_id as "tutorialBefore2DriveFileId", tutorial_after_2_drive_file_id as "tutorialAfter2DriveFileId", tutorial_before_3_drive_file_id as "tutorialBefore3DriveFileId", tutorial_after_3_drive_file_id as "tutorialAfter3DriveFileId", pin_hash as "pinHash", status, max_selections as "maxSelections", additional_selection_limit as "additionalSelectionLimit", edit_addon_status as "editAddonStatus", edit_addon_pricing_mode as "editAddonPricingMode", edit_addon_price as "editAddonPrice", qris_enabled as "qrisEnabled",
                selection_count as "selectionCount", selection_duration_days as "selectionDurationDays", selection_duration_hours as "selectionDurationHours", selection_deadline_at as "selectionDeadlineAt", created_at as "createdAt", updated_at as "updatedAt", synced_at as "syncedAt"
         FROM galleries WHERE id = ?
     `, [id]);
@@ -944,18 +951,29 @@ adminGalleriesRouter.patch("/:id", async (c) => {
             return c.json({ error: "Enter a valid Google Drive ZIP file URL or file ID." }, 400);
         }
     }
+    const editedFields = ["editResultsStatus", "editResultsFolderId", "editResultsZipFileId", "editResultsAccessDurationHours", "comparisonEnabled", "comparisonPairs"];
+    const changesEdited = editedFields.some((key) => body[key] !== undefined);
+    const changesSelection = Object.keys(body).some((key) => !editedFields.includes(key));
     const rawEditDuration = body.editResultsAccessDurationHours;
     const editResultsAccessDurationHours = rawEditDuration === undefined
-        ? (existing.editResultsAccessDurationHours ?? DEFAULT_EDIT_RESULTS_ACCESS_DURATION_HOURS)
+        ? (existing.editResultsAccessDurationHours === undefined ? DEFAULT_EDIT_RESULTS_ACCESS_DURATION_HOURS : existing.editResultsAccessDurationHours)
         : rawEditDuration === null || rawEditDuration === '' ? null : Number(rawEditDuration);
     if (editResultsAccessDurationHours !== null && (!Number.isInteger(editResultsAccessDurationHours) || editResultsAccessDurationHours < 24 || editResultsAccessDurationHours > 87600 || editResultsAccessDurationHours % 24 !== 0)) {
         return c.json({ error: "Edited photos access duration must be a whole number of days from 1 to 3650, or unlimited." }, 400);
     }
+    if (body.editResultsStatus !== undefined && !["draft", "open", "closed"].includes(body.editResultsStatus)) return c.json({ error: "Invalid edited photos status." }, 400);
+    const editedStatus = body.editResultsStatus ?? existing.editResultsStatus ?? "draft";
+    if (body.editResultsStatus === "open" && (!existing.editResultsKeyHash || !Number(existing.editResultsPhotoCount))) {
+        return c.json({ error: "Publish edited photos before opening access.", code: "EDIT_RESULTS_NOT_PUBLISHED" }, 400);
+    }
+    const reopenEdited = body.editResultsStatus === "open" && (existing.editResultsStatus !== "open" || editResultsExpired(existing.editResultsExpiresAt));
+    const editedExpiresAt = reopenEdited ? editResultsExpiryFromDuration(editResultsAccessDurationHours, new Date().toISOString()) : existing.editResultsExpiresAt || null;
+    const rotateEditedVersion = editedStatus !== existing.editResultsStatus || reopenEdited;
     const durationWasProvided = body.selectionDurationHours !== undefined || body.selectionDurationDays !== undefined;
     const requestedDurationHours = body.selectionDurationHours ?? (body.selectionDurationDays === undefined ? undefined : Number(body.selectionDurationDays) * 24);
     let deadlineUpdate;
     try {
-        deadlineUpdate = resolveGalleryDeadlineUpdate({
+        deadlineUpdate = !changesSelection ? { selectionDurationHours: selectionDurationHoursFromRow(existing), selectionDeadlineAt: existing.selectionDeadlineAt, status: existing.status } : resolveGalleryDeadlineUpdate({
             existingDurationHours: selectionDurationHoursFromRow(existing),
             existingDeadlineAt: existing.selectionDeadlineAt,
             nextStatus: normalizeStatus(body.status, existing.status),
@@ -991,7 +1009,7 @@ adminGalleriesRouter.patch("/:id", async (c) => {
 
     if (!title || !driveFolderId) return c.json({ error: "Title and Drive folder ID are required." }, 400);
     if (body.pin !== undefined && pin.length > 0 && pin.length < 4) return c.json({ error: "PIN must be at least 4 characters." }, 400);
-    if (activeSelectionLimit && selectionCount > activeSelectionLimit) {
+    if (changesSelection && activeSelectionLimit && selectionCount > activeSelectionLimit) {
         return c.json({ error: `Active limit cannot be lower than ${selectionCount} submitted selections.` }, 400);
     }
 
@@ -1007,7 +1025,7 @@ adminGalleriesRouter.patch("/:id", async (c) => {
         if (pairs.length) {
             if (!editResultsFolderId) return c.json({ error: "Save an edited photos folder first." }, 400);
             try {
-                const edited = await listDrivePhotos(editResultsFolderId);
+                const { photos: edited } = await listDrivePhotoTree(editResultsFolderId);
                 const before = await submittedComparisonPhotos(id);
                 if (validComparisonPairs(pairs, new Set(edited.map((p) => p.id)), new Set(before.map((p) => p.driveFileId))).length !== pairs.length) {
                     return c.json({ error: "A comparison photo is no longer in this gallery. Refresh Manage Pairs." }, 400);
@@ -1017,11 +1035,17 @@ adminGalleriesRouter.patch("/:id", async (c) => {
         comparisonStatements.push({ sql: "DELETE FROM gallery_edit_result_pairs WHERE gallery_id = ?", params: [id] });
         comparisonStatements.push(...pairs.map((pair) => ({ sql: "INSERT INTO gallery_edit_result_pairs (gallery_id, edited_drive_file_id, before_drive_file_id) VALUES (?, ?, ?)", params: [id, pair.editedDriveFileId, pair.beforeDriveFileId] })));
     }
-    await galleryBatch([{ sql:
-        "UPDATE galleries SET title = ?, drive_folder_id = ?, edit_results_folder_id = ?, edit_results_zip_file_id = ?, edit_results_access_duration_hours = ?, tutorial_before_drive_file_id = ?, tutorial_after_drive_file_id = ?, tutorial_before_2_drive_file_id = ?, tutorial_after_2_drive_file_id = ?, tutorial_before_3_drive_file_id = ?, tutorial_after_3_drive_file_id = ?, pin_hash = ?, contact_whatsapp_url = ?, max_selections = ?, additional_selection_limit = ?, edit_addon_status = ?, edit_addon_pricing_mode = ?, edit_addon_price = ?, qris_enabled = ?, selection_duration_days = ?, selection_duration_hours = ?, selection_deadline_at = ?, status = ?, access_version = access_version + ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-        params: [title, driveFolderId, editResultsFolderId, editResultsZipFileId, editResultsAccessDurationHours, tutorialBeforeDriveFileId, tutorialAfterDriveFileId, tutorialBefore2DriveFileId, tutorialAfter2DriveFileId, tutorialBefore3DriveFileId, tutorialAfter3DriveFileId, pinHash, contactWhatsappUrl, maxSelections, additionalSelectionLimit, editAddonStatus, editAddonPricingMode, editAddonPrice, qrisEnabled ? 1 : 0, selectionDurationDays, selectionDurationHours, selectionDeadlineAt, status, rotateAccessVersion ? 1 : 0, id],
-    }, ...comparisonStatements]);
-    if (status === "open" && driveFolderId === existing.driveFolderId) void prepareGalleryFaceIndex(id);
+    const statements: Array<{ sql: string; params: unknown[] }> = [...comparisonStatements];
+    if (changesSelection) statements.push({ sql:
+        "UPDATE galleries SET title = ?, drive_folder_id = ?, tutorial_before_drive_file_id = ?, tutorial_after_drive_file_id = ?, tutorial_before_2_drive_file_id = ?, tutorial_after_2_drive_file_id = ?, tutorial_before_3_drive_file_id = ?, tutorial_after_3_drive_file_id = ?, pin_hash = ?, contact_whatsapp_url = ?, max_selections = ?, additional_selection_limit = ?, edit_addon_status = ?, edit_addon_pricing_mode = ?, edit_addon_price = ?, qris_enabled = ?, selection_duration_days = ?, selection_duration_hours = ?, selection_deadline_at = ?, status = ?, access_version = access_version + ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+        params: [title, driveFolderId, tutorialBeforeDriveFileId, tutorialAfterDriveFileId, tutorialBefore2DriveFileId, tutorialAfter2DriveFileId, tutorialBefore3DriveFileId, tutorialAfter3DriveFileId, pinHash, contactWhatsappUrl, maxSelections, additionalSelectionLimit, editAddonStatus, editAddonPricingMode, editAddonPrice, qrisEnabled ? 1 : 0, selectionDurationDays, selectionDurationHours, selectionDeadlineAt, status, rotateAccessVersion ? 1 : 0, id],
+    });
+    if (changesEdited) statements.push({
+        sql: "UPDATE galleries SET edit_results_folder_id = ?, edit_results_zip_file_id = ?, edit_results_access_duration_hours = ?, edit_results_status = ?, edit_results_expires_at = ?, edit_results_version = edit_results_version + ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+        params: [editResultsFolderId, editResultsZipFileId, editResultsAccessDurationHours, editedStatus, editedExpiresAt, rotateEditedVersion ? 1 : 0, id],
+    });
+    if (statements.length) await galleryBatch(statements);
+    if (changesSelection && status === "open" && driveFolderId === existing.driveFolderId) void prepareGalleryFaceIndex(id);
     return c.json({ status: "updated" });
 });
 
@@ -1034,7 +1058,7 @@ adminGalleriesRouter.get("/:id/edit-results/pairing", async (c) => {
     if (!gallery) return c.json({ error: "Gallery not found." }, 404);
     if (!gallery.folder) return c.json({ error: "Save an edited photos folder first." }, 400);
     try {
-        const edited = await listDrivePhotos(gallery.folder);
+        const { photos: edited } = await listDrivePhotoTree(gallery.folder);
         const submitted = await submittedComparisonPhotos(id);
         c.header("Cache-Control", "no-store");
         return c.json({
@@ -1087,7 +1111,7 @@ adminGalleriesRouter.post("/:id/edit-results/publish", async (c) => {
         if (publicFolderAccess === false) {
             return c.json({ error: "Share the edited photos folder as Anyone with the link · Viewer before publishing." }, 400);
         }
-        const photos = await listDrivePhotos(gallery.editResultsFolderId);
+        const { photos, folders } = await listDrivePhotoTree(gallery.editResultsFolderId);
         if (!photos.length) return c.json({ error: "The edited photos folder is empty." }, 400);
         const snapshot = photos.map((photo, index) => ({ photo, downloadUrl: directDriveDownloadUrl(photo), displayOrder: index }));
         let unavailable = snapshot.find(({ downloadUrl }) => !downloadUrl);
@@ -1154,14 +1178,19 @@ adminGalleriesRouter.post("/:id/edit-results/publish", async (c) => {
         const expiresAt = editResultsExpiryFromDuration(gallery.editResultsAccessDurationHours, publishedAt);
         const statements = [
             { sql: "DELETE FROM gallery_edit_result_photos WHERE gallery_id = ?", params: [id] },
-            ...snapshot.map(({ photo, downloadUrl, displayOrder }) => ({
-                sql: "INSERT INTO gallery_edit_result_photos (gallery_id, drive_file_id, filename, mime_type, thumbnail_url, web_content_link, resource_key, width, height, display_order, before_photo) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                params: [id, photo.id, photo.name, photo.mimeType, photo.thumbnailLink || null, downloadUrl, photo.resourceKey || null, photo.width ?? null, photo.height ?? null, displayOrder, beforeByEdited.has(photo.id) ? JSON.stringify(beforeByEdited.get(photo.id)) : null],
+            { sql: "DELETE FROM gallery_edit_result_folders WHERE gallery_id = ?", params: [id] },
+            ...folders.map((folder) => ({
+                sql: "INSERT INTO gallery_edit_result_folders (gallery_id, drive_folder_id, parent_id, name) VALUES (?, ?, ?, ?)",
+                params: [id, folder.id, folder.parentId, folder.name],
             })),
-            { sql: "UPDATE galleries SET edit_results_key_hash = ?, edit_results_published_at = ?, edit_results_expires_at = ?, edit_results_photo_count = ?, edit_results_zip_filename = ?, edit_results_zip_download_url = ?, edit_results_version = edit_results_version + 1, updated_at = CURRENT_TIMESTAMP WHERE id = ?", params: [keyHash, publishedAt, expiresAt, snapshot.length, archive?.filename || null, archive?.downloadUrl || null, id] },
+            ...snapshot.map(({ photo, downloadUrl, displayOrder }) => ({
+                sql: "INSERT INTO gallery_edit_result_photos (gallery_id, drive_file_id, filename, mime_type, thumbnail_url, web_content_link, resource_key, width, height, display_order, before_photo, folder_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                params: [id, photo.id, photo.name, photo.mimeType, photo.thumbnailLink || null, downloadUrl, photo.resourceKey || null, photo.width ?? null, photo.height ?? null, displayOrder, beforeByEdited.has(photo.id) ? JSON.stringify(beforeByEdited.get(photo.id)) : null, photo.folderId],
+            })),
+            { sql: "UPDATE galleries SET edit_results_status = 'open', edit_results_key_hash = ?, edit_results_published_at = ?, edit_results_expires_at = ?, edit_results_photo_count = ?, edit_results_zip_filename = ?, edit_results_zip_download_url = ?, edit_results_version = edit_results_version + 1, updated_at = CURRENT_TIMESTAMP WHERE id = ?", params: [keyHash, publishedAt, expiresAt, snapshot.length, archive?.filename || null, archive?.downloadUrl || null, id] },
         ];
         await galleryBatch(statements);
-        return c.json({ publishedAt, expiresAt, expiresIn: editResultsExpiresIn(expiresAt), photoCount: snapshot.length, comparisonCount: beforeByEdited.size, warnings }, 201, { "Cache-Control": "no-store" });
+        return c.json({ publishedAt, expiresAt, expiresIn: editResultsExpiresIn(expiresAt), photoCount: snapshot.length, folderCount: folders.length, comparisonCount: beforeByEdited.size, warnings }, 201, { "Cache-Control": "no-store" });
     } catch (error) {
         console.error(`[gallery ${id}] Edited photos publish failed:`, error instanceof Error ? error.message : error);
         return c.json({ error: "Unable to verify or publish this Google Drive folder." }, 502);
@@ -1177,7 +1206,8 @@ adminGalleriesRouter.post("/:id/edit-results/unpublish", async (c) => {
     if (!gallery) return c.json({ error: "Gallery not found" }, 404);
     await galleryBatch([
         { sql: "DELETE FROM gallery_edit_result_photos WHERE gallery_id = ?", params: [id] },
-        { sql: "UPDATE galleries SET edit_results_key_hash = NULL, edit_results_published_at = NULL, edit_results_expires_at = NULL, edit_results_photo_count = 0, edit_results_zip_filename = NULL, edit_results_zip_download_url = NULL, edit_results_version = edit_results_version + 1, updated_at = CURRENT_TIMESTAMP WHERE id = ?", params: [id] },
+        { sql: "DELETE FROM gallery_edit_result_folders WHERE gallery_id = ?", params: [id] },
+        { sql: "UPDATE galleries SET edit_results_status = 'draft', edit_results_key_hash = NULL, edit_results_published_at = NULL, edit_results_expires_at = NULL, edit_results_photo_count = 0, edit_results_zip_filename = NULL, edit_results_zip_download_url = NULL, edit_results_version = edit_results_version + 1, updated_at = CURRENT_TIMESTAMP WHERE id = ?", params: [id] },
     ]);
     return c.json({ status: "unpublished" });
 });
@@ -1197,6 +1227,7 @@ adminGalleriesRouter.delete("/:id", async (c) => {
     await galleryRun("DELETE FROM face_index_jobs WHERE gallery_id = ?", [id]);
     await galleryRun("DELETE FROM gallery_edit_requests WHERE gallery_id = ?", [id]);
     await galleryRun("DELETE FROM gallery_edit_result_photos WHERE gallery_id = ?", [id]);
+    await galleryRun("DELETE FROM gallery_edit_result_folders WHERE gallery_id = ?", [id]);
     await galleryRun("DELETE FROM gallery_photos WHERE gallery_id = ?", [id]);
     await galleryRun("DELETE FROM gallery_selections WHERE gallery_id = ?", [id]);
     await galleryRun("DELETE FROM galleries WHERE id = ?", [id]);
@@ -1540,24 +1571,25 @@ publicGalleriesRouter.get("/:id/tutorial/:variant", async (c) => {
 
 publicGalleriesRouter.get("/:id/edit-results/status", async (c) => {
     const lookup = galleryLookup(c.req.param("id") || "");
-    const gallery = await galleryOne<{ editResultsPhotoCount?: number }>(
-        `SELECT edit_results_photo_count as "editResultsPhotoCount" FROM galleries WHERE ${lookup.sql}`,
+    const gallery = await galleryOne<{ editResultsStatus: GalleryStatus; editResultsPhotoCount?: number; editResultsExpiresAt?: string | null }>(
+        `SELECT edit_results_expires_at as "editResultsExpiresAt", edit_results_status as "editResultsStatus", edit_results_photo_count as "editResultsPhotoCount" FROM galleries WHERE ${lookup.sql}`,
         lookup.params,
     );
     if (!gallery) return c.json({ error: "Gallery not found" }, 404);
     c.header("Cache-Control", "no-store");
-    return c.json({ available: Number(gallery.editResultsPhotoCount || 0) > 0, photoCount: Number(gallery.editResultsPhotoCount || 0) });
+    return c.json({ available: gallery.editResultsStatus === "open" && !editResultsExpired(gallery.editResultsExpiresAt) && Number(gallery.editResultsPhotoCount || 0) > 0, photoCount: Number(gallery.editResultsPhotoCount || 0), status: gallery.editResultsStatus === "open" && editResultsExpired(gallery.editResultsExpiresAt) ? "closed" : gallery.editResultsStatus, isExpired: editResultsExpired(gallery.editResultsExpiresAt) });
 });
 
 publicGalleriesRouter.post("/:id/edit-results/verify", async (c) => {
     const lookup = galleryLookup(c.req.param("id") || "");
-    const gallery = await galleryOne<{ id: number; editResultsKeyHash?: string | null; editResultsVersion?: number; editResultsPhotoCount?: number; editResultsExpiresAt?: string | null }>(
-        `SELECT id, edit_results_key_hash as "editResultsKeyHash", edit_results_version as "editResultsVersion", edit_results_photo_count as "editResultsPhotoCount", edit_results_expires_at as "editResultsExpiresAt" FROM galleries WHERE ${lookup.sql}`,
+    const gallery = await galleryOne<{ id: number; editResultsStatus: GalleryStatus; editResultsKeyHash?: string | null; editResultsVersion?: number; editResultsPhotoCount?: number; editResultsExpiresAt?: string | null }>(
+        `SELECT id, edit_results_key_hash as "editResultsKeyHash", edit_results_version as "editResultsVersion", edit_results_status as "editResultsStatus", edit_results_photo_count as "editResultsPhotoCount", edit_results_expires_at as "editResultsExpiresAt" FROM galleries WHERE ${lookup.sql}`,
         lookup.params,
     );
     if (!gallery) return c.json({ error: "Gallery not found" }, 404);
     if (!gallery.editResultsKeyHash || !Number(gallery.editResultsPhotoCount || 0)) return c.json({ error: "Edited photos are not available yet." }, 404);
-    if (editResultsExpired(gallery.editResultsExpiresAt)) return c.json({ error: "Edited photos access has expired. Please contact the photographer." }, 401);
+    if (editResultsExpired(gallery.editResultsExpiresAt)) return c.json({ error: "Edited photos access has expired. Please contact the photographer.", code: "EDIT_RESULTS_EXPIRED" }, 403);
+    if (gallery.editResultsStatus !== "open") return c.json({ error: "Edited photos access is closed. Please contact the photographer.", code: "EDIT_RESULTS_CLOSED" }, 403);
     const body = await c.req.json().catch(() => ({}));
     const password = String(body.password ?? body.key ?? "").trim();
     if (!password || !await Bun.password.verify(password, gallery.editResultsKeyHash)) return c.json({ error: "Invalid edited photos password." }, 401);
@@ -1568,13 +1600,14 @@ publicGalleriesRouter.post("/:id/edit-results/verify", async (c) => {
 
 async function requireEditResultsAccess(c: Context<Env>): Promise<{ galleryId: number; token: string; expiresAt: string | null } | Response> {
     const lookup = galleryLookup(c.req.param("id") || "");
-    const gallery = await galleryOne<{ id: number; editResultsVersion?: number; editResultsPhotoCount?: number; editResultsKeyHash?: string | null; editResultsExpiresAt?: string | null }>(
-        `SELECT id, edit_results_version as "editResultsVersion", edit_results_photo_count as "editResultsPhotoCount", edit_results_key_hash as "editResultsKeyHash", edit_results_expires_at as "editResultsExpiresAt" FROM galleries WHERE ${lookup.sql}`,
+    const gallery = await galleryOne<{ id: number; editResultsStatus: GalleryStatus; editResultsVersion?: number; editResultsPhotoCount?: number; editResultsKeyHash?: string | null; editResultsExpiresAt?: string | null }>(
+        `SELECT id, edit_results_version as "editResultsVersion", edit_results_status as "editResultsStatus", edit_results_photo_count as "editResultsPhotoCount", edit_results_key_hash as "editResultsKeyHash", edit_results_expires_at as "editResultsExpiresAt" FROM galleries WHERE ${lookup.sql}`,
         lookup.params,
     );
     if (!gallery) return c.json({ error: "Gallery not found" }, 404);
     if (!gallery.editResultsKeyHash || !Number(gallery.editResultsPhotoCount || 0)) return c.json({ error: "Edited photos are not available." }, 404);
-    if (editResultsExpired(gallery.editResultsExpiresAt)) return c.json({ error: "Edited photos access has expired. Please contact the photographer." }, 401);
+    if (editResultsExpired(gallery.editResultsExpiresAt)) return c.json({ error: "Edited photos access has expired. Please contact the photographer.", code: "EDIT_RESULTS_EXPIRED" }, 403);
+    if (gallery.editResultsStatus !== "open") return c.json({ error: "Edited photos access is closed. Please contact the photographer.", code: "EDIT_RESULTS_CLOSED" }, 403);
     const token = c.req.query("token") || c.req.header("x-edit-results-token") || "";
     if (!token || !await verifyEditResultsToken(token, gallery.id, Number(gallery.editResultsVersion || 0), gallery.editResultsExpiresAt || null)) {
         return c.json({ error: "Download access expired. Enter the edited photos password again." }, 401);
@@ -1587,12 +1620,14 @@ publicGalleriesRouter.get("/:id/edit-results", async (c) => {
     if (access instanceof Response) return access;
     const gallery = await galleryOne<{ editResultsPublishedAt?: string | null; editResultsExpiresAt?: string | null; archiveFilename?: string | null; archiveDownloadUrl?: string | null }>("SELECT edit_results_published_at as \"editResultsPublishedAt\", edit_results_expires_at as \"editResultsExpiresAt\", edit_results_zip_filename as \"archiveFilename\", edit_results_zip_download_url as \"archiveDownloadUrl\" FROM galleries WHERE id = ?", [access.galleryId]);
     const photos = await galleryAll<Record<string, unknown>>(`
-        SELECT drive_file_id as "driveFileId", filename, mime_type as "mimeType", width, height, display_order as "displayOrder", web_content_link as "downloadUrl", before_photo as "beforePhoto"
+        SELECT drive_file_id as "driveFileId", filename, mime_type as "mimeType", width, height, display_order as "displayOrder", web_content_link as "downloadUrl", before_photo as "beforePhoto", folder_id as "folderId"
         FROM gallery_edit_result_photos WHERE gallery_id = ? ORDER BY display_order, filename
     `, [access.galleryId]);
+    const folders = await galleryAll<DriveFolder>('SELECT drive_folder_id as id, parent_id as "parentId", name FROM gallery_edit_result_folders WHERE gallery_id = ? ORDER BY name, drive_folder_id', [access.galleryId]);
     c.header("Cache-Control", "no-store");
     return c.json({
         publishedAt: gallery?.editResultsPublishedAt || null,
+        folders: folders.map((folder) => ({ id: folder.id, parentId: folder.parentId, name: folder.name })),
         expiresAt: gallery?.editResultsExpiresAt || null,
         expiresIn: editResultsExpiresIn(gallery?.editResultsExpiresAt),
         archive: gallery?.archiveFilename && gallery.archiveDownloadUrl
@@ -1601,8 +1636,13 @@ publicGalleriesRouter.get("/:id/edit-results", async (c) => {
         photos: photos.map((photo) => {
             const path = `/api/public/galleries/${encodeURIComponent(c.req.param("id"))}/edit-results/photos/${encodeURIComponent(String(photo.driveFileId))}`;
             const query = `?token=${encodeURIComponent(access.token)}`;
-            const { beforePhoto, ...publicPhoto } = photo;
-            return { ...publicPhoto, thumbnailUrl: `${path}/thumbnail${query}`, previewUrl: `${path}/preview${query}`, comparison: readBeforePhoto(beforePhoto) ? { thumbnailUrl: `${path}/before/thumbnail${query}`, previewUrl: `${path}/before/preview${query}` } : null };
+            return {
+                driveFileId: photo.driveFileId, filename: photo.filename, mimeType: photo.mimeType,
+                width: photo.width, height: photo.height, displayOrder: photo.displayOrder,
+                downloadUrl: photo.downloadUrl, folderId: photo.folderId ?? null,
+                thumbnailUrl: `${path}/thumbnail${query}`, previewUrl: `${path}/preview${query}`,
+                comparison: readBeforePhoto(photo.beforePhoto) ? { thumbnailUrl: `${path}/before/thumbnail${query}`, previewUrl: `${path}/before/preview${query}` } : null,
+            };
         }),
     });
 });
@@ -1667,7 +1707,7 @@ publicGalleriesRouter.post("/:id/verify", async (c) => {
     const pin = String(body.pin || "").trim();
     const gallery = await galleryOne<GalleryRow>(`
         SELECT id, title, drive_folder_id as "driveFolderId", pin_hash as "pinHash", status,
-               created_at as "createdAt", updated_at as "updatedAt", synced_at as "syncedAt", access_version as "accessVersion", contact_whatsapp_url as "contactWhatsappUrl", max_selections as "maxSelections", additional_selection_limit as "additionalSelectionLimit", edit_addon_status as "editAddonStatus", edit_addon_pricing_mode as "editAddonPricingMode", edit_addon_price as "editAddonPrice", qris_enabled as "qrisEnabled", edit_results_photo_count as "editResultsPhotoCount", tutorial_before_drive_file_id as "tutorialBeforeDriveFileId", tutorial_after_drive_file_id as "tutorialAfterDriveFileId", tutorial_before_2_drive_file_id as "tutorialBefore2DriveFileId", tutorial_after_2_drive_file_id as "tutorialAfter2DriveFileId", tutorial_before_3_drive_file_id as "tutorialBefore3DriveFileId", tutorial_after_3_drive_file_id as "tutorialAfter3DriveFileId",
+               created_at as "createdAt", updated_at as "updatedAt", synced_at as "syncedAt", access_version as "accessVersion", contact_whatsapp_url as "contactWhatsappUrl", max_selections as "maxSelections", additional_selection_limit as "additionalSelectionLimit", edit_addon_status as "editAddonStatus", edit_addon_pricing_mode as "editAddonPricingMode", edit_addon_price as "editAddonPrice", qris_enabled as "qrisEnabled", edit_results_status as "editResultsStatus", edit_results_photo_count as "editResultsPhotoCount", tutorial_before_drive_file_id as "tutorialBeforeDriveFileId", tutorial_after_drive_file_id as "tutorialAfterDriveFileId", tutorial_before_2_drive_file_id as "tutorialBefore2DriveFileId", tutorial_after_2_drive_file_id as "tutorialAfter2DriveFileId", tutorial_before_3_drive_file_id as "tutorialBefore3DriveFileId", tutorial_after_3_drive_file_id as "tutorialAfter3DriveFileId",
                photo_count as "photoCount", selection_count as "selectionCount", selection_duration_days as "selectionDurationDays", selection_duration_hours as "selectionDurationHours", selection_deadline_at as "selectionDeadlineAt"
         FROM galleries WHERE ${lookup.sql}
     `, lookup.params);

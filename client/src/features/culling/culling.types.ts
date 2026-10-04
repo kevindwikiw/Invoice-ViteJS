@@ -1,6 +1,7 @@
 // File: src/features/culling/culling.types.ts
 
 export type GalleryStatus = 'draft' | 'open' | 'closed';
+export type GalleryMode = 'selection' | 'edited';
 export type AddonStatus = 'none' | 'pending' | 'quoted' | 'approved' | 'paid' | 'completed' | 'cancelled';
 export type AddonPricingMode = 'per_photo' | 'package';
 
@@ -53,6 +54,8 @@ export interface GallerySummary {
     editResultsAccessDurationHours?: number | null;
     editResultsExpiresAt?: string | null;
     editResultsPhotoCount?: number;
+    editResultsStatus?: GalleryStatus;
+    editResultsIsExpired?: boolean;
     hasEditResults?: boolean;
 }
 
@@ -129,6 +132,7 @@ export interface PublicGallery {
 }
 
 export interface EditResultPhoto extends GalleryDisplayPhoto {
+    folderId?: string | null;
     mimeType: string;
     thumbnailUrl: string;
     previewUrl: string;
@@ -141,6 +145,7 @@ export type PairingPhoto = { driveFileId: string; filename: string; thumbnailUrl
 export type EditResultPairing = { comparisonEnabled: boolean; comparisonPairs: EditResultPair[]; submitted: PairingPhoto[]; edited: PairingPhoto[] };
 
 export interface EditResults {
+    folders?: Array<{ id: string; parentId: string | null; name: string }>;
     photos: EditResultPhoto[];
     publishedAt: string;
     expiresAt: string | null;

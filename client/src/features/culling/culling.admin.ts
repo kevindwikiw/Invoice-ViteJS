@@ -16,10 +16,11 @@ import type {
     EditPackage 
 } from './culling.types';
 
-export async function listGalleries(input: { page?: number; pageSize?: number; status?: 'all' | GalleryStatus; search?: string } = {}): Promise<GalleryListResponse> {
+export async function listGalleries(input: { mode?: 'selection' | 'edited'; page?: number; pageSize?: number; status?: 'all' | GalleryStatus; search?: string } = {}): Promise<GalleryListResponse> {
     const params = new URLSearchParams({
         page: String(input.page || 1),
         pageSize: String(input.pageSize || 10),
+        mode: input.mode || 'selection',
     });
     if (input.status && input.status !== 'all') params.set('status', input.status);
     if (input.search?.trim()) params.set('search', input.search.trim());
@@ -51,7 +52,7 @@ export async function createGallery(input: { title: string; driveFolderUrl: stri
     return response.json();
 }
 
-export async function updateGallery(input: { id: number; title?: string; comparisonEnabled?: boolean; comparisonPairs?: EditResultPair[]; driveFolderId?: string; driveFolderUrl?: string; editResultsFolderId?: string; editResultsZipFileId?: string; editResultsAccessDurationHours?: number | null; pin?: string; status?: GalleryStatus; contactWhatsappUrl?: string; maxSelections?: number; selectionDurationHours?: number; additionalSelectionLimit?: number; editAddonStatus?: string; editAddonPricingMode?: string; editAddonPrice?: number; editAddonPackageId?: number | null; qrisEnabled?: boolean; tutorialBeforeDriveFileId?: string; tutorialAfterDriveFileId?: string; tutorialBefore2DriveFileId?: string; tutorialAfter2DriveFileId?: string; tutorialBefore3DriveFileId?: string; tutorialAfter3DriveFileId?: string }): Promise<void> {
+export async function updateGallery(input: { id: number; editResultsStatus?: GalleryStatus; title?: string; comparisonEnabled?: boolean; comparisonPairs?: EditResultPair[]; driveFolderId?: string; driveFolderUrl?: string; editResultsFolderId?: string; editResultsZipFileId?: string; editResultsAccessDurationHours?: number | null; pin?: string; status?: GalleryStatus; contactWhatsappUrl?: string; maxSelections?: number; selectionDurationHours?: number; additionalSelectionLimit?: number; editAddonStatus?: string; editAddonPricingMode?: string; editAddonPrice?: number; editAddonPackageId?: number | null; qrisEnabled?: boolean; tutorialBeforeDriveFileId?: string; tutorialAfterDriveFileId?: string; tutorialBefore2DriveFileId?: string; tutorialAfter2DriveFileId?: string; tutorialBefore3DriveFileId?: string; tutorialAfter3DriveFileId?: string }): Promise<void> {
     const { id, ...body } = input;
     const response = await fetchWithAuth(`/galleries/${id}`, {
         method: 'PATCH',
@@ -161,7 +162,7 @@ export async function getEditResultPairing(id: number): Promise<EditResultPairin
     return response.json();
 }
 
-export async function publishEditResults(input: { id: number; password: string }): Promise<{ publishedAt: string; expiresAt: string | null; expiresIn: number | null; photoCount: number; warnings?: string[] }> {
+export async function publishEditResults(input: { id: number; password: string }): Promise<{ publishedAt: string; expiresAt: string | null; expiresIn: number | null; photoCount: number; folderCount?: number; warnings?: string[] }> {
     const response = await fetchWithAuth(`/galleries/${input.id}/edit-results/publish`, {
         method: 'POST',
         body: JSON.stringify({ password: input.password }),

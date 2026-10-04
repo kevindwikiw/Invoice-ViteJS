@@ -1,4 +1,5 @@
 import { createClient, type InValue } from "@tursodatabase/serverless/compat";
+import { galleryRows } from "./gallery-rows";
 import { all, databaseDriver, insertReturningId, one, run, sqlite, type RunResult } from "./runtime";
 
 const galleryDatabaseUrl = process.env.GALLERY_DATABASE_URL?.trim() || process.env.TURSO_DATABASE_URL?.trim();
@@ -15,6 +16,12 @@ const GALLERY_COUNTER_BACKFILL_KEY = "gallery_counter_backfill_v1";
 const GALLERY_DURATION_HOURS_BACKFILL_KEY = "gallery_duration_hours_backfill_v1";
 const EDIT_RESULTS_DURATION_BACKFILL_KEY = "edit_results_expiry_duration_backfill_v1";
 const EDIT_RESULTS_EXPIRY_BACKFILL_KEY = "edit_results_publication_expiry_backfill_v2";
+const EDIT_RESULTS_STATUS_BACKFILL_KEY = "edit_results_status_v1";
+const EDIT_RESULTS_STATUS_BACKFILL_SQL = `UPDATE galleries SET edit_results_status = CASE
+    WHEN edit_results_key_hash IS NULL OR edit_results_photo_count = 0 THEN 'draft'
+    WHEN edit_results_expires_at IS NOT NULL AND datetime(edit_results_expires_at) <= datetime('now') THEN 'closed'
+    ELSE 'open' END
+    WHERE NOT EXISTS (SELECT 1 FROM gallery_settings WHERE key = '${EDIT_RESULTS_STATUS_BACKFILL_KEY}')`;
 const GALLERY_COUNTER_BACKFILL_SQL = `
     UPDATE galleries
     SET photo_count = (SELECT COUNT(*) FROM gallery_photos WHERE gallery_id = galleries.id),
@@ -139,12 +146,20 @@ const GALLERY_SCHEMA = [
         web_content_link TEXT NOT NULL,
         resource_key TEXT,
         before_photo TEXT,
+        folder_id TEXT,
         width INTEGER,
         height INTEGER,
         display_order INTEGER NOT NULL DEFAULT 0,
         PRIMARY KEY (gallery_id, drive_file_id)
     )`,
     "CREATE INDEX IF NOT EXISTS idx_gallery_edit_result_photos_order ON gallery_edit_result_photos(gallery_id, display_order)",
+    `CREATE TABLE IF NOT EXISTS gallery_edit_result_folders (
+        gallery_id INTEGER NOT NULL REFERENCES galleries(id) ON DELETE CASCADE,
+        drive_folder_id TEXT NOT NULL,
+        parent_id TEXT,
+        name TEXT NOT NULL,
+        PRIMARY KEY (gallery_id, drive_folder_id)
+    )`,
     `CREATE TABLE IF NOT EXISTS face_index_jobs (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         gallery_id INTEGER NOT NULL REFERENCES galleries(id) ON DELETE CASCADE,
@@ -203,6 +218,7 @@ const GALLERY_SCHEMA = [
 ];
 
 const GALLERY_REQUIRED_COLUMNS: Array<readonly [string, string]> = [
+    ["edit_results_status", "TEXT NOT NULL DEFAULT 'draft'"],
     ["edit_results_access_duration_hours", "INTEGER"],
     ["edit_results_expires_at", "TEXT"],
     ["public_key", "TEXT"],
@@ -272,7 +288,7 @@ const FACE_INDEX_PHOTO_REQUIRED_COLUMNS: Array<readonly [string, string]> = [
     ["is_solo", "INTEGER NOT NULL DEFAULT 0"],
 ];
 
-const EDIT_RESULT_REQUIRED_COLUMNS: Array<readonly [string, string]> = [["before_photo", "TEXT"]];
+const EDIT_RESULT_REQUIRED_COLUMNS: Array<readonly [string, string]> = [["before_photo", "TEXT"], ["folder_id", "TEXT"]];
 
 type GalleryTableWithMigrations = "galleries" | "gallery_selections" | "gallery_photos" | "face_index_jobs" | "face_index_photos" | "gallery_edit_result_photos";
 
@@ -353,6 +369,10 @@ async function initializeGalleryStorage(): Promise<void> {
                 { sql: "INSERT INTO gallery_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO NOTHING", args: [EDIT_RESULTS_EXPIRY_BACKFILL_KEY, new Date().toISOString()] },
             ], "write");
         }
+        await galleryTurso.batch([
+            { sql: EDIT_RESULTS_STATUS_BACKFILL_SQL, args: [] },
+            { sql: "INSERT INTO gallery_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO NOTHING", args: [EDIT_RESULTS_STATUS_BACKFILL_KEY, new Date().toISOString()] },
+        ], "write");
         const rows = await galleryTurso.execute("SELECT id FROM galleries WHERE public_key IS NULL OR public_key = ''");
         for (const row of rows.rows as unknown as Array<{ id: number }>) {
             await galleryTurso.execute({ sql: "UPDATE galleries SET public_key = ? WHERE id = ?", args: [crypto.randomUUID().replaceAll("-", ""), row.id] });
@@ -396,6 +416,10 @@ async function initializeGalleryStorage(): Promise<void> {
         await run(GALLERY_DURATION_HOURS_BACKFILL_SQL);
         await run("INSERT INTO gallery_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO NOTHING", [GALLERY_DURATION_HOURS_BACKFILL_KEY, new Date().toISOString()]);
     }
+    sqlite!.transaction(() => {
+        sqlite!.run(EDIT_RESULTS_STATUS_BACKFILL_SQL);
+        sqlite!.run("INSERT INTO gallery_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO NOTHING", [EDIT_RESULTS_STATUS_BACKFILL_KEY, new Date().toISOString()]);
+    })();
     const rows = await all<{ id: number }>("SELECT id FROM galleries WHERE public_key IS NULL OR public_key = ''");
     for (const row of rows) await run("UPDATE galleries SET public_key = ? WHERE id = ?", [crypto.randomUUID().replaceAll("-", ""), row.id]);
 }
@@ -415,7 +439,7 @@ export async function galleryAll<T = Record<string, unknown>>(
     await ensureGalleryStorage();
     if (!galleryTurso) return all<T>(query, params);
     const result = await galleryTurso.execute({ sql: query, args: tursoArgs(params) });
-    return result.rows as unknown as T[];
+    return galleryRows<T>(result.columns, result.rows);
 }
 
 export async function galleryOne<T = Record<string, unknown>>(
