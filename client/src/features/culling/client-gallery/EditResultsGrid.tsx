@@ -149,6 +149,7 @@ export function EditResultsGrid({
     }, [results.isSuccess, requestedFolder, folderId, navigate]);
     const photos = useMemo(() => (results.data?.photos ?? []).filter((photo) => (photo.folderId ?? null) === folderId), [results.data?.photos, folderId]);
     const archive = results.data?.archive;
+    const galleryTitle = accessStatus.data?.title?.trim();
     const accessError = (results.error || verify.error) as (Error & { code?: string }) | null;
     const unavailable = accessStatus.data?.available === false || accessError?.code === 'EDIT_RESULTS_CLOSED' || accessError?.code === 'EDIT_RESULTS_EXPIRED';
     const accessExpired = accessStatus.data?.isExpired || accessError?.code === 'EDIT_RESULTS_EXPIRED';
@@ -242,6 +243,10 @@ export function EditResultsGrid({
             {downloadError && <div ref={downloadAlertRef} role="alert" tabIndex={-1} className="fixed inset-x-3 bottom-3 z-[140] mx-auto flex max-w-lg items-start gap-3 rounded-md border border-rose-500/40 bg-[var(--bg-card)] px-4 py-3 text-sm text-rose-400 shadow-2xl outline-none focus-visible:ring-2 focus-visible:ring-rose-400 sm:bottom-5">
                 <AlertCircle size={17} aria-hidden="true" className="mt-0.5 shrink-0" /><span className="min-w-0 flex-1">{downloadError}</span><button type="button" onClick={() => setDownloadError('')} aria-label="Dismiss download error" className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md hover:bg-[var(--bg-elevated)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)]"><X size={15} aria-hidden="true" /></button>
             </div>}
+            {galleryTitle && <header className={clsx('min-w-0', folders.length > 0 ? 'mb-1' : 'mb-5')}>
+                <p className="mb-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-[var(--text-muted)] sm:text-[11px]">Edited Photos</p>
+                <h1 className="max-w-3xl break-words font-display text-xl font-semibold text-[var(--text-primary)] [text-wrap:balance] sm:text-2xl">{galleryTitle}</h1>
+            </header>}
             {folders.length > 0 && <nav aria-label="Edited photo folders" className="mb-4 flex flex-wrap items-center gap-1 text-sm text-[var(--text-secondary)]">
                 <Link from="/culling/$galleryId" search={(current) => ({ ...current, view: 'edit-results', folder: undefined, editedPage: 1 })} replace={false} resetScroll={false} onClick={closePhoto} aria-current={!folderId ? 'page' : undefined} className="inline-flex min-h-11 items-center rounded px-2 font-semibold hover:text-[var(--text-primary)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)]">Edited Photos</Link>
                 {breadcrumbs.map((folder) => <span key={folder.id} className="flex min-w-0 max-w-full items-center gap-1">
@@ -307,7 +312,7 @@ export function EditResultsGrid({
         </header>
         <div data-testid="gallery-toolbar" className="sticky top-14 z-30 border-b border-[var(--border)] bg-[var(--bg-deep)] px-2 py-1.5 sm:px-8 sm:py-2">
             <div className="mx-auto flex max-w-[1600px] items-center gap-1 sm:gap-x-2">
-                {deliveryOnly ? <p className="min-w-0 flex-1 truncate px-1 text-sm font-semibold text-[var(--text-primary)]" title={accessStatus.data?.title}>{accessStatus.data?.title || 'Edited Photos'}</p> : <GalleryViewTabs value="edit-results" galleryAvailable={Boolean(onRequestSelectionAccess)} editedAvailable onAllPhotos={() => { closePhoto(); onRequestSelectionAccess?.(); }} onChange={(view) => { if (view !== 'edit-results') return; closePhoto(); onViewChange?.(view); }} />}
+                {deliveryOnly ? <p className="min-w-0 flex-1 truncate px-1 text-sm font-semibold text-[var(--text-primary)]">Edited Photos</p> : <GalleryViewTabs value="edit-results" galleryAvailable={Boolean(onRequestSelectionAccess)} editedAvailable onAllPhotos={() => { closePhoto(); onRequestSelectionAccess?.(); }} onChange={(view) => { if (view !== 'edit-results') return; closePhoto(); onViewChange?.(view); }} />}
                 {deliveryActions && <div className="ml-auto min-w-0">{deliveryActions}</div>}
             </div>
         </div>

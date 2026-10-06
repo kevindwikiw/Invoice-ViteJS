@@ -156,12 +156,20 @@ for (const claims of [{ ...editedClaims, exp: 1 }, { ...editedClaims, gid: 2 }])
     assert.equal((await request(`/public/gallery/edit-results/photos/color/before/preview?token=${invalidPayload}.${validSignature}`)).status, 401);
 }
 folderSnapshot = [{ id: 'no-watermark', parentId: null, name: 'No Watermark' }, { id: 'empty', parentId: 'no-watermark', name: 'Empty' }];
-assert.equal((await request('/admin/1/edit-results/publish', 'POST', { password: 'delivery-pass' })).status, 201);
+const nestedCandidates = await json(await request('/admin/1/edit-results/pairing'));
+assert.deepEqual((nestedCandidates.edited as any[]).map((photo) => photo.driveFileId), ['color']);
+const nestedPairResponse = await request('/admin/1', 'PATCH', { comparisonPairs: [{ editedDriveFileId: 'bw', beforeDriveFileId: 'before-a' }] });
+assert.equal(nestedPairResponse.status, 400);
+assert.match((await nestedPairResponse.json() as any).error, /root folder/);
+const nestedPublish = await request('/admin/1/edit-results/publish', 'POST', { password: 'delivery-pass' });
+assert.equal(nestedPublish.status, 201);
+assert.equal((await json(nestedPublish)).comparisonCount, 1);
 assert.equal((await listing()).status, 401);
 token = await login();
 const nested = await (await listing()).json() as any;
 assert.deepEqual(nested.folders, [...folderSnapshot].sort((a, b) => a.name.localeCompare(b.name)));
 assert.equal(nested.photos.find((photo: any) => photo.driveFileId === 'bw').folderId, 'no-watermark');
+assert.equal(nested.photos.find((photo: any) => photo.driveFileId === 'bw').comparison, null);
 assert.equal(nested.photos.find((photo: any) => photo.driveFileId === 'color').folderId, null);
 treeFails = true;
 const previousError = console.error;

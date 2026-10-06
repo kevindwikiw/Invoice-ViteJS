@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import clsx from 'clsx';
 import { Check, ChevronLeft, ChevronRight, ImageOff, Loader2, Search, X } from 'lucide-react';
@@ -35,15 +35,14 @@ function PairEditor({ data, initialPairs, onApply }: { data: EditResultPairing; 
     ))), [data.edited, initialMap]);
     const [anchors, setAnchors] = useState<Record<string, string>>(() => Object.fromEntries(Object.entries(initialMap).filter(([editedId]) => !initialVariants.has(editedId))));
     const [variants, setVariants] = useState<Set<string>>(() => initialVariants);
-    const [suppressed, setSuppressed] = useState<Set<string>>(new Set());
+    const [suppressed, setSuppressed] = useState<Set<string>>(() => new Set(data.comparisonEnabled
+        ? data.edited.filter((photo) => !initialMap[photo.driveFileId]).map((photo) => photo.driveFileId)
+        : []));
     const [page, setPage] = useState(0);
     const [choosing, setChoosing] = useState<string | null>(null);
     const [search, setSearch] = useState('');
     const [sourcePage, setSourcePage] = useState(0);
-    const [pairingError, setPairingError] = useState('');
     const [announcement, setAnnouncement] = useState('');
-    const [focusEditedId, setFocusEditedId] = useState<string | null>(null);
-    const rowRefs = useRef(new Map<string, HTMLElement>());
     const beforeIndexes = useMemo(() => new Map(data.submitted.map((photo, index) => [photo.driveFileId, index])), [data.submitted]);
 
     const resolved = useMemo(() => {
@@ -90,7 +89,7 @@ function PairEditor({ data, initialPairs, onApply }: { data: EditResultPairing; 
     const appliedKey = useMemo(() => initialPairs.map((pair) => `${pair.editedDriveFileId}:${pair.beforeDriveFileId}`).sort().join('|'), [initialPairs]);
     const currentKey = Object.entries(resolved.pairs).map(([editedId, beforeId]) => `${editedId}:${beforeId}`).sort().join('|');
     const isDirty = currentKey !== appliedKey;
-    const needsReview = data.edited.filter((photo) => !resolved.pairs[photo.driveFileId]);
+    const withoutBefore = data.edited.filter((photo) => !resolved.pairs[photo.driveFileId]);
 
     const clearAnchorsFrom = (index: number, replacement?: [string, string]) => setAnchors((current) => {
         const next = { ...current };
@@ -104,7 +103,6 @@ function PairEditor({ data, initialPairs, onApply }: { data: EditResultPairing; 
         clearAnchorsFrom(index, [editedId, beforeId]);
         setVariants((current) => { const next = new Set(current); next.delete(editedId); return next; });
         setSuppressed((current) => { const next = new Set(current); next.delete(editedId); return next; });
-        setPairingError('');
         setAnnouncement(`${data.edited[index]?.filename || 'Edited photo'} paired manually. Following suggestions were realigned.`);
         setChoosing(null);
     };
@@ -115,29 +113,12 @@ function PairEditor({ data, initialPairs, onApply }: { data: EditResultPairing; 
         clearAnchorsFrom(index);
         setVariants((current) => { const next = new Set(current); marking ? next.add(editedId) : next.delete(editedId); return next; });
         setSuppressed((current) => { const next = new Set(current); next.delete(editedId); return next; });
-        setPairingError('');
         setAnnouncement(`${data.edited[index]?.filename || 'Edited photo'} ${marking ? 'marked as a B&W variant' : 'changed back to a standard edit'}. Following suggestions were realigned.`);
     };
-
-    useEffect(() => {
-        if (!focusEditedId) return;
-        const frame = requestAnimationFrame(() => {
-            rowRefs.current.get(focusEditedId)?.focus({ preventScroll: false });
-            setFocusEditedId(null);
-        });
-        return () => cancelAnimationFrame(frame);
-    }, [focusEditedId, page]);
 
     return <form id="edit-result-pairs-form" onSubmit={(event) => {
         event.preventDefault();
         if (choosing) return;
-        if (needsReview.length) {
-            const first = needsReview[0]!;
-            setPairingError(`${needsReview.length} edited ${needsReview.length === 1 ? 'photo needs' : 'photos need'} a pair. Mark B&W variants so every edited photo has a Before photo.`);
-            setPage(Math.floor(data.edited.findIndex((photo) => photo.driveFileId === first.driveFileId) / pageSize));
-            setFocusEditedId(first.driveFileId);
-            return;
-        }
         onApply(Object.entries(resolved.pairs).map(([editedDriveFileId, beforeDriveFileId]) => ({ editedDriveFileId, beforeDriveFileId })));
     }} className="space-y-4">
         <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--border)] pb-4">
@@ -146,12 +127,11 @@ function PairEditor({ data, initialPairs, onApply }: { data: EditResultPairing; 
                 <div><dt className="inline text-[var(--text-muted)]">Edited </dt><dd className="inline font-semibold">{data.edited.length}</dd></div>
                 <div><dt className="inline text-[var(--text-muted)]">Paired </dt><dd className="inline font-semibold text-emerald-500">{Object.keys(resolved.pairs).length}</dd></div>
                 <div><dt className="inline text-[var(--text-muted)]">B&W </dt><dd className="inline font-semibold">{variants.size}</dd></div>
-                <div><dt className="inline text-[var(--text-muted)]">Needs Review </dt><dd className="inline font-semibold text-amber-500">{needsReview.length}</dd></div>
+                <div><dt className="inline text-[var(--text-muted)]">Edited Only </dt><dd className="inline font-semibold">{withoutBefore.length}</dd></div>
             </dl>
             <span role="status" aria-live="polite" className="text-xs text-[var(--text-muted)]">{isDirty ? 'Pairing changes not applied' : 'Pairing changes applied'}</span>
         </div>
         <span role="status" aria-live="polite" className="sr-only">{announcement}</span>
-        {pairingError && <p role="alert" className="rounded-md border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-sm text-rose-500">{pairingError}</p>}
 
         {choosing ? <section aria-label="Choose Submitted Photo" className="space-y-4">
             <div className="flex items-center gap-3"><button type="button" className={control} onClick={() => setChoosing(null)} aria-label="Back to Pairs"><ChevronLeft size={18} aria-hidden="true" /></button><h3 className="min-w-0 truncate text-sm font-semibold">{selected?.filename}</h3></div>
@@ -168,18 +148,18 @@ function PairEditor({ data, initialPairs, onApply }: { data: EditResultPairing; 
                     const beforeId = resolved.pairs[photo.driveFileId];
                     const before = data.submitted.find((candidate) => candidate.driveFileId === beforeId);
                     const source = resolved.sources[photo.driveFileId];
-                    const status = source === 'variant' ? 'B&W variant · Same Before as above' : source === 'saved' ? 'Saved pair' : source === 'manual' ? 'Selected manually' : source === 'auto' ? 'Auto-paired by order' : 'Needs review';
+                    const status = source === 'variant' ? 'B&W variant · Same Before as above' : source === 'saved' ? 'Saved pair' : source === 'manual' ? 'Selected manually' : source === 'auto' ? 'Auto-paired by order' : 'Edited only · No Before / After';
                     const canMarkVariant = editedIndex > 0 && Boolean(resolved.pairs[data.edited[editedIndex - 1]!.driveFileId]);
-                    return <article key={photo.driveFileId} ref={(element) => { if (element) rowRefs.current.set(photo.driveFileId, element); else rowRefs.current.delete(photo.driveFileId); }} tabIndex={-1} className="scroll-mt-4 py-4 outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]" aria-label={`Pair ${photo.filename}`}>
+                    return <article key={photo.driveFileId} className="py-4" aria-label={`Pair ${photo.filename}`}>
                         <div className="grid grid-cols-2 gap-3">
                             <div className="min-w-0"><Thumbnail photo={photo} /><p className="mt-2 truncate text-xs font-semibold" title={photo.filename}>{photo.filename}</p><p className="mt-1 text-xs text-[var(--text-muted)]">Edited</p></div>
                             <div className="min-w-0">{before ? <Thumbnail key={before.driveFileId} photo={before} /> : <div className="flex aspect-[4/3] items-center justify-center bg-[var(--bg-elevated)] px-3 text-center text-xs text-[var(--text-muted)]">No Before Photo</div>}<p className="mt-2 truncate text-xs" title={before?.filename}>{before ? `#${data.submitted.indexOf(before) + 1} ${before.filename}` : 'Unpaired'}</p><p className={source ? 'mt-1 text-xs text-[var(--text-muted)]' : 'mt-1 text-xs font-semibold text-amber-500'}>{status}</p></div>
                         </div>
-                        {!before && <p className="mt-3 text-xs leading-5 text-amber-500">No source photo left. Mark the matching B&W version above to realign these pairs.</p>}
+                        {!before && <p className="mt-3 text-xs leading-5 text-[var(--text-muted)]">This photo will be published without Before / After.</p>}
                         <div className="mt-3 flex flex-wrap gap-2">
                             <button type="button" className={control} onClick={() => { setChoosing(photo.driveFileId); setSearch(''); setSourcePage(0); }}>Choose Before</button>
                             <button type="button" aria-pressed={variants.has(photo.driveFileId)} disabled={!variants.has(photo.driveFileId) && !canMarkVariant} title={!variants.has(photo.driveFileId) && !canMarkVariant ? 'A B&W variant needs a paired edited photo above it.' : undefined} className={clsx(control, variants.has(photo.driveFileId) && 'border-[var(--accent)] bg-[var(--bg-elevated)] text-[var(--accent)]')} onClick={() => toggleVariant(photo.driveFileId)}><Check size={16} aria-hidden="true" /> B&W Variant</button>
-                            {before && <button type="button" className={control} aria-label={`Remove pair for ${photo.filename}`} onClick={() => { clearAnchorsFrom(editedIndex); setVariants((current) => { const next = new Set(current); next.delete(photo.driveFileId); return next; }); setSuppressed((current) => new Set(current).add(photo.driveFileId)); setPairingError(''); }}><X size={16} aria-hidden="true" /></button>}
+                            {before && <button type="button" className={control} aria-label={`Remove pair for ${photo.filename}`} onClick={() => { clearAnchorsFrom(editedIndex); setVariants((current) => { const next = new Set(current); next.delete(photo.driveFileId); return next; }); setSuppressed((current) => new Set(current).add(photo.driveFileId)); setAnnouncement(`${photo.filename} will be published without Before / After.`); }}><X size={16} aria-hidden="true" /></button>}
                         </div>
                     </article>;
                 })}

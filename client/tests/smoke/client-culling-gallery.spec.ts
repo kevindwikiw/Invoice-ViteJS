@@ -201,6 +201,7 @@ test('opens photo 101 on page 2 by driveFileId and keeps the full frame above th
     });
 
     await page.goto(`/culling/${galleryId}`);
+    await expect(page.getByRole('heading', { level: 1, name: 'Full Frame Test Gallery' })).toBeVisible();
     await expect(page.getByRole('button', { name: /^Open photo-/ })).toHaveCount(54);
     const grid = page.getByTestId('gallery-grid');
     await expect(grid.locator('img[fetchpriority="high"]')).toHaveCount(1);
@@ -221,6 +222,7 @@ test('opens photo 101 on page 2 by driveFileId and keeps the full frame above th
     await expectCompactCountdown(page, 390, 844);
     await page.screenshot({ path: 'test-results/culling-local-fonts-mobile.png' });
     await expectCompactCountdown(page, 1440, 900);
+    await expect(page.getByText('Photo Selection', { exact: true })).toBeVisible();
     await expectSubmissionActionLayout(page, false);
     await page.screenshot({ path: 'test-results/culling-local-fonts-desktop.png' });
     await expectMobileGalleryViewport(page, 414, 896);

@@ -720,6 +720,14 @@ function SelectionCullingGallery() {
                         )}
                     </div>
 
+                    {activeTab !== 'edit-results' && displayGallery?.title && <>
+                        <h1 className="sr-only lg:hidden">{displayGallery.title}</h1>
+                        <div className="hidden min-w-0 items-center gap-3 border-l border-[var(--border)] pl-3 lg:flex">
+                            <span className="shrink-0 text-[10px] font-semibold uppercase tracking-[0.14em] text-[var(--text-muted)]">Photo Selection</span>
+                            <h1 className="max-w-[min(30vw,30rem)] truncate font-serif text-sm font-semibold text-[var(--text-primary)]" title={displayGallery.title}>{displayGallery.title}</h1>
+                        </div>
+                    </>}
+
                     <div className="ml-auto flex min-w-0 shrink-0 items-center gap-2">
                         {requestMoreUrl && shouldShowRequestMore && (
                             <button

@@ -566,7 +566,7 @@ test('comparison pairing auto-pairs equal counts without a confirmation step', a
             if (route.request().method() === 'PATCH') { gallery = { ...gallery, ...route.request().postDataJSON() }; return route.fulfill({ json: { status: 'updated' } }); }
             return route.fulfill({ json: { gallery, photos: [], selections: [] } });
         });
-        await page.route('**/api/galleries/7/edit-results/pairing', (route) => route.fulfill({ json: { submitted: before, edited, comparisonPairs: gallery.comparisonPairs } }));
+        await page.route('**/api/galleries/7/edit-results/pairing', (route) => route.fulfill({ json: { submitted: before, edited, comparisonEnabled: gallery.comparisonEnabled, comparisonPairs: gallery.comparisonPairs } }));
         await page.goto('/galleries?mode=edited');
         await page.getByText(gallery.title, { exact: true }).click();
         await page.getByRole('checkbox', { name: 'Enable Before / After' }).check();
@@ -574,12 +574,16 @@ test('comparison pairing auto-pairs equal counts without a confirmation step', a
         const dialog = page.getByRole('dialog', { name: 'Manage Pairs', exact: true });
         await expect(dialog.getByText('Auto-paired by order')).toHaveCount(2);
         await expect(dialog.getByRole('button', { name: /Confirm All/ })).toHaveCount(0);
+        await dialog.getByRole('button', { name: 'Remove pair for final-1.jpg' }).click();
+        await expect(dialog.getByRole('article', { name: 'Pair final-1.jpg' })).toContainText('Edited only · No Before / After');
         await dialog.getByRole('button', { name: 'Apply Pairs' }).click();
         await page.getByRole('button', { name: 'Save Edited Photos', exact: true }).click();
         await expect.poll(() => gallery.comparisonPairs).toEqual([
             { editedDriveFileId: 'edited-0', beforeDriveFileId: 'before-0' },
-            { editedDriveFileId: 'edited-1', beforeDriveFileId: 'before-1' },
         ]);
+        await page.getByRole('button', { name: 'Manage Pairs', exact: true }).click();
+        await expect(dialog.getByRole('article', { name: 'Pair final-1.jpg' })).toContainText('Edited only · No Before / After');
+        await dialog.getByRole('button', { name: 'Cancel', exact: true }).click();
 });
 
 test('comparison pairing realigns 70 submitted photos around a B&W variant', async ({ page }, testInfo) => {
@@ -594,7 +598,7 @@ test('comparison pairing realigns 70 submitted photos around a B&W variant', asy
             if (route.request().method() === 'PATCH') { saves++; gallery = { ...gallery, ...route.request().postDataJSON() }; return route.fulfill({ json: { status: 'updated' } }); }
             return route.fulfill({ json: { gallery, photos: [], selections: [] } });
         });
-        await page.route('**/api/galleries/7/edit-results/pairing', (route) => route.fulfill({ json: { submitted: before, edited, comparisonPairs: gallery.comparisonPairs } }));
+        await page.route('**/api/galleries/7/edit-results/pairing', (route) => route.fulfill({ json: { submitted: before, edited, comparisonEnabled: gallery.comparisonEnabled, comparisonPairs: gallery.comparisonPairs } }));
         await page.goto('/galleries?mode=edited');
         await page.getByText(gallery.title, { exact: true }).click();
         await page.getByRole('checkbox', { name: 'Enable Before / After' }).check();
@@ -602,13 +606,11 @@ test('comparison pairing realigns 70 submitted photos around a B&W variant', asy
         const dialog = page.getByRole('dialog', { name: 'Manage Pairs', exact: true });
         await expect(dialog.getByRole('article')).toHaveCount(12);
         await expect(dialog.getByText('Auto-paired by order')).toHaveCount(12);
-        await expect(dialog.getByText('Needs Review').locator('..').getByText('1', { exact: true })).toBeVisible();
-        await dialog.getByRole('button', { name: 'Apply Pairs' }).click();
-        await expect(dialog.getByRole('alert')).toContainText('1 edited photo needs a pair');
+        await expect(dialog.getByText('Edited Only').locator('..').getByText('1', { exact: true })).toBeVisible();
         const finalRow = dialog.getByRole('article', { name: 'Pair final-70.jpg' });
+        for (let index = 0; index < 5; index++) await dialog.getByRole('button', { name: 'Next Pairs' }).click();
         await expect(finalRow).toBeVisible();
-        await expect(finalRow).toBeFocused();
-        await expect(finalRow).toContainText('No source photo left');
+        await expect(finalRow).toContainText('published without Before / After');
 
         for (let index = 0; index < 4; index++) await dialog.getByRole('button', { name: 'Previous Pairs' }).click();
         const variantRow = dialog.getByRole('article', { name: 'Pair final-20.jpg' });
@@ -618,12 +620,12 @@ test('comparison pairing realigns 70 submitted photos around a B&W variant', asy
         await expect(variantRow).toContainText('B&W variant');
         await expect(variantRow).toContainText('#20 source-19.jpg');
         await expect(dialog.getByRole('article', { name: 'Pair final-21.jpg' })).toContainText('#21 source-20.jpg');
-        await expect(dialog.getByText('Needs Review').locator('..').getByText('0', { exact: true })).toBeVisible();
+        await expect(dialog.getByText('Edited Only').locator('..').getByText('0', { exact: true })).toBeVisible();
 
         await variantToggle.click();
-        await expect(dialog.getByText('Needs Review').locator('..').getByText('1', { exact: true })).toBeVisible();
+        await expect(dialog.getByText('Edited Only').locator('..').getByText('1', { exact: true })).toBeVisible();
         await variantToggle.click();
-        await expect(dialog.getByText('Needs Review').locator('..').getByText('0', { exact: true })).toBeVisible();
+        await expect(dialog.getByText('Edited Only').locator('..').getByText('0', { exact: true })).toBeVisible();
         await page.screenshot({ path: testInfo.outputPath('admin-pairs.png') });
         for (const theme of ['black', 'white']) {
             await page.evaluate((theme) => document.documentElement.classList.toggle('light', theme === 'white'), theme);

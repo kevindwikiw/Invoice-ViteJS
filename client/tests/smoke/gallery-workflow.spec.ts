@@ -1,6 +1,7 @@
 import { expect, test } from '@playwright/test';
 
 const id = 'wedding-workflow';
+const weddingClientTitle = 'Alya & Rafi Wedding Celebration at The Grand Ballroom Jakarta';
 const image = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl6z7QAAAAASUVORK5CYII=', 'base64');
 const photos = Array.from({ length: 55 }, (_, index) => ({ driveFileId: `wedding-${index}`, filename: `Wedding-${index}.jpg`, folderId: 'ceremony', width: 1200, height: 900, displayOrder: index, downloadUrl: 'https://drive.google.com/file' }));
 
@@ -16,7 +17,7 @@ for (const width of [320, 390, 1280]) {
             const path = new URL(route.request().url()).pathname;
             if (path.endsWith('/edit-results/status')) {
                 await metadataReady;
-                return route.fulfill({ json: { workflow: 'delivery_only', title: 'Alya & Rafi Wedding', available: true, status: 'open', photoCount: 55 } });
+                return route.fulfill({ json: { workflow: 'delivery_only', title: weddingClientTitle, available: true, status: 'open', photoCount: 55 } });
             }
             if (path.endsWith('/edit-results/verify')) {
                 passwordAttempts++;
@@ -45,7 +46,11 @@ for (const width of [320, 390, 1280]) {
         await page.getByRole('button', { name: 'Show edited photos password' }).click();
         await expect(password).toHaveAttribute('type', 'text');
         await page.getByRole('button', { name: 'Unlock Edited Photos' }).click();
+        const galleryHeading = page.getByRole('heading', { level: 1, name: weddingClientTitle });
+        await expect(galleryHeading).toHaveCount(1);
+        await expect(galleryHeading.locator('..').getByText('Edited Photos', { exact: true })).toBeVisible();
         await page.getByRole('link', { name: 'Open folder Ceremony' }).click();
+        await expect(page.getByRole('heading', { level: 1, name: weddingClientTitle })).toBeVisible();
         const grid = page.getByTestId('edited-gallery-grid');
         await expect(grid.locator('img')).toHaveCount(54);
         await page.getByRole('button', { name: 'Next page', exact: true }).click();

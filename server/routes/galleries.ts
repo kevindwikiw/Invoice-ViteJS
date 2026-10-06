@@ -1107,8 +1107,9 @@ adminGalleriesRouter.patch("/:id", async (c) => {
             try {
                 const { photos: edited } = await listDrivePhotoTree(editResultsFolderId);
                 const before = await submittedComparisonPhotos(id);
-                if (validComparisonPairs(pairs, new Set(edited.map((p) => p.id)), new Set(before.map((p) => p.driveFileId))).length !== pairs.length) {
-                    return c.json({ error: "A comparison photo is no longer in this gallery. Refresh Manage Pairs." }, 400);
+                const rootEditedIds = new Set(edited.filter((photo) => photo.folderId === null).map((photo) => photo.id));
+                if (validComparisonPairs(pairs, rootEditedIds, new Set(before.map((p) => p.driveFileId))).length !== pairs.length) {
+                    return c.json({ error: "Before / After is only available for edited photos in the root folder. Refresh Manage Pairs." }, 400);
                 }
             } catch { return c.json({ error: "Unable to verify comparison photos. Try again." }, 502); }
         }
@@ -1140,12 +1141,13 @@ adminGalleriesRouter.get("/:id/edit-results/pairing", async (c) => {
     if (!gallery.folder) return c.json({ error: "Save an edited photos folder first." }, 400);
     try {
         const { photos: edited } = await listDrivePhotoTree(gallery.folder);
+        const rootEdited = edited.filter((photo) => photo.folderId === null);
         const submitted = await submittedComparisonPhotos(id);
         c.header("Cache-Control", "no-store");
         return c.json({
             ...await comparisonDraft(id),
             submitted: submitted.map((photo) => ({ ...photo, thumbnailUrl: `/api/galleries/${id}/edit-results/pairing/before/${encodeURIComponent(photo.driveFileId)}/thumbnail` })),
-            edited: edited.map((photo) => ({ driveFileId: photo.id, filename: photo.name, thumbnailUrl: photo.thumbnailLink || null, width: photo.width, height: photo.height })),
+            edited: rootEdited.map((photo) => ({ driveFileId: photo.id, filename: photo.name, thumbnailUrl: photo.thumbnailLink || null, width: photo.width, height: photo.height })),
         });
     } catch { return c.json({ error: "Unable to load comparison photos from Drive." }, 502); }
 });
@@ -1251,7 +1253,8 @@ adminGalleriesRouter.post("/:id/edit-results/publish", async (c) => {
         const warnings: string[] = [];
         if (gallery.workflow !== "delivery_only" && draft.comparisonEnabled) {
             const submitted = await submittedComparisonPhotos(id);
-            const valid = validComparisonPairs(draft.comparisonPairs, new Set(photos.map((p) => p.id)), new Set(submitted.map((p) => p.driveFileId)));
+            const rootEditedIds = new Set(photos.filter((photo) => photo.folderId === null).map((photo) => photo.id));
+            const valid = validComparisonPairs(draft.comparisonPairs, rootEditedIds, new Set(submitted.map((p) => p.driveFileId)));
             const beforeIds = [...new Set(valid.map((pair) => pair.beforeDriveFileId))];
             const verified = new Map<string, BeforePhoto>();
             // Bound Drive metadata concurrency; B&W variants share one lookup.
