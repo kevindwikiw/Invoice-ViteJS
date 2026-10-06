@@ -32,18 +32,25 @@ export async function listGalleries(input: { mode?: 'selection' | 'edited'; page
     return Array.isArray(data) ? { items: data, page: 1, pageSize: data.length || 10, total: data.length, totalPages: 1 } : data;
 }
 
-export async function getGalleryContact(): Promise<{ contactWhatsappUrl: string; message: string; requestMoreMessage?: string }> {
+export type GalleryContactSettings = { contactWhatsappUrl: string; message: string; requestMoreMessage: string; tutorialBeforeDriveFileId: string; tutorialAfterDriveFileId: string; tutorialBefore2DriveFileId: string; tutorialAfter2DriveFileId: string; tutorialBefore3DriveFileId: string; tutorialAfter3DriveFileId: string };
+
+export async function getGalleryContact(): Promise<GalleryContactSettings> {
     const response = await fetchWithAuth('/galleries/settings/contact');
     if (!response.ok) throw await parseError(response, 'Unable to load gallery settings.');
     return await response.json();
 }
 
-export async function saveGalleryContact(input: { contactWhatsappUrl: string; message: string; requestMoreMessage?: string }): Promise<void> {
+export async function saveGalleryContact(input: Partial<GalleryContactSettings>): Promise<GalleryContactSettings> {
     const response = await fetchWithAuth('/galleries/settings/contact', { method: 'PATCH', body: JSON.stringify(input) });
     if (!response.ok) throw await parseError(response, 'Unable to save gallery settings.');
+    return await response.json();
 }
 
-export async function createGallery(input: { title: string; driveFolderUrl: string; pin: string; status: GalleryStatus; maxSelections: number; selectionDurationHours: number; qrisEnabled?: boolean; tutorialBeforeDriveFileId?: string; tutorialAfterDriveFileId?: string; tutorialBefore2DriveFileId?: string; tutorialAfter2DriveFileId?: string; tutorialBefore3DriveFileId?: string; tutorialAfter3DriveFileId?: string }): Promise<GallerySummary> {
+export type CreateGalleryInput =
+    | { workflow?: 'selection_delivery'; title: string; driveFolderUrl: string; pin: string; status: GalleryStatus; maxSelections: number; selectionDurationHours: number; qrisEnabled?: boolean }
+    | { workflow: 'delivery_only'; title: string; editResultsFolderId: string };
+
+export async function createGallery(input: CreateGalleryInput): Promise<GallerySummary> {
     const response = await fetchWithAuth('/galleries', {
         method: 'POST',
         body: JSON.stringify(input),
@@ -52,7 +59,7 @@ export async function createGallery(input: { title: string; driveFolderUrl: stri
     return response.json();
 }
 
-export async function updateGallery(input: { id: number; editResultsStatus?: GalleryStatus; title?: string; comparisonEnabled?: boolean; comparisonPairs?: EditResultPair[]; driveFolderId?: string; driveFolderUrl?: string; editResultsFolderId?: string; editResultsZipFileId?: string; editResultsAccessDurationHours?: number | null; pin?: string; status?: GalleryStatus; contactWhatsappUrl?: string; maxSelections?: number; selectionDurationHours?: number; additionalSelectionLimit?: number; editAddonStatus?: string; editAddonPricingMode?: string; editAddonPrice?: number; editAddonPackageId?: number | null; qrisEnabled?: boolean; tutorialBeforeDriveFileId?: string; tutorialAfterDriveFileId?: string; tutorialBefore2DriveFileId?: string; tutorialAfter2DriveFileId?: string; tutorialBefore3DriveFileId?: string; tutorialAfter3DriveFileId?: string }): Promise<void> {
+export async function updateGallery(input: { id: number; editResultsStatus?: GalleryStatus; title?: string; comparisonEnabled?: boolean; comparisonPairs?: EditResultPair[]; driveFolderId?: string; driveFolderUrl?: string; editResultsFolderId?: string; editResultsZipFileId?: string; editResultsAccessDurationHours?: number | null; pin?: string; status?: GalleryStatus; contactWhatsappUrl?: string; maxSelections?: number; selectionDurationHours?: number; additionalSelectionLimit?: number; editAddonStatus?: string; editAddonPricingMode?: string; editAddonPrice?: number; editAddonPackageId?: number | null; qrisEnabled?: boolean }): Promise<void> {
     const { id, ...body } = input;
     const response = await fetchWithAuth(`/galleries/${id}`, {
         method: 'PATCH',
@@ -168,6 +175,12 @@ export async function publishEditResults(input: { id: number; password: string }
         body: JSON.stringify({ password: input.password }),
     });
     if (!response.ok) throw await parseError(response, 'Unable to publish edited photos.');
+    return response.json();
+}
+
+export async function syncEditResults(id: number): Promise<{ status: string; photoCount: number; folderCount?: number }> {
+    const response = await fetchWithAuth(`/galleries/${id}/edit-results/sync`, { method: 'POST' });
+    if (!response.ok) throw await parseError(response, 'Unable to sync edited photos folder.');
     return response.json();
 }
 

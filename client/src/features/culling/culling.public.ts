@@ -1,7 +1,7 @@
 // File: src/features/culling/culling.public.ts
 
 import { apiFetch, apiUrl } from '../../lib/api';
-import type { EditResults, PublicGallery, PublicGalleryPhotoManifest, PublicGalleryPhotos, DiscountRule } from './culling.types';
+import type { EditResults, GalleryWorkflow, PublicGallery, PublicGalleryPhotoManifest, PublicGalleryPhotos, DiscountRule } from './culling.types';
 
 // 1. Fungsi penangkap error (digunakan oleh public dan admin)
 export class GalleryApiError extends Error {
@@ -52,7 +52,7 @@ export async function verifyGalleryPin(id: string, pin: string): Promise<{ token
     return response.json();
 }
 
-export async function getEditResultsStatus(id: string): Promise<{ available: boolean; photoCount: number; status?: 'draft' | 'open' | 'closed'; isExpired?: boolean }> {
+export async function getEditResultsStatus(id: string): Promise<{ workflow?: GalleryWorkflow; title?: string; available: boolean; photoCount: number; status?: 'draft' | 'open' | 'closed'; isExpired?: boolean }> {
     const response = await apiFetch(`/public/galleries/${encodeURIComponent(id)}/edit-results/status`);
     if (!response.ok) throw await parseError(response, 'Unable to check edited photos.');
     return response.json();
@@ -77,10 +77,14 @@ export async function getEditResults(id: string, token: string): Promise<EditRes
     }
     return {
         ...data,
-        archive: data.archive ?? null,
+        archive: data.archive ? {
+            ...data.archive,
+            downloadResolveUrl: data.archive.downloadResolveUrl || editResultArchiveResolveUrl(id, token),
+        } : null,
         folders: data.folders ?? [],
         photos: data.photos.map((photo) => ({
             ...photo,
+            downloadResolveUrl: photo.downloadResolveUrl || editResultDownloadResolveUrl(id, photo.driveFileId, token),
             thumbnailUrl: editResultImageUrl(id, photo.driveFileId, token, 'thumbnail'),
             previewUrl: editResultImageUrl(id, photo.driveFileId, token, 'preview'),
             comparison: photo.comparison ? {
@@ -89,6 +93,26 @@ export async function getEditResults(id: string, token: string): Promise<EditRes
             } : null,
         })),
     };
+}
+
+function editResultDownloadResolveUrl(galleryId: string, driveFileId: string, token: string): string {
+    const params = new URLSearchParams({ token });
+    return apiUrl(`/public/galleries/${encodeURIComponent(galleryId)}/edit-results/photos/${encodeURIComponent(driveFileId)}/download-url?${params.toString()}`);
+}
+
+function editResultArchiveResolveUrl(galleryId: string, token: string): string {
+    const params = new URLSearchParams({ token });
+    return apiUrl(`/public/galleries/${encodeURIComponent(galleryId)}/edit-results/archive/download-url?${params.toString()}`);
+}
+
+export async function resolveEditResultDownload(resolveUrl: string): Promise<{ downloadUrl: string; filename: string }> {
+    const response = await fetch(resolveUrl, { credentials: 'same-origin', headers: { Accept: 'application/json' } });
+    if (!response.ok) throw await parseError(response, 'Unable to prepare this download.');
+    const data = await response.json() as { downloadUrl?: unknown; filename?: unknown };
+    if (typeof data.downloadUrl !== 'string' || !data.downloadUrl.startsWith('https://') || typeof data.filename !== 'string') {
+        throw new Error('The download response is invalid. Retry or contact the photographer.');
+    }
+    return { downloadUrl: data.downloadUrl, filename: data.filename };
 }
 
 function editResultImageUrl(galleryId: string, driveFileId: string, token: string, variant: 'thumbnail' | 'preview' | 'before/thumbnail' | 'before/preview'): string {
@@ -144,8 +168,9 @@ export function galleryPreviewUrl(galleryId: string | number, driveFileId: strin
     return apiUrl(`/public/galleries/${galleryId}/photos/${encodeURIComponent(driveFileId)}/preview?${params.toString()}`);
 }
 
-export function cullingTutorialImageUrl(galleryId: string | number, token: string, slot: number, variant: 'before' | 'after'): string {
+export function cullingTutorialImageUrl(galleryId: string | number, token: string, slot: number, variant: 'before' | 'after', version?: string | null): string {
     const params = new URLSearchParams({ token });
+    if (version) params.set('v', version);
     return apiUrl(`/public/galleries/${galleryId}/tutorial/${slot}/${variant}?${params.toString()}`);
 }
 

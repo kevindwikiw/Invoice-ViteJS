@@ -43,7 +43,14 @@ async function setup(page: Page, theme = 'black', connection?: { saveData: boole
         }
     });
     await page.goto(`/culling/${id}`);
-    await expect(page.getByRole('button', { name: 'Picked (1)', exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'All Photos', exact: true })).toBeVisible();
+}
+
+async function openPicked(page: Page) {
+    const allPhotos = page.getByRole('button', { name: 'All Photos', exact: true });
+    await allPhotos.click();
+    if (await page.getByRole('menu', { name: 'All Photos views' }).count() === 0) await allPhotos.click();
+    await page.getByRole('menuitem', { name: 'Picked', exact: true }).click();
 }
 
 for (const theme of ['black', 'white']) {
@@ -52,7 +59,7 @@ for (const theme of ['black', 'white']) {
             await page.setViewportSize(viewport);
             await setup(page, theme);
             await page.getByRole('button', { name: 'Select photo-0.jpg', exact: true }).click();
-            await page.getByRole('button', { name: 'Picked (2)', exact: true }).click();
+            await openPicked(page);
             await expect(page.getByRole('button', { name: /^Open photo-/ })).toHaveCount(2);
             const draft = await page.evaluate((id) => localStorage.getItem(`orbit_culling_selected_${id}`), id);
             await page.getByRole('button', { name: 'Open photo-0.jpg', exact: true }).click();
@@ -64,7 +71,7 @@ for (const theme of ['black', 'white']) {
             await expect(grid.locator('article')).toHaveCount(54);
             await expect(page.getByRole('heading', { name: 'Edited Photos' })).toHaveCount(0);
             await expect(page.getByText('54 photos', { exact: true })).toHaveCount(0);
-            await expect(page.getByTestId('gallery-toolbar').getByRole('link', { name: 'Download All (.zip)' })).toHaveAttribute('href', archive.downloadUrl);
+            await expect(page.getByTestId('gallery-toolbar').getByRole('button', { name: 'Download All (.zip)' })).toBeVisible();
             await expect(grid.locator('img[loading="eager"]')).toHaveCount(10);
             await expect(grid.locator('img[loading="lazy"]')).toHaveCount(44);
             const styles = await grid.locator('img').first().evaluate((img) => {
@@ -78,13 +85,14 @@ for (const theme of ['black', 'white']) {
             await expect.poll(() => page.evaluate(() => window.scrollY)).toBeGreaterThan(0);
             await expect(page.getByTestId('gallery-toolbar')).toBeInViewport();
             expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-            await page.getByRole('button', { name: 'Picked (2)', exact: true }).click();
+            await openPicked(page);
             await expect(page.getByRole('button', { name: /^Open photo-/ })).toHaveCount(2);
-            await expect(page.getByRole('link', { name: 'Download All (.zip)' })).toHaveCount(0);
+            await expect(page.getByRole('button', { name: 'Download All (.zip)' })).toHaveCount(0);
             await expect(page.getByRole('button', { name: 'Remove photo-0.jpg', exact: true })).toBeVisible();
             await expect(page.getByRole('button', { name: 'Remove photo-2.jpg', exact: true })).toBeVisible();
             expect(await page.evaluate((id) => localStorage.getItem(`orbit_culling_selected_${id}`), id)).toBe(draft);
-            await page.getByRole('button', { name: 'All Photos', exact: true }).click();
+            await page.getByRole('button', { name: 'Picked', exact: true }).click();
+            await page.getByRole('menuitemradio', { name: 'All Photos', exact: true }).click();
             await expect(page.getByRole('button', { name: /^Open photo-/ })).toHaveCount(54);
         });
     }

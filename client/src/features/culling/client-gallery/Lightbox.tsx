@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, memo } from 'react';
-import { Check, ChevronLeft, ChevronRight, Download, ImageOff, X } from 'lucide-react';
+import { Check, ChevronLeft, ChevronRight, Download, ImageOff, Loader2, X } from 'lucide-react';
 import clsx from 'clsx';
 
 import { galleryPreviewUrl, galleryThumbnailUrl } from '../culling.public';
@@ -29,6 +29,8 @@ function LightboxView<T extends GalleryDisplayPhoto>({
     onPreviousPage,
     onNextPage,
     onToggle,
+    onDownload,
+    downloadPending = false,
 }: {
     galleryId: string;
     token: string;
@@ -49,6 +51,8 @@ function LightboxView<T extends GalleryDisplayPhoto>({
     onPreviousPage?: () => void;
     onNextPage?: () => void;
     onToggle?: (photo: T) => void;
+    onDownload?: (photo: T) => void;
+    downloadPending?: boolean;
 }) {
     const currentIndex = currentPhotoId ? photos.findIndex((item) => item.driveFileId === currentPhotoId) : -1;
     const photo = currentIndex >= 0 ? photos[currentIndex] : null;
@@ -68,11 +72,14 @@ function LightboxView<T extends GalleryDisplayPhoto>({
     }, [currentPhotoId]);
     const moveRequestRef = useRef(0);
     const swipeStartXRef = useRef<number | null>(null);
+    const dialogRef = useRef<HTMLDivElement>(null);
+    const closeButtonRef = useRef<HTMLButtonElement>(null);
     const currentImageReady = Boolean(currentUrl) && (loadedUrl === currentUrl || isPreviewImageReady(currentUrl));
     const canMovePrevious = currentIndex > 0 || hasPreviousPage;
     const canMoveNext = currentIndex >= 0 && (currentIndex < photos.length - 1 || hasNextPage);
     const displayPosition = displayStartIndex + currentIndex + 1;
     const displayTotal = totalCount || photos.length;
+    const lightboxOpen = Boolean(photo && currentIndex >= 0);
 
     const closeLightbox = useCallback(() => {
         setComparisonEnabled(false);
@@ -147,10 +154,31 @@ function LightboxView<T extends GalleryDisplayPhoto>({
     }, [currentIndex, previewUrlFor, photos]);
 
     useEffect(() => {
-        if (!photo || currentIndex < 0) return;
+        if (!lightboxOpen) return;
+        const opener = document.activeElement as HTMLElement | null;
         const previousOverflow = document.body.style.overflow;
         document.body.style.overflow = 'hidden';
-        
+        const frame = requestAnimationFrame(() => closeButtonRef.current?.focus({ preventScroll: true }));
+        const trapFocus = (event: KeyboardEvent) => {
+            if (event.key !== 'Tab' || !dialogRef.current) return;
+            const focusable = [...dialogRef.current.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), [tabindex="0"]')].filter((element) => element.getClientRects().length > 0);
+            const first = focusable[0];
+            const last = focusable.at(-1);
+            if (!first || !last) { event.preventDefault(); dialogRef.current.focus(); return; }
+            if (event.shiftKey && (document.activeElement === first || document.activeElement === dialogRef.current)) { event.preventDefault(); last.focus(); }
+            else if (!event.shiftKey && (document.activeElement === last || !dialogRef.current.contains(document.activeElement))) { event.preventDefault(); first.focus(); }
+        };
+        document.addEventListener('keydown', trapFocus);
+        return () => {
+            cancelAnimationFrame(frame);
+            document.removeEventListener('keydown', trapFocus);
+            document.body.style.overflow = previousOverflow;
+            if (opener?.isConnected) opener.focus({ preventScroll: true });
+        };
+    }, [lightboxOpen]);
+
+    useEffect(() => {
+        if (!photo || currentIndex < 0) return;
         const handleKey = (event: KeyboardEvent) => {
             if (event.key === 'Escape') {
                 closeLightbox();
@@ -171,7 +199,6 @@ function LightboxView<T extends GalleryDisplayPhoto>({
         
         document.addEventListener('keydown', handleKey);
         return () => {
-            document.body.style.overflow = previousOverflow;
             document.removeEventListener('keydown', handleKey);
         };
     }, [closeLightbox, currentIndex, onToggle, photo, requestMove, mode]);
@@ -179,9 +206,9 @@ function LightboxView<T extends GalleryDisplayPhoto>({
     if (!photo || currentIndex < 0) return null;
 
     return (
-        <div className="fixed inset-0 z-[120] bg-black/95 text-white">
-            <button type="button" aria-label="Close photo preview" onClick={closeLightbox} className="absolute right-3 top-3 z-30 flex h-9 w-9 items-center justify-center rounded-full border border-white/20 bg-black/40 text-white backdrop-blur transition-colors hover:border-[var(--accent)] sm:right-4 sm:top-4 sm:h-10 sm:w-10">
-                <X size={16} />
+        <div ref={dialogRef} tabIndex={-1} role="dialog" aria-modal="true" aria-label={`Photo preview: ${displayLabel}`} className="fixed inset-0 z-[120] bg-black/95 text-white outline-none">
+            <button ref={closeButtonRef} type="button" aria-label="Close photo preview" onClick={closeLightbox} className="absolute right-2 top-2 z-30 flex h-11 w-11 items-center justify-center rounded-full border border-white/20 bg-black/40 text-white backdrop-blur transition-colors hover:border-[var(--accent)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-white sm:right-4 sm:top-4">
+                <X size={16} aria-hidden="true" />
             </button>
 
             <div className="grid h-dvh grid-rows-[minmax(0,1fr)_auto] overflow-hidden">
@@ -214,11 +241,11 @@ function LightboxView<T extends GalleryDisplayPhoto>({
                             )}
                         />
                     )}
-                    <button type="button" disabled={!canMovePrevious} aria-label="Previous photo" onClick={() => requestMove(currentIndex - 1)} className="absolute left-1.5 top-1/2 z-30 flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-full border border-white/20 bg-black/40 text-white backdrop-blur transition-opacity disabled:opacity-25 sm:left-4 sm:h-10 sm:w-10">
-                        <ChevronLeft size={18} />
+                    <button type="button" disabled={!canMovePrevious} aria-label="Previous photo" onClick={() => requestMove(currentIndex - 1)} className="absolute left-1 top-1/2 z-30 flex h-11 w-11 -translate-y-1/2 items-center justify-center rounded-full border border-white/20 bg-black/40 text-white backdrop-blur transition-opacity focus-visible:outline focus-visible:outline-2 focus-visible:outline-white disabled:opacity-25 sm:left-4">
+                        <ChevronLeft size={18} aria-hidden="true" />
                     </button>
-                    <button type="button" disabled={!canMoveNext} aria-label="Next photo" onClick={() => requestMove(currentIndex + 1)} className="absolute right-1.5 top-1/2 z-30 flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-full border border-white/20 bg-black/40 text-white backdrop-blur transition-opacity disabled:opacity-25 sm:right-4 sm:h-10 sm:w-10">
-                        <ChevronRight size={18} />
+                    <button type="button" disabled={!canMoveNext} aria-label="Next photo" onClick={() => requestMove(currentIndex + 1)} className="absolute right-1 top-1/2 z-30 flex h-11 w-11 -translate-y-1/2 items-center justify-center rounded-full border border-white/20 bg-black/40 text-white backdrop-blur transition-opacity focus-visible:outline focus-visible:outline-2 focus-visible:outline-white disabled:opacity-25 sm:right-4">
+                        <ChevronRight size={18} aria-hidden="true" />
                     </button>
                     {failedUrl === currentUrl && (
                         <div className="absolute flex flex-col items-center text-white/60">
@@ -234,6 +261,8 @@ function LightboxView<T extends GalleryDisplayPhoto>({
                         key={currentUrl}
                         src={currentUrl}
                         alt={photo.filename}
+                        width={photo.width || 1600}
+                        height={photo.height || 1200}
                         draggable={false}
                         decoding="async"
                         fetchPriority="high"
@@ -255,9 +284,9 @@ function LightboxView<T extends GalleryDisplayPhoto>({
                     <div className="flex w-full flex-col gap-2 sm:w-auto sm:min-w-[220px]">
                         {comparison && <label className="flex min-h-11 cursor-pointer items-center gap-3 text-sm font-medium"><input type="checkbox" checked={comparisonEnabled} onChange={(event) => setComparisonEnabled(event.target.checked)} style={{ width: 16, height: 16, padding: 0, flexShrink: 0 }} className="accent-white" /> <span>Before / After</span></label>}
                         {mode === 'delivery' ? (
-                            <a href={getDownloadUrl?.(photo)} target="_blank" rel="noreferrer" referrerPolicy="no-referrer" className="flex min-h-11 items-center justify-center gap-2 rounded-md bg-white px-4 text-sm font-semibold text-black">
-                                <Download size={14} /> Download Original
-                            </a>
+                            <button type="button" disabled={!getDownloadUrl?.(photo) || downloadPending} aria-busy={downloadPending} onClick={() => onDownload?.(photo)} className="flex min-h-11 items-center justify-center gap-2 rounded-md bg-white px-4 text-sm font-semibold text-black disabled:opacity-60">
+                                {downloadPending ? <Loader2 size={14} aria-hidden="true" className="animate-spin motion-reduce:animate-none" /> : <Download size={14} aria-hidden="true" />} {downloadPending ? 'Preparing download…' : 'Download Original'}
+                            </button>
                         ) : <button type="button" onClick={() => onToggle?.(photo)} className={clsx('flex h-9 items-center justify-center gap-2 rounded-lg px-4 text-[10px] font-black uppercase tracking-[0.12em] transition-colors sm:h-10 sm:px-5 sm:tracking-[0.14em]', selected ? 'bg-white text-black' : 'border border-white/30 bg-black/30 text-white hover:border-white/60 hover:bg-white/10')}>
                             {selected ? <X size={14} /> : <Check size={14} />}
                             {selected ? 'Remove selection' : 'Select photo'}

@@ -68,6 +68,7 @@ const GALLERY_SCHEMA = [
     `CREATE TABLE IF NOT EXISTS galleries (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         title TEXT NOT NULL,
+        gallery_workflow TEXT NOT NULL DEFAULT 'selection_delivery' CHECK(gallery_workflow IN ('selection_delivery', 'delivery_only')),
         public_key TEXT,
         contact_whatsapp_url TEXT,
         max_selections INTEGER NOT NULL DEFAULT 0,
@@ -78,6 +79,7 @@ const GALLERY_SCHEMA = [
         qris_enabled INTEGER NOT NULL DEFAULT 0,
         edit_results_folder_id TEXT,
         edit_results_zip_file_id TEXT,
+        edit_results_published_zip_file_id TEXT,
         edit_results_zip_filename TEXT,
         edit_results_zip_download_url TEXT,
         edit_results_key_hash TEXT,
@@ -218,6 +220,7 @@ const GALLERY_SCHEMA = [
 ];
 
 const GALLERY_REQUIRED_COLUMNS: Array<readonly [string, string]> = [
+    ["gallery_workflow", "TEXT NOT NULL DEFAULT 'selection_delivery' CHECK(gallery_workflow IN ('selection_delivery', 'delivery_only'))"],
     ["edit_results_status", "TEXT NOT NULL DEFAULT 'draft'"],
     ["edit_results_access_duration_hours", "INTEGER"],
     ["edit_results_expires_at", "TEXT"],
@@ -230,6 +233,7 @@ const GALLERY_REQUIRED_COLUMNS: Array<readonly [string, string]> = [
     ["qris_enabled", "INTEGER NOT NULL DEFAULT 0"],
     ["edit_results_folder_id", "TEXT"],
     ["edit_results_zip_file_id", "TEXT"],
+    ["edit_results_published_zip_file_id", "TEXT"],
     ["edit_results_zip_filename", "TEXT"],
     ["edit_results_zip_download_url", "TEXT"],
     ["edit_results_key_hash", "TEXT"],

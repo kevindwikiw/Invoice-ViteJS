@@ -7,6 +7,7 @@ let edited = [drivePhoto('color'), drivePhoto('bw'), drivePhoto('extra')];
 let folderSnapshot: Array<{ id: string; parentId: string | null; name: string }> = [];
 let treeFails = false;
 const missing = new Set<string>();
+const restricted = new Set<string>();
 const fetched: Array<{ id: string; width?: number; thumbnail?: string }> = [];
 const metadataCalls: string[] = [];
 mock.module('../lib/google-drive', () => ({
@@ -17,7 +18,7 @@ mock.module('../lib/google-drive', () => ({
         return { folders: folderSnapshot, photos: edited.map((photo) => ({ ...photo, folderId: folderSnapshot.length && photo.id === 'bw' ? 'no-watermark' : null })) };
     },
     hasAnyoneViewerFolderAccess: async () => true,
-    getDrivePhotoMetadata: async (id: string) => { metadataCalls.push(id); if (missing.has(id)) throw new Error('missing'); return drivePhoto(id); },
+    getDrivePhotoMetadata: async (id: string) => { metadataCalls.push(id); if (missing.has(id)) throw new Error('missing'); if (restricted.has(id)) return { ...drivePhoto(id), canDownload: false }; return id === 'archive' ? { ...drivePhoto(id), name: 'backup.zip', mimeType: 'application/zip', canDownload: true } : drivePhoto(id); },
     fetchDriveFile: async (id: string, thumbnail?: string, width?: number) => { assert.ok(thumbnail); fetched.push({ id, width, thumbnail }); if (missing.has(id)) throw new Error('missing'); return new Response('image', { headers: { 'content-type': 'image/jpeg' } }); },
 }));
 const { sqlite } = await import('../db/runtime');
@@ -45,7 +46,8 @@ app.use('/admin/*', async (c, next) => { if (c.req.header('x-test-admin')) c.set
 app.route('/admin', adminGalleriesRouter);
 app.route('/public', publicGalleriesRouter);
 const request = (path: string, method = 'GET', body?: unknown, authenticated = true) => app.request(path, { method, headers: { 'content-type': 'application/json', ...(authenticated ? { 'x-test-admin': '1' } : {}) }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
-type Payload = { submitted: Array<{ driveFileId: string }>; edited: unknown[]; comparisonEnabled: boolean; comparisonCount: number; token: string; warnings: string[]; photos: Array<{ comparison: { previewUrl: string } | null }> };
+type Archive = { filename: string; downloadUrl: string; downloadResolveUrl: string };
+type Payload = { archive: Archive | null; code?: string; downloadUrl?: string; filename?: string; submitted: Array<{ driveFileId: string }>; edited: unknown[]; comparisonEnabled: boolean; comparisonCount: number; token: string; warnings: string[]; photos: Array<{ driveFileId?: string; downloadResolveUrl?: string; comparison: { previewUrl: string } | null }> };
 const json = async (response: Response) => await response.json() as Payload;
 assert.equal((await request('/admin/1/edit-results/pairing', 'GET', undefined, false)).status, 401);
 const candidates = await json(await request('/admin/1/edit-results/pairing'));
@@ -68,11 +70,49 @@ let token = await login();
 const listing = () => request(`/public/gallery/edit-results?token=${token}`);
 assert.equal((await request('/public/gallery/edit-results?token=bad')).status, 401);
 const list = await json(await listing());
+assert.equal((await json(await request('/public/gallery/edit-results?token=bad'))).archive, undefined);
+assert.equal((await json(await request('/public/gallery/edit-results?token=bad'))).code, 'EDIT_RESULTS_TOKEN_INVALID');
+assert.equal(list.archive, null);
 assert.equal(list.photos.length, 3);
 assert.equal(list.photos[2]!.comparison, null);
 assert.ok(list.photos[0]!.comparison!.previewUrl.includes('/color/before/preview'));
 assert.equal((list.photos[0] as any).driveFileId, 'color');
 assert.equal((list.photos[0] as any).downloadUrl, drivePhoto('color').webContentLink);
+assert.ok((list.photos[0] as any).downloadResolveUrl.includes('/photos/color/download-url?token='));
+const resolvedPhoto = await json(await request(`/public/gallery/edit-results/photos/color/download-url?token=${token}`));
+assert.equal(resolvedPhoto.downloadUrl, drivePhoto('color').webContentLink);
+assert.equal(resolvedPhoto.filename, 'color.jpg');
+assert.equal((await request(`/public/gallery/edit-results/photos/not-published/download-url?token=${token}`)).status, 404);
+assert.equal((await json(await request(`/public/gallery/edit-results/photos/not-published/download-url?token=${token}`))).code, 'EDIT_RESULT_NOT_FOUND');
+missing.add('color');
+const previousWarn = console.warn;
+console.warn = () => {};
+try { assert.equal((await request(`/public/gallery/edit-results/photos/color/download-url?token=${token}`)).status, 502); }
+finally { console.warn = previousWarn; }
+missing.delete('color');
+restricted.add('color');
+const restrictedPhoto = await request(`/public/gallery/edit-results/photos/color/download-url?token=${token}`);
+assert.equal(restrictedPhoto.status, 502);
+assert.equal((await json(restrictedPhoto)).code, 'DRIVE_DOWNLOAD_UNAVAILABLE');
+restricted.delete('color');
+assert.equal((await json(await request('/public/gallery/edit-results/photos/color/download-url?token=bad'))).code, 'EDIT_RESULTS_TOKEN_INVALID');
+
+// Publish a ZIP snapshot. Later draft changes must not affect its resolver.
+await request('/admin/1', 'PATCH', { editResultsZipFileId: 'archive' });
+assert.equal((await request('/admin/1/edit-results/publish', 'POST', { password: 'delivery-pass' })).status, 201);
+assert.equal((await listing()).status, 401);
+token = await login();
+const withArchive = await json(await listing());
+assert.ok(withArchive.archive?.downloadResolveUrl.includes('/archive/download-url?token='));
+const resolvedArchive = await json(await request(`/public/gallery/edit-results/archive/download-url?token=${token}`));
+assert.equal(resolvedArchive.downloadUrl, drivePhoto('archive').webContentLink);
+assert.equal(resolvedArchive.filename, 'backup.zip');
+await request('/admin/1', 'PATCH', { editResultsZipFileId: 'not-a-zip' });
+assert.equal((await json(await request(`/public/gallery/edit-results/archive/download-url?token=${token}`))).downloadUrl, drivePhoto('archive').webContentLink);
+await run('UPDATE galleries SET edit_results_published_zip_file_id = NULL WHERE id = 1');
+assert.equal((await json(await request(`/public/gallery/edit-results/archive/download-url?token=${token}`))).downloadUrl, drivePhoto('archive').webContentLink);
+await run("UPDATE galleries SET edit_results_published_zip_file_id = 'archive' WHERE id = 1");
+await request('/admin/1', 'PATCH', { editResultsZipFileId: 'archive' });
 assert.equal((await request(`/public/gallery/edit-results/photos/color/thumbnail?token=${token}`)).status, 200);
 assert.equal((await request(`/public/gallery/edit-results/photos/color/preview?token=${token}`)).status, 200);
 assert.equal((await request(`/public/gallery/edit-results/photos/undefined/thumbnail?token=${token}`)).status, 404);
@@ -133,6 +173,7 @@ const afterFailure = await (await listing()).json() as any;
 assert.deepEqual(afterFailure.photos, nested.photos);
 assert.deepEqual(afterFailure.folders, nested.folders);
 assert.equal(afterFailure.publishedAt, nested.publishedAt);
+assert.deepEqual(afterFailure.archive, nested.archive);
 treeFails = false;
 // Edited access changes preserve the snapshot and never rotate selection access.
 const selectionBefore = await one('SELECT status, access_version, selection_deadline_at, pin_hash FROM galleries WHERE id = 1');
@@ -142,6 +183,8 @@ assert.equal((await request('/admin/1', 'PATCH', { editResultsStatus: 'invalid' 
 for (const status of ['closed', 'draft']) {
     assert.equal((await request('/admin/1', 'PATCH', { editResultsStatus: status })).status, 200);
     assert.equal((await listing()).status, 403);
+    assert.equal((await json(await listing())).archive, undefined);
+    assert.equal((await request(`/public/gallery/edit-results/photos/color/download-url?token=${token}`)).status, 403);
     assert.equal((await request('/public/gallery/edit-results/verify', 'POST', { password: 'delivery-pass' })).status, 403);
     for (const variant of ['thumbnail', 'preview', 'before/thumbnail', 'before/preview']) {
         assert.equal((await request(`/public/gallery/edit-results/photos/color/${variant}?token=${token}`)).status, 403);
@@ -172,7 +215,9 @@ filtered = await (await request('/admin?mode=selection&status=open')).json() as 
 assert.equal(filtered.total, 0);
 await run("UPDATE galleries SET edit_results_expires_at = '2000-01-01T00:00:00.000Z' WHERE id = 1");
 assert.equal((await listing()).status, 403);
+assert.equal((await request(`/public/gallery/edit-results/archive/download-url?token=${token}`)).status, 403);
 filtered = await (await request('/admin?mode=edited&status=closed')).json() as any;
+assert.equal((await json(await listing())).archive, undefined);
 assert.equal(filtered.total, 1);
 assert.equal(filtered.items[0].editResultsIsExpired, true);
 await request('/admin/1', 'PATCH', { editResultsStatus: 'open', editResultsAccessDurationHours: null });
@@ -193,4 +238,58 @@ assert.equal((await listing()).status, 404);
 assert.equal((await one<{ n: number }>('SELECT COUNT(*) as n FROM gallery_edit_result_photos'))!.n, 0);
 assert.equal((await one<{ n: number }>('SELECT COUNT(*) as n FROM gallery_edit_result_folders'))!.n, 0);
 assert.equal((await one<any>('SELECT edit_results_status FROM galleries WHERE id = 1')).edit_results_status, 'draft');
+await run("UPDATE galleries SET tutorial_before_drive_file_id = 'legacy-before', tutorial_after_drive_file_id = 'legacy-after', pin_hash = ? WHERE id = 1", [await Bun.password.hash('1234')]);
+const contactInput = { contactWhatsappUrl: '081234567890', message: 'Access {{gallery_title}}', requestMoreMessage: 'More photos' };
+const globalPreview = async (pairs: Array<[string, string]>) => {
+    const fields = ['tutorialBeforeDriveFileId', 'tutorialAfterDriveFileId', 'tutorialBefore2DriveFileId', 'tutorialAfter2DriveFileId', 'tutorialBefore3DriveFileId', 'tutorialAfter3DriveFileId'];
+    const values = Object.fromEntries(fields.map((field, index) => [field, pairs[Math.floor(index / 2)]?.[index % 2] || '']));
+    const response = await request('/admin/settings/contact', 'PATCH', { ...contactInput, ...values });
+    assert.equal(response.status, 200, await response.clone().text());
+};
+const selectionToken = (await json(await request('/public/gallery/verify', 'POST', { pin: '1234' }))).token;
+const manifest = async () => (await (await request(`/public/gallery/photo-manifest?token=${selectionToken}`)).json() as any).gallery.tutorialSampleSlots as number[];
+const previewVersion = async () => (await (await request(`/public/gallery/photo-manifest?token=${selectionToken}`)).json() as any).gallery.tutorialSampleVersion as string | null;
+assert.deepEqual(await manifest(), []);
+await globalPreview([['global-before', 'global-after']]);
+assert.deepEqual(await manifest(), [1]);
+const firstPreviewVersion = await previewVersion();
+assert.ok(firstPreviewVersion);
+const previewOnly = await request('/admin/settings/contact', 'PATCH', { tutorialBeforeDriveFileId: 'preview-only-before', tutorialAfterDriveFileId: 'preview-only-after' });
+assert.equal(previewOnly.status, 200, await previewOnly.clone().text());
+const previewOnlySettings = await (await request('/admin/settings/contact')).json() as any;
+assert.equal(previewOnlySettings.tutorialBeforeDriveFileId, 'preview-only-before');
+assert.equal(previewOnlySettings.contactWhatsappUrl, '6281234567890');
+assert.equal(previewOnlySettings.message, contactInput.message);
+assert.equal(previewOnlySettings.requestMoreMessage, contactInput.requestMoreMessage);
+assert.notEqual(await previewVersion(), firstPreviewVersion);
+await globalPreview([['global-before', 'global-after']]);
+await run("UPDATE galleries SET status = 'open', pin_hash = ? WHERE id = 2", [await Bun.password.hash('5678')]);
+const otherToken = (await json(await request('/public/other/verify', 'POST', { pin: '5678' }))).token;
+assert.deepEqual((await (await request(`/public/other/photo-manifest?token=${otherToken}`)).json() as any).gallery.tutorialSampleSlots, [1]);
+assert.deepEqual((await (await request('/admin/settings/contact')).json() as any).tutorialBeforeDriveFileId, 'global-before');
+assert.equal((await request('/admin/settings/contact', 'PATCH', { ...contactInput, message: 'Updated access message' })).status, 200);
+assert.deepEqual(await manifest(), [1]);
+assert.equal((await (await request('/admin/settings/contact')).json() as any).message, 'Updated access message');
+const versionBeforeContactOnly = await previewVersion();
+assert.equal((await request('/admin/settings/contact', 'PATCH', { message: 'Contact only update' })).status, 200);
+assert.equal((await (await request('/admin/settings/contact')).json() as any).tutorialBeforeDriveFileId, 'global-before');
+assert.equal(await previewVersion(), versionBeforeContactOnly);
+assert.equal((await request(`/public/gallery/tutorial/1/before?token=${selectionToken}`)).status, 200);
+assert.equal(fetched.at(-1)?.id, 'global-before');
+const incomplete = await request('/admin/settings/contact', 'PATCH', { ...contactInput, tutorialBeforeDriveFileId: 'only-before', tutorialAfterDriveFileId: '' });
+assert.equal(incomplete.status, 400);
+assert.deepEqual(await manifest(), [1]);
+await run("UPDATE gallery_settings SET value = 'legacy-incomplete' WHERE key = 'tutorial_before_drive_file_id'");
+await run("UPDATE gallery_settings SET value = '' WHERE key = 'tutorial_after_drive_file_id'");
+assert.equal((await request('/admin/settings/contact', 'PATCH', { message: 'Independent contact update' })).status, 200);
+assert.equal((await (await request('/admin/settings/contact')).json() as any).tutorialBeforeDriveFileId, 'legacy-incomplete');
+await globalPreview([['first-before', 'first-after'], ['second-before', 'second-after'], ['third-before', 'third-after']]);
+assert.deepEqual(await manifest(), [1, 2, 3]);
+assert.notEqual(await previewVersion(), firstPreviewVersion);
+await globalPreview([['first-before', 'first-after'], ['second-before', 'second-after']]);
+assert.deepEqual(await manifest(), [1, 2]);
+await globalPreview([]);
+assert.deepEqual(await manifest(), []);
+assert.equal((await one<any>('SELECT tutorial_before_drive_file_id FROM galleries WHERE id = 1')).tutorial_before_drive_file_id, 'legacy-before');
+assert.equal((await request(`/public/gallery/tutorial/1/before?token=${selectionToken}`)).status, 404);
 sqlite!.close();

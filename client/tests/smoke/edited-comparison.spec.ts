@@ -25,7 +25,7 @@ for (const theme of ['black', 'white']) {
             });
             await page.route('**/edit-results/status', (route) => route.fulfill({ json: { available: true, photoCount: 3 } }));
             await page.route('**/edit-results?token=delivery-token', (route) => route.fulfill({ json: { photos, archive: { filename: 'all.zip', downloadUrl: 'https://drive.google.com/uc?id=zip' } } }));
-            await page.goto('/culling/comparison');
+            await page.goto('/culling/comparison?view=edit-results');
             await page.getByRole('button', { name: 'Open edited-0.jpg', exact: true }).click();
             const checkbox = page.getByRole('checkbox', { name: 'Before / After' });
             await expect(checkbox).not.toBeChecked();

@@ -26,10 +26,13 @@ for (const width of [390, 1280]) {
         await expect(grid.locator('img')).toHaveCount(54);
         await expect(grid.locator('img').first()).toHaveAttribute('src', /root-photo-0\/thumbnail/);
         await page.getByRole('button', { name: 'Next page', exact: true }).click();
+        await expect(page).toHaveURL(/editedPage=2/);
         await expect(grid.locator('img')).toHaveAttribute('src', /root-photo-54\/thumbnail/);
         await page.getByRole('link', { name: 'Open folder No Watermark' }).click();
         await expect(page).toHaveURL(/folder=no-watermark/);
+        await expect(page).toHaveURL(/editedPage=1/);
         await expect(grid.locator('img')).toHaveAttribute('src', /clean-photo\/thumbnail/);
+        expect(await page.evaluate(() => history.length)).toBeGreaterThan(1);
         await page.reload();
         await expect(grid.locator('img')).toHaveAttribute('src', /clean-photo\/thumbnail/);
         await page.screenshot({ path: `test-results/edited-folder-${width}.png`, fullPage: true });

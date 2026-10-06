@@ -48,6 +48,7 @@ const clientCullingGalleryRoute = createRoute({
         view: (search.view === 'picked' || search.view === 'selfie' || search.view === 'edit-results' ? search.view : 'gallery') as 'gallery' | 'picked' | 'selfie' | 'edit-results',
         filter: (search.filter === 'submitted' ? 'submitted' : 'none') as 'none' | 'submitted',
         page: Math.max(1, Number(search.page) || 1),
+        editedPage: Math.max(1, Number(search.editedPage) || 1),
     }),
 })
 
@@ -107,8 +108,8 @@ const feedbackInboxRoute = createRoute({
 const clientGalleriesRoute = createRoute({
     getParentRoute: () => layoutRoute,
     path: '/galleries',
-    validateSearch: (search: Record<string, unknown>) => ({
-        mode: search.mode === 'edited' ? 'edited' as const : 'selection' as const,
+    validateSearch: (search: Record<string, unknown>): { mode: 'selection' | 'edited' | 'preview' } => ({
+        mode: search.mode === 'edited' || search.mode === 'preview' ? search.mode : 'selection',
     }),
     component: ClientGalleriesRoute,
 })

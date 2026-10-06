@@ -34,7 +34,7 @@ for (const legacy of [true, false]) {
             assert(db.query('PRAGMA table_info(galleries)').all().some(c => c.name === 'face_source_revision'));
             assert(db.query('PRAGMA table_info(galleries)').all().some(c => c.name === 'edit_results_key_hash'));
             assert(db.query('PRAGMA table_info(galleries)').all().some(c => c.name === 'edit_results_folder_id'));
-            for (const name of ['edit_results_zip_file_id', 'edit_results_zip_filename', 'edit_results_zip_download_url']) {
+            for (const name of ['edit_results_zip_file_id', 'edit_results_published_zip_file_id', 'edit_results_zip_filename', 'edit_results_zip_download_url']) {
                 assert(db.query('PRAGMA table_info(galleries)').all().some(c => c.name === name && c.notnull === 0));
             }
             assert(db.query("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'gallery_edit_result_photos'").get());
@@ -60,8 +60,8 @@ for (const legacy of [true, false]) {
             await resetRateLimitSuffixes('gallery_pin', ['gallery']);
             assert.equal(await remainingRateLimit('gallery_pin:ip:gallery', 2, 1000), 2);
             await galleryRun("INSERT INTO galleries (id, title, drive_folder_id, pin_hash) VALUES (1, 'test', 'folder', 'hash')");
-            assert.deepEqual(db.query('SELECT edit_results_zip_file_id, edit_results_zip_filename, edit_results_zip_download_url FROM galleries WHERE id = 1').get(),
-                { edit_results_zip_file_id: null, edit_results_zip_filename: null, edit_results_zip_download_url: null });
+            assert.deepEqual(db.query('SELECT edit_results_zip_file_id, edit_results_published_zip_file_id, edit_results_zip_filename, edit_results_zip_download_url FROM galleries WHERE id = 1').get(),
+                { edit_results_zip_file_id: null, edit_results_published_zip_file_id: null, edit_results_zip_filename: null, edit_results_zip_download_url: null });
             await galleryRun("INSERT INTO gallery_photos (gallery_id, drive_file_id, filename, mime_type) VALUES (1, 'photo', 'photo.jpg', 'image/jpeg')");
             await galleryRun("INSERT INTO gallery_selections (gallery_id, selected_drive_file_id, selected_filename) VALUES (1, 'photo', 'photo.jpg')");
             process.env.FACE_WORKER_URL = 'http://worker.test';

@@ -60,6 +60,50 @@ type GalleryRefineMode = 'none' | 'submitted';
 
 export default function ClientCullingGallery() {
     const { galleryId } = useParams({ from: '/culling/$galleryId' });
+    const metadata = useQuery({
+        queryKey: ['public-edit-results-status', galleryId],
+        queryFn: () => getEditResultsStatus(galleryId),
+        staleTime: 60_000,
+        retry: false,
+    });
+    if (!metadata.data) return <main style={readGalleryTheme(galleryId) === 'black' ? BLACK_THEME : WHITE_THEME} className="flex min-h-dvh flex-col items-center justify-center gap-4 bg-[var(--bg-deep)] px-5 text-center text-[var(--text-primary)]">
+        {metadata.isPending ? <p role="status" className="inline-flex items-center gap-2 text-sm"><Loader2 size={18} aria-hidden="true" className="animate-spin" /> Loading gallery...</p> : <>
+            <p role="alert" className="text-sm">{metadata.error?.message || 'Unable to load gallery details.'}</p>
+            <button type="button" onClick={() => void metadata.refetch()} className="min-h-11 rounded-md border border-[var(--border)] px-4 text-sm hover:bg-[var(--bg-elevated)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)]">Retry</button>
+        </>}
+    </main>;
+    return metadata.data.workflow === 'delivery_only' ? <WeddingGallery key={galleryId} galleryId={galleryId} title={metadata.data.title} /> : <SelectionCullingGallery key={galleryId} />;
+}
+
+function WeddingGallery({ galleryId, title }: { galleryId: string; title?: string }) {
+    const navigate = useNavigate({ from: '/culling/$galleryId' });
+    const { view } = useSearch({ from: '/culling/$galleryId' });
+    const [theme, setTheme] = useState<GalleryTheme>(() => readGalleryTheme(galleryId));
+    const [token, setToken] = useState(() => localStorage.getItem(`orbit:edit-results-token:${galleryId}`) || '');
+    useEffect(() => {
+        if (view !== 'edit-results') void navigate({ search: (current) => ({ ...current, view: 'edit-results' }), replace: true, resetScroll: false });
+    }, [navigate, view]);
+    useEffect(() => {
+        const previous = document.title;
+        document.title = title ? `${title} | The Orbit Photo` : 'The Orbit Photo';
+        return () => { document.title = previous; };
+    }, [title]);
+    const onToken = useCallback((next: string) => {
+        if (next) localStorage.setItem(`orbit:edit-results-token:${galleryId}`, next);
+        else localStorage.removeItem(`orbit:edit-results-token:${galleryId}`);
+        setToken(next);
+    }, [galleryId]);
+    return <EditResultsGrid galleryId={galleryId} theme={theme} token={token} onToken={onToken} standalone deliveryOnly onToggleTheme={() => {
+        setTheme((current) => {
+            const next = current === 'black' ? 'white' : 'black';
+            localStorage.setItem(galleryThemeKey(galleryId), next);
+            return next;
+        });
+    }} />;
+}
+
+function SelectionCullingGallery() {
+    const { galleryId } = useParams({ from: '/culling/$galleryId' });
     const navigate = useNavigate({ from: '/culling/$galleryId' });
     const { view: urlView, filter: urlFilter, page: urlPage } = useSearch({ from: '/culling/$galleryId' });
     const queryClient = useQueryClient();
@@ -74,7 +118,7 @@ export default function ClientCullingGallery() {
         photoMetaById: readSelectedPhotoMetaDraft(galleryId),
     }));
     const [page, setPage] = useState(urlPage);
-    const [activeTab, setActiveTab] = useState<GalleryView>(() => !token && editResultsToken ? 'edit-results' : urlView as GalleryView);
+    const [activeTab, setActiveTab] = useState<GalleryView>(() => urlView as GalleryView);
     const [downloadTarget, setDownloadTarget] = useState<HTMLDivElement | null>(null);
     const [expiryTarget, setExpiryTarget] = useState<HTMLDivElement | null>(null);
     const showSelected = activeTab === 'picked';
@@ -94,6 +138,7 @@ export default function ClientCullingGallery() {
     const allPhotosMenuRef = useRef<HTMLDivElement>(null);
     const allPhotosButtonRef = useRef<HTMLButtonElement>(null);
     const allPhotosDropdownRef = useRef<HTMLDivElement>(null);
+    const submitErrorRef = useRef<HTMLDivElement>(null);
     const [refineMode, setRefineMode] = useState<GalleryRefineMode>(urlFilter as GalleryRefineMode);
     const [faceFilteredPhotos, setFaceFilteredPhotos] = useState<GalleryPhoto[] | null>(null);
     const [faceFilterTotal, setFaceFilterTotal] = useState(0);
@@ -105,14 +150,14 @@ export default function ClientCullingGallery() {
     useEffect(() => {
         setPage(urlPage);
         setRefineMode(urlFilter as GalleryRefineMode);
-        setActiveTab(!token && editResultsToken ? 'edit-results' : urlView);
+        setActiveTab(urlView);
     }, [token, editResultsToken, urlFilter, urlPage, urlView]);
 
     useEffect(() => {
         setCurrentYear(new Date().getFullYear());
     }, []);
 
-    const syncGalleryUrl = useCallback((next: { view?: GalleryView; filter?: GalleryRefineMode; page?: number }) => {
+    const syncGalleryUrl = useCallback((next: { view?: GalleryView; filter?: GalleryRefineMode; page?: number }, replace = false) => {
         void navigate({
             search: (current) => ({
                 ...current,
@@ -120,12 +165,11 @@ export default function ClientCullingGallery() {
                 filter: next.filter ?? current.filter,
                 page: next.page ?? current.page,
             }),
-            replace: true,
+            replace,
         });
     }, [navigate]);
     // Ref so the photos-cache effect can read current selection without adding it as a dep
     const selectedIdsRef = useRef(selectedIds);
-    selectedIdsRef.current = selectedIds;
     const photosQuery = useQuery({
         queryKey: ['public-gallery-photos', galleryId, token, page, GALLERY_PAGE_SIZE, false],
         queryFn: () => getPublicGalleryPhotos(galleryId, token, page, GALLERY_PAGE_SIZE, false, true),
@@ -166,6 +210,7 @@ export default function ClientCullingGallery() {
         if (showSelected && submittedPhotos.length > 0) return new Set(submittedPhotos.map((photo) => photo.driveFileId));
         return new Set(selectedDriveFileIds);
     }, [selectedDriveFileIds, selectedIds, selectionTouched, showSelected, submittedPhotos]);
+    selectedIdsRef.current = effectiveSelectedIds;
     
     const selectionList = useMemo(() => Array.from(effectiveSelectedIds), [effectiveSelectedIds]);
     const selectedPhotoMetaMap = useMemo(() => new Map(Object.entries(selectedPhotoMetaById)), [selectedPhotoMetaById]);
@@ -308,15 +353,19 @@ export default function ClientCullingGallery() {
 
         if (direction === 'previous' && hasPreviousGalleryPage) {
             setPendingLightboxPageMove('last');
-            setPage((current) => Math.max(1, current - 1));
+            const nextPage = Math.max(1, page - 1);
+            setPage(nextPage);
+            syncGalleryUrl({ page: nextPage });
             return;
         }
 
         if (direction === 'next' && hasNextGalleryPage) {
             setPendingLightboxPageMove('first');
-            setPage((current) => totalPages ? Math.min(totalPages, current + 1) : current + 1);
+            const nextPage = totalPages ? Math.min(totalPages, page + 1) : page + 1;
+            setPage(nextPage);
+            syncGalleryUrl({ page: nextPage });
         }
-    }, [hasNextGalleryPage, hasPreviousGalleryPage, pendingLightboxPageMove, showSelected, totalPages]);
+    }, [hasNextGalleryPage, hasPreviousGalleryPage, page, pendingLightboxPageMove, showSelected, syncGalleryUrl, totalPages]);
 
     useLayoutEffect(() => {
         if (!pendingLightboxPageMove || showSelected || photosQuery.data?.page !== page || !photos.length) return;
@@ -484,6 +533,10 @@ export default function ClientCullingGallery() {
             void queryClient.invalidateQueries({ queryKey: ['public-gallery-photos', galleryId, token] });
         },
     });
+    useEffect(() => {
+        if (!submitMutation.isError) return;
+        requestAnimationFrame(() => submitErrorRef.current?.focus());
+    }, [submitMutation.isError]);
 
     useEffect(() => {
         localStorage.setItem(draftKey(galleryId), JSON.stringify(selectionList));
@@ -588,26 +641,24 @@ export default function ClientCullingGallery() {
                 : 'ready';
     const changeView = (view: GalleryView) => {
         if (view !== 'edit-results' && !galleryAvailable) return;
-        if (view === 'gallery') {
-            setRefineMode('none');
-        } else if (view === 'picked') {
+        if (view === 'picked') {
             setRefineMode('none');
         } else if (view === 'selfie') {
             setRefineMode('none');
             if (faceFilteredPhotos === null) setShowFaceSearch(true);
         }
         setActiveTab(view);
-        syncGalleryUrl({ view, filter: 'none', page: view === 'gallery' ? 1 : undefined });
+        syncGalleryUrl({ view, ...((view === 'picked' || view === 'selfie') ? { filter: 'none' as const } : {}) });
         setLightboxPhotoId(null);
         setPendingLightboxPageMove(null);
     };
 
     if (!token && activeTab === 'edit-results' && (editResultsToken || showEditResultsGate || urlView === 'edit-results')) {
-        return <EditResultsGrid galleryId={galleryId} theme={theme} token={editResultsToken} onToken={updateEditResultsToken} onToggleTheme={toggleTheme} onViewChange={changeView} standalone />;
+        return <EditResultsGrid galleryId={galleryId} theme={theme} token={editResultsToken} onToken={updateEditResultsToken} onToggleTheme={toggleTheme} onViewChange={changeView} onRequestSelectionAccess={() => { setActiveTab('gallery'); syncGalleryUrl({ view: 'gallery' }); }} standalone />;
     }
 
     if (!token) {
-        return <PinGate galleryId={galleryId} theme={theme} onToggleTheme={toggleTheme} onEditResultsUnlocked={updateEditResultsToken} onUnlocked={(nextToken, nextGallery) => { setToken(nextToken); setUnlockedGallery(nextGallery); if (!localStorage.getItem(tutorialKey(galleryId))) setShowTutorial(true); }} />;
+        return <PinGate galleryId={galleryId} theme={theme} onToggleTheme={toggleTheme} initialMode={urlView === 'edit-results' ? 'edited' : 'gallery'} editedSessionAvailable={Boolean(editResultsToken)} onBackToEdited={() => { setActiveTab('edit-results'); syncGalleryUrl({ view: 'edit-results' }); }} onEditResultsUnlocked={updateEditResultsToken} onUnlocked={(nextToken, nextGallery) => { setToken(nextToken); setUnlockedGallery(nextGallery); if (!localStorage.getItem(tutorialKey(galleryId))) setShowTutorial(true); }} />;
     }
 
     if (countdown.isExpired || displayGallery?.isExpired || galleryLockCode) {
@@ -708,7 +759,7 @@ export default function ClientCullingGallery() {
                         </span>
                         <SubmissionAction
                             status={submissionStatus}
-                            disabled={submitMutation.isPending || photosQuery.isLoading}
+                            disabled={submitMutation.isPending || photosQuery.isLoading || !hasUnsavedChanges}
                             overLimit={isOverLimit}
                             onSubmit={handleSubmitSelections}
                         />
@@ -731,7 +782,7 @@ export default function ClientCullingGallery() {
                     </div>
                 )}
                 {activeTab !== 'edit-results' && submitMutation.isError && (
-                    <div role="alert" aria-live="assertive" className="mb-5 flex items-center gap-3 border border-[var(--border)] bg-[var(--bg-card)] px-4 py-3 text-sm text-[var(--text-primary)]">
+                    <div ref={submitErrorRef} role="alert" tabIndex={-1} aria-live="assertive" className="mb-5 flex items-center gap-3 border border-[var(--border)] bg-[var(--bg-card)] px-4 py-3 text-sm text-[var(--text-primary)] outline-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)]">
                         <AlertCircle size={16} aria-hidden="true" />
                         {submitMutation.error instanceof Error ? submitMutation.error.message : 'Unable to submit selections.'}
                     </div>
@@ -789,9 +840,9 @@ export default function ClientCullingGallery() {
                 
                 {activeTab === 'gallery' && !showSelected && !submittedOnly && !isFaceFilterActive && !photosQuery.isLoading && !photosQuery.isError && photosQuery.data && totalPages > 1 && (
                     <nav className="mt-8 flex items-center justify-center gap-4" aria-label="Gallery pages">
-                        <button type="button" disabled={page === 1 || photosQuery.isFetching} onClick={() => goToGalleryPage(page - 1)} className="flex h-9 items-center gap-2 rounded-lg border border-[var(--border)] px-4 text-[10px] font-bold uppercase tracking-wider text-[var(--text-secondary)] disabled:opacity-35"><ChevronLeft size={14} aria-hidden="true" /> Previous</button>
-                        <span className="text-xs text-[var(--text-muted)]">Page {page} of {totalPages}</span>
-                        <button type="button" disabled={!hasNextGalleryPage || photosQuery.isFetching} onClick={() => goToGalleryPage(page + 1)} className="flex h-9 items-center gap-2 rounded-lg border border-[var(--border)] px-4 text-[10px] font-bold uppercase tracking-wider text-[var(--text-secondary)] disabled:opacity-35">Next <ChevronRight size={14} aria-hidden="true" /></button>
+                        <button type="button" disabled={page === 1 || photosQuery.isFetching} onClick={() => goToGalleryPage(page - 1)} className="flex h-11 items-center gap-2 rounded-lg border border-[var(--border)] px-4 text-[10px] font-bold uppercase tracking-wider text-[var(--text-secondary)] transition-colors hover:border-[var(--accent)] hover:text-[var(--text-primary)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)] disabled:opacity-35"><ChevronLeft size={14} aria-hidden="true" /> Previous</button>
+                        <span className="text-xs tabular-nums text-[var(--text-muted)]">Page {page} of {totalPages}</span>
+                        <button type="button" disabled={!hasNextGalleryPage || photosQuery.isFetching} onClick={() => goToGalleryPage(page + 1)} className="flex h-11 items-center gap-2 rounded-lg border border-[var(--border)] px-4 text-[10px] font-bold uppercase tracking-wider text-[var(--text-secondary)] transition-colors hover:border-[var(--accent)] hover:text-[var(--text-primary)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)] disabled:opacity-35">Next <ChevronRight size={14} aria-hidden="true" /></button>
                     </nav>
                 )}
             </section>
@@ -901,7 +952,7 @@ export default function ClientCullingGallery() {
                 />
             )}
             
-            {showTutorial && <TutorialModal galleryId={galleryId} token={token} tutorialSampleSlots={displayGallery?.tutorialSampleSlots || []} theme={theme} showIntro={!localStorage.getItem(tutorialKey(galleryId))} onClose={closeTutorial} />}
+            {showTutorial && <TutorialModal galleryId={galleryId} token={token} tutorialSampleSlots={displayGallery?.tutorialSampleSlots || []} tutorialSampleVersion={displayGallery?.tutorialSampleVersion} theme={theme} showIntro={!localStorage.getItem(tutorialKey(galleryId))} onClose={closeTutorial} />}
         </main>
     );
 }

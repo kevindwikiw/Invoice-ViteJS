@@ -59,7 +59,7 @@ paymentsRouter.post("/qris/create", async (c) => {
 
         // Fetch gallery row
         const gallery = await galleryOne<any>(
-            `SELECT id, title, public_key, edit_addon_price, additional_selection_limit, edit_addon_status, qris_enabled
+            `SELECT id, title, gallery_workflow, public_key, edit_addon_price, additional_selection_limit, edit_addon_status, qris_enabled
              FROM galleries
              WHERE id = ? OR public_key = ?`,
             [Number(galleryIdentifier) || -1, galleryIdentifier]
@@ -68,6 +68,7 @@ paymentsRouter.post("/qris/create", async (c) => {
         if (!gallery) {
             return c.json({ error: "Gallery not found" }, 404);
         }
+        if (gallery.gallery_workflow === "delivery_only") return c.json({ error: "Selection is not available for this gallery.", code: "SELECTION_NOT_AVAILABLE" }, 403);
         if (!gallery.qris_enabled) {
             return c.json({ error: "QRIS self-service is not enabled for this gallery." }, 403);
         }

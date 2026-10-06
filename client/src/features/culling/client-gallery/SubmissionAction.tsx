@@ -5,9 +5,9 @@ import clsx from 'clsx';
 export type SubmissionStatus = 'ready' | 'dirty' | 'pending' | 'submitted';
 
 const STATUS_CONTENT = {
-    ready: { label: 'Ready to submit', Icon: Circle },
+    ready: { label: 'Select photos', Icon: Circle },
     dirty: { label: 'Not submitted', Icon: Circle },
-    pending: { label: 'Submitting', Icon: Loader2 },
+    pending: { label: 'Submitting…', Icon: Loader2 },
     submitted: { label: 'Submitted', Icon: Check },
 } as const;
 
@@ -47,7 +47,7 @@ export function SubmissionAction({ status, disabled, overLimit, onSubmit }: {
         <div
             ref={actionRef}
             data-testid="submission-action"
-            className="flex h-9 w-[144px] shrink-0 items-stretch overflow-hidden rounded-md border border-[var(--border)] bg-[var(--bg-card)] sm:h-11 sm:w-[228px]"
+            className="flex h-11 w-[188px] shrink-0 items-stretch overflow-hidden rounded-md border border-[var(--border)] bg-[var(--bg-card)] sm:w-[228px]"
         >
             <span
                 ref={statusRef}
@@ -58,7 +58,7 @@ export function SubmissionAction({ status, disabled, overLimit, onSubmit }: {
                     status === 'dirty' ? 'text-[var(--accent)]' : status === 'submitted' ? 'text-[var(--text-primary)]' : 'text-[var(--text-muted)]',
                 )}
             >
-                <Icon size={status === 'dirty' ? 7 : 11} fill={status === 'dirty' ? 'currentColor' : 'none'} className={clsx('shrink-0', pending && 'animate-spin motion-reduce:animate-none')} />
+                <Icon aria-hidden="true" size={status === 'dirty' ? 7 : 11} fill={status === 'dirty' ? 'currentColor' : 'none'} className={clsx('shrink-0', pending && 'animate-spin motion-reduce:animate-none')} />
                 <span className="truncate">{label}</span>
             </span>
 
@@ -71,7 +71,7 @@ export function SubmissionAction({ status, disabled, overLimit, onSubmit }: {
                     overLimit ? 'bg-rose-500/10 text-rose-400 hover:bg-rose-500/15' : 'bg-[var(--accent)] text-[var(--bg-deep)] hover:opacity-90',
                 )}
             >
-                {pending ? <Loader2 size={13} className="animate-spin motion-reduce:animate-none" /> : <Send size={13} />}
+                {pending ? <Loader2 aria-hidden="true" size={13} className="animate-spin motion-reduce:animate-none" /> : <Send aria-hidden="true" size={13} />}
                 Submit
             </button>
         </div>

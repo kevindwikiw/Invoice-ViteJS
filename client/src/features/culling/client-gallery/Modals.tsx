@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { AlertCircle, Check, CheckSquare, ChevronLeft, ChevronRight, Clock3, Images, Loader2, MessageCircle, QrCode, ScanFace, Send, X } from 'lucide-react';
 import clsx from 'clsx';
+import { GalleryModal } from '../../../components/GalleryModal';
 
 import { calculateAddonQuote, cullingTutorialImageUrl, createQrisPayment, type QrisPaymentResponse } from '../culling.public';
 import type { DiscountRule } from '../culling.types';
@@ -70,31 +71,19 @@ export function RequestMoreModal({
             const res = await createQrisPayment(galleryId, requestedCount);
             setQrisPayment(res);
         } catch (err: unknown) {
-            setQrisError(err instanceof Error ? err.message : 'Gagal memproses pembayaran QRIS');
+            setQrisError(err instanceof Error ? err.message : 'Unable to process the QRIS payment. Please try again.');
         } finally {
             setQrisLoading(false);
         }
     };
 
-    useEffect(() => {
-        const handleKeyDown = (event: KeyboardEvent) => {
-            if (event.key === 'Escape') onClose();
-        };
-        document.addEventListener('keydown', handleKeyDown);
-        return () => document.removeEventListener('keydown', handleKeyDown);
-    }, [onClose]);
-
     return (
-        <div className="fixed inset-0 z-[130] flex items-center justify-center bg-black/70 px-4" role="dialog" aria-modal="true" aria-label="Request more edited photos" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
-            <section className="w-full max-w-sm border border-[var(--border)] bg-[var(--bg-card)] p-5 text-[var(--text-primary)] shadow-2xl">
-                <header className="flex items-start justify-between gap-4">
-                    <div>
-                        <p className="text-[9px] font-bold uppercase tracking-[0.14em] text-[var(--text-muted)]">EDITING ADD-ON</p>
-                        <h2 className="mt-1 font-display text-xl">Keep More Favorites</h2>
-                        <p className="mt-2 text-xs leading-5 text-[var(--text-muted)]">Choose how many additional photos you want Orbit to edit.</p>
-                    </div>
-                    <button type="button" onClick={onClose} aria-label="Close request more dialog" className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-[var(--border)] hover:border-[var(--accent)]"><X size={14} /></button>
-                </header>
+        <>
+            {!qrisPayment && <GalleryModal title="Request more edited photos" close={onClose} busy={qrisLoading} widthClass="max-w-sm" layerClass="z-[130]">
+                <div className="text-[var(--text-primary)]">
+                    <p className="text-[9px] font-bold uppercase tracking-[0.14em] text-[var(--text-muted)]">EDITING ADD-ON</p>
+                    <h3 className="mt-1 font-display text-xl">Keep More Favorites</h3>
+                    <p className="mt-2 text-xs leading-5 text-[var(--text-muted)]">Choose how many additional photos you want Orbit to edit.</p>
 
                 <div className="mt-5 grid grid-cols-3 gap-2">
                     {[5, 10, 20].map((count) => {
@@ -122,7 +111,7 @@ export function RequestMoreModal({
 
                 <label className="mt-3 block">
                     <span className="text-[9px] font-bold uppercase tracking-[0.12em] text-[var(--text-muted)]">Custom amount</span>
-                    <input type="number" min="1" max="500" value={requestedCount} onChange={(event) => onChange(Math.min(500, Math.max(1, Number(event.currentTarget.value) || 1)))} className="mt-1.5 h-10 w-full rounded-lg border border-[var(--border)] bg-[var(--bg-deep)] px-3 text-sm outline-none focus:border-[var(--accent)]" />
+                    <input type="number" name="additional-photo-count" autoComplete="off" inputMode="numeric" min="1" max="500" value={requestedCount} onChange={(event) => onChange(Math.min(500, Math.max(1, Number(event.currentTarget.value) || 1)))} className="mt-1.5 h-11 w-full rounded-lg border border-[var(--border)] bg-[var(--bg-deep)] px-3 text-sm outline-none focus:border-[var(--accent)]" />
                 </label>
 
                 <dl className="mt-5 divide-y divide-[var(--border)] border-y border-[var(--border)] text-xs">
@@ -137,15 +126,15 @@ export function RequestMoreModal({
                         type="button"
                         disabled={qrisLoading}
                         onClick={handlePayQris}
-                        className="mt-5 flex h-11 w-full items-center justify-center gap-2 rounded-xl bg-[var(--accent)] text-xs font-black uppercase tracking-wider text-[var(--bg-deep)] transition-all hover:opacity-90 shadow-md active:scale-[0.99] disabled:opacity-50"
+                        className="mt-5 flex h-11 w-full items-center justify-center gap-2 rounded-xl bg-[var(--accent)] text-xs font-black uppercase tracking-wider text-[var(--bg-deep)] shadow-md transition-[opacity,transform] hover:opacity-90 active:scale-[0.99] disabled:opacity-50 motion-reduce:transition-none"
                     >
-                        {qrisLoading ? <Loader2 size={15} className="animate-spin" /> : <QrCode size={16} />}
-                        <span>Bayar Instan via QRIS</span>
+                        {qrisLoading ? <Loader2 size={15} aria-hidden="true" className="animate-spin motion-reduce:animate-none" /> : <QrCode size={16} aria-hidden="true" />}
+                        <span>Pay Instantly via QRIS</span>
                     </button>
                 ) : null}
 
                 {qrisError && (
-                    <p className="mt-2 text-center text-xs text-rose-400">{qrisError}</p>
+                    <p role="alert" className="mt-2 text-center text-xs text-rose-400">{qrisError}</p>
                 )}
 
                 <a
@@ -153,14 +142,15 @@ export function RequestMoreModal({
                     target="_blank"
                     rel="noreferrer"
                     onClick={onClose}
-                    className="mt-2 flex h-9 w-full items-center justify-center gap-2 rounded-xl border border-[var(--border)] text-[10px] font-bold uppercase tracking-wider text-[var(--text-secondary)] transition-colors hover:border-[var(--accent)] hover:text-white"
+                    className="mt-2 flex h-11 w-full items-center justify-center gap-2 rounded-xl border border-[var(--border)] text-[10px] font-bold uppercase tracking-wider text-[var(--text-secondary)] transition-colors hover:border-[var(--accent)] hover:text-white"
                 >
-                    <MessageCircle size={13} /> Pesan Manual via WhatsApp
+                    <MessageCircle size={13} aria-hidden="true" /> Request via WhatsApp
                 </a>
                 <p className="mt-2.5 text-center text-[10px] leading-4 text-[var(--text-muted)]">
-                    {qrisEnabled ? 'Pembayaran via QRIS otomatis membuka kuota seketika tanpa perlu konfirmasi manual.' : 'QRIS belum aktif untuk gallery ini, jadi request tambahan dikirim manual via WhatsApp.'}
+                    {qrisEnabled ? 'QRIS payment opens the additional selection quota automatically.' : 'QRIS is unavailable for this gallery. Send the request through WhatsApp instead.'}
                 </p>
-            </section>
+                </div>
+            </GalleryModal>}
 
             {qrisPayment && (
                 <QrisModal
@@ -172,7 +162,7 @@ export function RequestMoreModal({
                     onClose={() => setQrisPayment(null)}
                 />
             )}
-        </div>
+        </>
     );
 }
 
@@ -191,53 +181,29 @@ export function SubmitConfirmationModal({
 }) {
     const clearsSelection = selectedCount === 0;
 
-    useEffect(() => {
-        const previousOverflow = document.body.style.overflow;
-        document.body.style.overflow = 'hidden';
-        const handleKeyDown = (event: KeyboardEvent) => {
-            if (event.key === 'Escape' && !pending) onClose();
-        };
-        document.addEventListener('keydown', handleKeyDown);
-        return () => {
-            document.body.style.overflow = previousOverflow;
-            document.removeEventListener('keydown', handleKeyDown);
-        };
-    }, [onClose, pending]);
-
     return (
-        <div className="fixed inset-0 z-[130] flex items-center justify-center bg-black/70 px-4" role="dialog" aria-modal="true" aria-label={clearsSelection ? 'Clear submitted selection' : 'Submit selected photos'} onMouseDown={(event) => { if (!pending && event.target === event.currentTarget) onClose(); }}>
-            <section className="w-full max-w-sm border border-[var(--border)] bg-[var(--bg-card)] text-[var(--text-primary)] shadow-2xl">
-                <header className="flex items-start justify-between gap-4 border-b border-[var(--border)] px-5 py-4">
-                    <div>
-                        <p className="text-[9px] font-bold uppercase tracking-[0.14em] text-[var(--text-muted)]">FINAL CHECK</p>
-                        <h2 className="mt-1 font-display text-xl">{clearsSelection ? 'Clear selection?' : 'Submit your selection?'}</h2>
-                    </div>
-                    <button type="button" disabled={pending} onClick={onClose} aria-label="Close submit confirmation" className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-[var(--border)] transition-colors hover:border-[var(--accent)] disabled:opacity-40"><X size={14} /></button>
-                </header>
-
-                <div className="px-5 py-6 text-center">
+        <GalleryModal title={clearsSelection ? 'Clear Submitted Selection' : 'Submit Selected Photos'} close={onClose} busy={pending} widthClass="max-w-sm" layerClass="z-[130]" footer={<>
+            <button type="button" disabled={pending} onClick={onClose} className="h-11 flex-1 rounded-lg border border-[var(--border)] text-[10px] font-bold uppercase tracking-[0.12em] text-[var(--text-secondary)] transition-colors hover:border-[var(--accent)] hover:text-[var(--text-primary)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)] disabled:opacity-40">Cancel</button>
+            <button type="button" disabled={pending} onClick={onConfirm} className="flex h-11 flex-1 items-center justify-center gap-2 rounded-lg bg-[var(--accent)] text-[10px] font-black uppercase tracking-[0.12em] text-[var(--bg-deep)] transition-opacity hover:opacity-85 focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)] disabled:opacity-45">
+                {pending ? <Loader2 size={13} aria-hidden="true" className="animate-spin motion-reduce:animate-none" /> : <Send size={13} aria-hidden="true" />}
+                {pending ? 'Submitting…' : clearsSelection ? 'Clear selection' : `Submit ${selectedCount}`}
+            </button>
+        </>}>
+                <div className="text-center text-[var(--text-primary)]">
+                    <p className="text-[9px] font-bold uppercase tracking-[0.14em] text-[var(--text-muted)]">FINAL CHECK</p>
                     <p className="font-display text-5xl tabular-nums text-[var(--text-primary)]">{selectedCount}</p>
                     <p className="mt-1 text-[10px] font-bold uppercase tracking-[0.14em] text-[var(--text-muted)]">{selectedCount === 1 ? 'Photo selected' : 'Photos selected'}</p>
                     <p className="mx-auto mt-5 max-w-xs text-xs leading-5 text-[var(--text-secondary)]">
                         {clearsSelection ? 'This removes all previously submitted photos. You can select and submit them again later.' : 'Are you sure these are the photos you want to submit? Orbit will receive the selected filenames.'}
                     </p>
-                    {error && <div className="mt-4 flex items-start gap-2 border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-left text-xs leading-5 text-rose-300"><AlertCircle size={14} className="mt-0.5 shrink-0" />{error}</div>}
+                    {error && <div role="alert" className="mt-4 flex items-start gap-2 border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-left text-xs leading-5 text-rose-300"><AlertCircle size={14} aria-hidden="true" className="mt-0.5 shrink-0" />{error}</div>}
                 </div>
-
-                <footer className="grid grid-cols-2 gap-2 border-t border-[var(--border)] p-4">
-                    <button type="button" disabled={pending} onClick={onClose} className="h-10 rounded-lg border border-[var(--border)] text-[10px] font-bold uppercase tracking-[0.12em] text-[var(--text-secondary)] transition-colors hover:border-[var(--accent)] hover:text-[var(--text-primary)] disabled:opacity-40">Cancel</button>
-                    <button type="button" autoFocus disabled={pending} onClick={onConfirm} className="flex h-10 items-center justify-center gap-2 rounded-lg bg-[var(--accent)] text-[10px] font-black uppercase tracking-[0.12em] text-[var(--bg-deep)] transition-opacity hover:opacity-85 disabled:opacity-45">
-                        {pending ? <Loader2 size={13} className="animate-spin" /> : <Send size={13} />}
-                        {pending ? 'Submitting' : clearsSelection ? 'Clear selection' : `Submit ${selectedCount}`}
-                    </button>
-                </footer>
-            </section>
-        </div>
+        </GalleryModal>
     );
 }
 
-function BeforeAfterSlider({ galleryId, token, slot }: { galleryId: string; token: string; slot: number }) {
-    return <ComparisonSlider key={`${galleryId}-${slot}`} beforeUrl={cullingTutorialImageUrl(galleryId, token, slot, 'before')} afterUrl={cullingTutorialImageUrl(galleryId, token, slot, 'after')} />;
+function BeforeAfterSlider({ galleryId, token, slot, version }: { galleryId: string; token: string; slot: number; version?: string | null }) {
+    return <ComparisonSlider key={`${galleryId}-${slot}`} beforeUrl={cullingTutorialImageUrl(galleryId, token, slot, 'before', version)} afterUrl={cullingTutorialImageUrl(galleryId, token, slot, 'after', version)} />;
 }
 
 type TutorialIntroPhase = 'loading' | 'handoff' | 'ready';
@@ -331,7 +297,7 @@ function TutorialIntro({ theme, onHandoffStart, onComplete, onClose }: { theme: 
     );
 }
 
-export function TutorialModal({ galleryId, token, tutorialSampleSlots, theme, showIntro = false, onClose }: { galleryId: string; token: string; tutorialSampleSlots: number[]; theme: GalleryTheme; showIntro?: boolean; onClose: () => void }) {
+export function TutorialModal({ galleryId, token, tutorialSampleSlots, tutorialSampleVersion, theme, showIntro = false, onClose }: { galleryId: string; token: string; tutorialSampleSlots: number[]; tutorialSampleVersion?: string | null; theme: GalleryTheme; showIntro?: boolean; onClose: () => void }) {
     const [introPhase, setIntroPhase] = useState<TutorialIntroPhase>(showIntro ? 'loading' : 'ready');
     const startIntroHandoff = useCallback(() => setIntroPhase((current) => current === 'loading' ? 'handoff' : current), []);
     const finishIntro = useCallback(() => setIntroPhase('ready'), []);
@@ -385,13 +351,13 @@ export function TutorialModal({ galleryId, token, tutorialSampleSlots, theme, sh
 
     useEffect(() => {
         const urls = tutorialSampleSlots.flatMap((slot) => [
-            cullingTutorialImageUrl(galleryId, token, slot, 'after'),
-            cullingTutorialImageUrl(galleryId, token, slot, 'before'),
+            cullingTutorialImageUrl(galleryId, token, slot, 'after', tutorialSampleVersion),
+            cullingTutorialImageUrl(galleryId, token, slot, 'before', tutorialSampleVersion),
         ]);
         urls.forEach((url, index) => {
             void preloadTutorialImage(url, index < 2 ? 'high' : 'low').catch(() => undefined);
         });
-    }, [galleryId, token, tutorialSampleSlots]);
+    }, [galleryId, token, tutorialSampleSlots, tutorialSampleVersion]);
 
     const wizardSteps = [
         ...(hasSamples ? [{ id: 'confidence', label: 'Choose' }] : []),
@@ -454,7 +420,7 @@ export function TutorialModal({ galleryId, token, tutorialSampleSlots, theme, sh
                                 <p className="text-[9px] font-bold uppercase tracking-[0.12em] text-[var(--text-muted)]">Before / Edited</p>
                             </div>
                             <div className="mt-2">
-                                <BeforeAfterSlider key={activeSampleSlot} galleryId={galleryId} token={token} slot={activeSampleSlot} />
+                                <BeforeAfterSlider key={activeSampleSlot} galleryId={galleryId} token={token} slot={activeSampleSlot} version={tutorialSampleVersion} />
                             </div>
                             <p className="mx-auto mt-3 max-w-md text-center text-xs leading-5 text-[var(--text-muted)]">Pick the moments that mean the most. We’ll take care of making them into something lasting.</p>
                             {tutorialSampleSlots.length > 1 && (

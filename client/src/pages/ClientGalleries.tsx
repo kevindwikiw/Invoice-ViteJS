@@ -44,6 +44,7 @@ import {
 
 import type {
   GalleryMode,
+  GalleryWorkflow,
   GalleryStatus,
   GallerySummary
 } from '../features/culling/culling.types';
@@ -65,28 +66,32 @@ import {
   resetGalleryPinLock,
   saveGalleryContact,
   syncGallery,
-  unpublishEditResults,
+  syncEditResults,
   updateGallery,
+  type GalleryContactSettings,
+  type CreateGalleryInput,
 } from '../features/culling/culling.admin';
 import { formatDateValue } from '../lib/date';
 import { GalleryModal as Modal } from '../components/GalleryModal';
 import { EditResultPairs } from '../features/culling/EditResultPairs';
 
 
-function GalleryModeTabs({ value, onChange, disabled = false, scope }: { value: GalleryMode; onChange: (mode: GalleryMode) => void; disabled?: boolean; scope: string }) {
-  const options = [{ value: 'selection', label: 'Photo Selection' }, { value: 'edited', label: 'Edited Photos' }] as const;
-  return <div role="tablist" aria-label="Gallery area" className="flex border-b border-[var(--border)]">
-    {options.map((option) => <button key={option.value} type="button" role="tab" id={`${scope}-${option.value}-tab`} aria-controls={`${scope}-panel`} aria-selected={value === option.value} tabIndex={value === option.value ? 0 : -1} disabled={disabled}
-      onClick={() => onChange(option.value)}
+type GalleryDetailMode = GalleryMode | 'preview';
+
+function GalleryModeTabs<T extends GalleryDetailMode>({ value, onChange, disabled = false, scope, includePreview = false, deliveryOnly = false }: { value: T; onChange: (mode: T) => boolean | void; disabled?: boolean; scope: string; includePreview?: boolean; deliveryOnly?: boolean }) {
+  const options = [...(deliveryOnly ? [] : [{ value: 'selection', label: 'Photo Selection', compactLabel: 'Selection' }]), { value: 'edited', label: 'Edited Photos', compactLabel: 'Edited' }, ...(includePreview ? [{ value: 'preview', label: 'Preview Samples', compactLabel: 'Preview' }] : [])] as { value: GalleryDetailMode; label: string; compactLabel: string }[];
+  return <div role="tablist" aria-label="Gallery area" className="flex overflow-x-auto border-b border-[var(--border)]">
+    {options.map((option, index) => <button key={option.value} type="button" role="tab" id={`${scope}-${option.value}-tab`} aria-label={option.label} aria-controls={`${scope}-panel`} aria-selected={value === option.value} tabIndex={value === option.value ? 0 : -1} disabled={disabled}
+      onClick={() => onChange(option.value as T)}
       onKeyDown={(event) => {
         if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
         event.preventDefault();
-        const next = event.key === 'Home' ? 'selection' : event.key === 'End' ? 'edited' : value === 'selection' ? 'edited' : 'selection';
-        onChange(next);
-        document.getElementById(`${scope}-${next}-tab`)?.focus();
+        const nextIndex = event.key === 'Home' ? 0 : event.key === 'End' ? options.length - 1 : (index + (event.key === 'ArrowRight' ? 1 : -1) + options.length) % options.length;
+        const next = options[nextIndex]!.value;
+        if (onChange(next as T) !== false) document.getElementById(`${scope}-${next}-tab`)?.focus();
       }}
-      className={clsx('min-h-11 flex-1 border-b-2 px-3 text-sm font-semibold focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)] disabled:opacity-50 sm:flex-none sm:px-5', value === option.value ? 'border-[var(--accent)] text-[var(--text-primary)]' : 'border-transparent text-[var(--text-muted)] hover:text-[var(--text-primary)]')}
-    >{option.label}</button>)}
+      className={clsx('min-h-11 border-b-2 px-2 text-xs font-semibold focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)] disabled:opacity-50 sm:shrink-0 sm:px-5 sm:text-sm', includePreview ? 'min-w-0 flex-1' : 'shrink-0', value === option.value ? 'border-[var(--accent)] text-[var(--text-primary)]' : 'border-transparent text-[var(--text-muted)] hover:text-[var(--text-primary)]')}
+    ><span className="sm:hidden">{includePreview ? option.compactLabel : option.label}</span><span className="hidden sm:inline">{option.label}</span></button>)}
   </div>;
 }
 
@@ -100,7 +105,7 @@ const compactUnitInputShellClass = unitInputShellClass;
 const unitInputClass = 'h-full min-w-0 border-0 bg-transparent px-3.5 text-sm tabular-nums text-[var(--text-primary)] outline-none';
 const unitInputSuffixClass = 'flex h-full items-center justify-center border-l border-[var(--border)] px-2 text-[11px] font-medium text-[var(--text-muted)]';
 const publicUrl = (gallery: GallerySummary) => `${window.location.origin}/culling/${gallery.publicKey || gallery.id}`;
-const driveUrl = (gallery: GallerySummary) => (gallery.driveFolderId.startsWith('http') ? gallery.driveFolderId : `https://drive.google.com/drive/folders/${gallery.driveFolderId}`);
+const driveUrl = (gallery: GallerySummary) => (gallery.driveFolderId?.startsWith('http') ? gallery.driveFolderId : `https://drive.google.com/drive/folders/${gallery.driveFolderId || ''}`);
 const parseIdr = (value: FormDataEntryValue | null) => Number(String(value || '').replace(/\D/g, '')) || 0;
 
 function deadlineLabel(gallery: Pick<GallerySummary, 'selectionDeadlineAt' | 'isExpired'>): string {
@@ -194,11 +199,15 @@ function CreateGalleryModal({
   close,
   pending,
   submit,
+  error,
 }: {
   close: () => void;
   pending: boolean;
-  submit: (input: { title: string; driveFolderUrl: string; pin: string; status: GalleryStatus; maxSelections: number; selectionDurationHours: number; qrisEnabled?: boolean; tutorialBeforeDriveFileId?: string; tutorialAfterDriveFileId?: string; tutorialBefore2DriveFileId?: string; tutorialAfter2DriveFileId?: string; tutorialBefore3DriveFileId?: string; tutorialAfter3DriveFileId?: string }) => void;
+  submit: (input: CreateGalleryInput) => void;
+  error?: string;
 }) {
+  const [workflow, setWorkflow] = useState<GalleryWorkflow>('selection_delivery');
+  const deliveryOnly = workflow === 'delivery_only';
   return (
     <Modal title="Create gallery" close={close} busy={pending} widthClass="max-w-lg" maxHeightClass="max-h-[min(90dvh,620px)]" footer={(
       <>
@@ -217,7 +226,12 @@ function CreateGalleryModal({
           event.preventDefault();
           if (pending) return;
           const data = new FormData(event.currentTarget);
+          if (deliveryOnly) {
+            submit({ workflow, title: String(data.get('title') || '').trim(), editResultsFolderId: String(data.get('drive') || '').trim() });
+            return;
+          }
           submit({
+            workflow: 'selection_delivery',
             title: String(data.get('title') || '').trim(),
             driveFolderUrl: String(data.get('drive') || '').trim(),
             pin: String(data.get('pin') || ''),
@@ -225,41 +239,20 @@ function CreateGalleryModal({
             maxSelections: Math.min(500, Math.max(0, Number(data.get('limit')) || 0)),
             selectionDurationHours: Math.min(8760, Math.max(1, Number(data.get('duration')) || 72)),
             qrisEnabled: data.get('qrisEnabled') === 'on',
-            tutorialBeforeDriveFileId: String(data.get('tutorialBeforeDriveFileId') || '').trim(),
-            tutorialAfterDriveFileId: String(data.get('tutorialAfterDriveFileId') || '').trim(),
-            tutorialBefore2DriveFileId: String(data.get('tutorialBefore2DriveFileId') || '').trim(),
-            tutorialAfter2DriveFileId: String(data.get('tutorialAfter2DriveFileId') || '').trim(),
-            tutorialBefore3DriveFileId: String(data.get('tutorialBefore3DriveFileId') || '').trim(),
-            tutorialAfter3DriveFileId: String(data.get('tutorialAfter3DriveFileId') || '').trim(),
           });
         }}
       >
+        <div role="group" aria-label="Gallery workflow" className="grid grid-cols-2 gap-1 rounded-md border border-[var(--border)] p-1">
+          {([{ value: 'selection_delivery', label: 'Prewedding' }, { value: 'delivery_only', label: 'Wedding' }] as const).map((option) => <button key={option.value} type="button" aria-pressed={workflow === option.value} disabled={pending} onClick={() => setWorkflow(option.value)} className={clsx('min-h-11 rounded px-3 text-sm font-semibold transition-colors hover:bg-[var(--bg-hover)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)] disabled:opacity-50', workflow === option.value ? 'bg-[var(--bg-elevated)] text-[var(--text-primary)]' : 'text-[var(--text-muted)]')}>{option.label}</button>)}
+        </div>
+        {deliveryOnly && error && <p role="alert" className="text-sm text-rose-500">{error}</p>}
         <Field label="Gallery name">
-          <input name="title" required placeholder="Aldian & Panpan Prewedding" className={compactInputClass} />
+          <input name="title" required placeholder={deliveryOnly ? 'Aldian & Panpan Wedding' : 'Aldian & Panpan Prewedding'} className={compactInputClass} />
         </Field>
-        <Field label="Google Drive folder">
+        <Field label={deliveryOnly ? 'Edited photos Drive folder' : 'Google Drive folder'}>
           <input name="drive" required placeholder="https://drive.google.com/drive/folders/..." className={compactInputClass} />
         </Field>
-        <details className="border-y border-[var(--border)] py-3">
-          <summary className="cursor-pointer text-xs font-semibold text-[var(--text-secondary)]">Before / edited preview <span className="font-normal text-[var(--text-muted)]">(optional)</span></summary>
-          <div className="mt-3 space-y-3">
-            {[1, 2, 3].map((slot) => {
-              const suffix = slot === 1 ? '' : String(slot);
-              return (
-                <div key={slot} className="grid grid-cols-[auto_minmax(0,1fr)_minmax(0,1fr)] items-end gap-2">
-                  <span className="pb-2 text-[9px] font-black uppercase tracking-[0.12em] text-[var(--text-muted)]">{String(slot).padStart(2, '0')}</span>
-                  <Field label="Before photo">
-                    <input name={`tutorialBefore${suffix}DriveFileId`} placeholder="Before file link or ID" className={compactInputClass} />
-                  </Field>
-                  <Field label="Edited photo">
-                    <input name={`tutorialAfter${suffix}DriveFileId`} placeholder="Edited file link or ID" className={compactInputClass} />
-                  </Field>
-                </div>
-              );
-            })}
-          </div>
-        </details>
-        <div className="grid gap-4 sm:grid-cols-2">
+        {!deliveryOnly && <><div className="grid gap-4 sm:grid-cols-2">
           <Field label="Client PIN">
             <input name="pin" required minLength={4} inputMode="numeric" autoComplete="off" placeholder="4821" className={compactInputClass} />
           </Field>
@@ -284,6 +277,7 @@ function CreateGalleryModal({
             <span className="mt-1 block text-[10px] leading-4 text-[var(--text-muted)]">Client bisa bayar tambahan foto langsung lewat QRIS. Kalau mati, tombol request tetap lewat WhatsApp manual.</span>
           </span>
         </label>
+        </>}
       </form>
     </Modal>
   );
@@ -608,6 +602,7 @@ function GalleryTable({
             >
               <td className="max-w-[260px] px-7 py-5">
                 <p className="truncate text-sm font-semibold text-[var(--text-primary)]" title={gallery.title}>{gallery.title}</p>
+                {gallery.workflow === 'delivery_only' && <span className="mt-1 inline-block text-[10px] font-medium text-[var(--text-secondary)]">Wedding · Delivery only</span>}
                 {(mode === 'edited' ? gallery.editResultsIsExpired : gallery.isExpired) && <span className="mt-1.5 inline-flex items-center gap-1 text-[9px] font-bold uppercase tracking-[0.12em] text-rose-400"><Clock3 size={10} /> Expired</span>}
                 <a
                   href={mode === 'edited' ? (gallery.editResultsFolderId ? `https://drive.google.com/drive/folders/${gallery.editResultsFolderId}` : undefined) : driveUrl(gallery)}
@@ -653,32 +648,70 @@ function GalleryTable({
   );
 }
 
+const globalPreviewFields = [
+  ['tutorialBeforeDriveFileId', 'tutorialAfterDriveFileId'],
+  ['tutorialBefore2DriveFileId', 'tutorialAfter2DriveFileId'],
+  ['tutorialBefore3DriveFileId', 'tutorialAfter3DriveFileId'],
+] as const;
+
+type PreviewSettings = Pick<GalleryContactSettings, 'tutorialBeforeDriveFileId' | 'tutorialAfterDriveFileId' | 'tutorialBefore2DriveFileId' | 'tutorialAfter2DriveFileId' | 'tutorialBefore3DriveFileId' | 'tutorialAfter3DriveFileId'>;
+
+function contactFormValues(form: HTMLFormElement): Pick<GalleryContactSettings, 'contactWhatsappUrl' | 'message' | 'requestMoreMessage'> {
+  const values = new FormData(form);
+  const text = (name: string) => String(values.get(name) || '').trim();
+  return {
+    contactWhatsappUrl: text('phone'),
+    message: text('message'),
+    requestMoreMessage: text('requestMoreMessage'),
+  };
+}
+
 function ContactSettings({ close }: { close: () => void }) {
   const { addToast } = useToast();
   const qc = useQueryClient();
   const query = useQuery({ queryKey: ['gallery-contact'], queryFn: getGalleryContact });
+  const [dirty, setDirty] = useState(false);
   const save = useMutation({
-    mutationFn: (data: FormData) => saveGalleryContact({ contactWhatsappUrl: String(data.get('phone') || ''), message: String(data.get('message') || ''), requestMoreMessage: String(data.get('requestMoreMessage') || '') }),
-    onSuccess: () => {
-      addToast('WhatsApp settings saved.', 'success');
-      qc.invalidateQueries({ queryKey: ['gallery-contact'] });
+    mutationFn: saveGalleryContact,
+    onSuccess: (result) => {
+      qc.setQueryData(['gallery-contact'], result);
+      addToast('Admin WhatsApp settings saved.', 'success');
+      void qc.invalidateQueries({ queryKey: ['gallery-contact'] });
       close();
     },
   });
 
   return (
-    <Modal title="Admin WhatsApp" close={close}>
+    <Modal title="Admin WhatsApp" close={close} busy={save.isPending} beforeClose={() => !dirty || window.confirm('Discard unsaved admin settings?')} footer={query.isSuccess ? <div className="flex w-full flex-wrap items-center justify-between gap-2">
+      {save.isError && <p role="alert" className="w-full text-xs text-rose-500">{save.error instanceof Error ? save.error.message : 'Unable to save settings. Retry.'}</p>}
+      <span role="status" aria-live="polite" className="text-xs text-[var(--text-muted)]">{dirty ? 'Unsaved changes' : 'No changes to save'}</span>
+      <div className="ml-auto flex items-center gap-2">
+        <button type="button" disabled={save.isPending} onClick={() => { if (!dirty || window.confirm('Discard unsaved admin settings?')) close(); }} className="h-10 rounded-md border border-[var(--border)] px-3 text-xs font-semibold hover:border-[var(--accent)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)] disabled:opacity-50">Cancel</button>
+        <button type="submit" form="admin-contact-form" disabled={save.isPending || !dirty} className="inline-flex h-10 items-center gap-2 rounded-md bg-[var(--accent)] px-3 text-xs font-semibold text-[var(--bg-deep)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)] disabled:cursor-not-allowed disabled:opacity-50">
+          {save.isPending && <Loader2 size={13} aria-hidden="true" className="animate-spin" />}{save.isPending ? 'Saving…' : 'Save settings'}
+        </button>
+      </div>
+    </div> : undefined}>
+      {query.isPending ? <div role="status" className="flex min-h-48 items-center justify-center gap-2 text-sm text-[var(--text-muted)]"><Loader2 size={16} aria-hidden="true" className="animate-spin" /> Loading settings…</div> : query.isError ? <div role="alert" className="space-y-3 text-sm"><p>Unable to load admin settings.</p><button type="button" onClick={() => void query.refetch()} className="h-10 rounded-md border border-[var(--border)] px-3">Retry</button></div> :
       <form
-        key={query.data ? 'loaded' : 'loading'}
+        id="admin-contact-form"
+        aria-busy={save.isPending}
+        inert={save.isPending}
+        key="loaded"
+        onChange={(event) => {
+          const current = contactFormValues(event.currentTarget);
+          setDirty(Object.entries(current).some(([key, value]) => value !== String(query.data?.[key as keyof GalleryContactSettings] || '').trim()));
+          save.reset();
+        }}
         onSubmit={(event) => {
           event.preventDefault();
-          save.mutate(new FormData(event.currentTarget));
+          save.mutate(contactFormValues(event.currentTarget));
         }}
         className="space-y-4"
       >
-        <p className="text-xs leading-5 text-[var(--text-muted)]">Contact number and WhatsApp templates for gallery access and add-on requests.</p>
+        <p className="text-xs leading-5 text-[var(--text-muted)]">Contact number and message templates for client galleries.</p>
         <Field label="WhatsApp number">
-          <input name="phone" required defaultValue={query.data?.contactWhatsappUrl || ''} placeholder="081234567890" className={inputClass} />
+          <input name="phone" required type="tel" autoComplete="tel" defaultValue={query.data?.contactWhatsappUrl || ''} placeholder="081234567890" className={inputClass} />
         </Field>
         <Field label="Access / unlock message template">
           <textarea
@@ -699,22 +732,107 @@ function ContactSettings({ close }: { close: () => void }) {
             className="w-full resize-y rounded-lg border border-[var(--border)] bg-[var(--bg-deep)] px-3 py-2 text-sm text-[var(--text-primary)] outline-none focus:border-[var(--accent)]"
           />
         </Field>
-        <div className="flex justify-end gap-2 border-t border-[var(--border)] pt-4">
-          <button
-            type="button"
-            onClick={close}
-            className="h-10 cursor-pointer rounded-lg border border-[var(--border)] px-4 text-[10px] font-bold uppercase hover:border-[var(--accent)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)]"
-          >
-            Cancel
-          </button>
-          <button disabled={save.isPending} className="inline-flex h-10 cursor-pointer items-center gap-2 rounded-lg bg-[var(--accent)] px-4 text-[10px] font-black uppercase text-[var(--bg-deep)] disabled:cursor-not-allowed disabled:opacity-50">
-            {save.isPending && <Loader2 size={13} className="animate-spin" />}
-            Save settings
-          </button>
-        </div>
-      </form>
+      </form>}
     </Modal>
   );
+}
+
+function PreviewSamplesSettings({ formId, showGlobalLabel = true, onDirtyChange, onSavedChange, onSavingChange }: { formId: string; showGlobalLabel?: boolean; onDirtyChange: (dirty: boolean) => void; onSavedChange: (saved: boolean) => void; onSavingChange: (saving: boolean) => void }) {
+  const query = useQuery({ queryKey: ['gallery-contact'], queryFn: getGalleryContact, retry: false });
+  if (query.isPending) return <div role="status" className="flex min-h-48 items-center justify-center gap-2 text-sm text-[var(--text-muted)]"><Loader2 size={16} aria-hidden="true" className="animate-spin" /> Loading preview samples...</div>;
+  if (query.isError) return <div role="alert" className="space-y-3 text-sm"><p>Unable to load preview samples.</p><button type="button" onClick={() => void query.refetch()} className="h-10 rounded-md border border-[var(--border)] px-3">Retry</button></div>;
+  return <PreviewSamplesForm formId={formId} settings={query.data} showGlobalLabel={showGlobalLabel} onDirtyChange={onDirtyChange} onSavedChange={onSavedChange} onSavingChange={onSavingChange} />;
+}
+
+function PreviewSamplesForm({ formId, settings, showGlobalLabel, onDirtyChange, onSavedChange, onSavingChange }: { formId: string; settings: GalleryContactSettings; showGlobalLabel: boolean; onDirtyChange: (dirty: boolean) => void; onSavedChange: (saved: boolean) => void; onSavingChange: (saving: boolean) => void }) {
+  const qc = useQueryClient();
+  const { addToast } = useToast();
+  const initialValues = (source: GalleryContactSettings): PreviewSettings => Object.fromEntries(globalPreviewFields.flatMap(([before, after]) => [[before, source[before] || ''], [after, source[after] || '']])) as PreviewSettings;
+  const [values, setValues] = useState<PreviewSettings>(() => initialValues(settings));
+  const [baseline, setBaseline] = useState<PreviewSettings>(() => initialValues(settings));
+  const [invalidSample, setInvalidSample] = useState<number | null>(null);
+  const updateField = (field: keyof PreviewSettings, value: string) => {
+    const next = { ...values, [field]: value };
+    setValues(next);
+    onDirtyChange(globalPreviewFields.some(([before, after]) => next[before].trim() !== baseline[before].trim() || next[after].trim() !== baseline[after].trim()));
+    onSavedChange(false);
+    setInvalidSample(null);
+    save.reset();
+  };
+  const save = useMutation({
+    mutationFn: saveGalleryContact,
+    onSuccess: (result) => {
+      qc.setQueryData(['gallery-contact'], result);
+      void qc.invalidateQueries({ queryKey: ['gallery-contact'] });
+      setValues(initialValues(result));
+      setBaseline(initialValues(result));
+      onDirtyChange(false);
+      onSavedChange(true);
+      addToast('Preview samples saved for all galleries.', 'success');
+    },
+    onSettled: () => onSavingChange(false),
+  });
+  return <form id={formId} aria-busy={save.isPending} inert={save.isPending} onSubmit={(event) => {
+    event.preventDefault();
+    const current = Object.fromEntries(Object.entries(values).map(([key, value]) => [key, value.trim()])) as PreviewSettings;
+    const incomplete = globalPreviewFields.findIndex(([before, after]) => Boolean(current[before]) !== Boolean(current[after]));
+    if (incomplete >= 0) {
+      setInvalidSample(incomplete + 1);
+      const missing = current[globalPreviewFields[incomplete]![0]] ? globalPreviewFields[incomplete]![1] : globalPreviewFields[incomplete]![0];
+      event.currentTarget.querySelector<HTMLInputElement>(`[name="${missing}"]`)?.focus();
+      return;
+    }
+    setInvalidSample(null);
+    onSavingChange(true);
+    save.mutate(current);
+  }} className="space-y-4">
+    <div className="border-b border-[var(--border)] pb-4">
+      {showGlobalLabel && <p className="text-[10px] font-bold uppercase text-[var(--accent)]">Global default · Used by all galleries</p>}
+      <h3 className={clsx('text-base font-semibold text-[var(--text-primary)]', showGlobalLabel && 'mt-2')}>Before → Edited examples</h3>
+      <p className="mt-1 text-xs leading-5 text-[var(--text-muted)]">Changes here apply to every client gallery. Add up to three complete pairs for the tutorial.</p>
+    </div>
+    {save.isError && <p role="alert" className="text-xs text-rose-500">{save.error instanceof Error ? save.error.message : 'Unable to save preview samples. Retry.'}</p>}
+    <div className="space-y-3">
+      {globalPreviewFields.map(([before, after], index) => {
+        const complete = Boolean(values[before]) && Boolean(values[after]);
+        const incomplete = Boolean(values[before]) !== Boolean(values[after]);
+        const invalid = invalidSample === index + 1;
+        return <div key={before} className={clsx('rounded-md border p-3 sm:p-4', invalid ? 'border-rose-400/70' : 'border-[var(--border)]')}>
+          <div className="mb-3 flex items-center justify-between gap-2">
+            <span className="text-xs font-semibold text-[var(--text-primary)]">Sample {index + 1}</span>
+            <span className={clsx('text-[10px] font-semibold', complete ? 'text-emerald-500' : incomplete ? 'text-amber-500' : 'text-[var(--text-muted)]')}>{complete ? 'Complete' : incomplete ? 'Needs both photos' : 'Optional'}</span>
+          </div>
+          <div className="grid items-end gap-3 sm:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)]">
+            <Field label="Before photo"><input name={before} value={values[before]} onChange={(event) => updateField(before, event.currentTarget.value)} aria-label={`Sample ${index + 1} before photo`} aria-invalid={invalid} aria-describedby={invalid ? `global-preview-error-${index + 1}` : undefined} placeholder="Drive file link or ID" className={inputClass} /></Field>
+            <span aria-hidden="true" className="hidden pb-3 text-lg text-[var(--text-muted)] sm:block">→</span>
+            <Field label="Edited photo"><input name={after} value={values[after]} onChange={(event) => updateField(after, event.currentTarget.value)} aria-label={`Sample ${index + 1} edited photo`} aria-invalid={invalid} aria-describedby={invalid ? `global-preview-error-${index + 1}` : undefined} placeholder="Drive file link or ID" className={inputClass} /></Field>
+          </div>
+          {invalid && <p id={`global-preview-error-${index + 1}`} role="alert" className="mt-2 text-xs text-rose-500">Add both photos for sample {index + 1}, or clear both fields.</p>}
+        </div>;
+      })}
+    </div>
+  </form>;
+}
+
+function PreviewSamplesPage({ dirty, saved, saving, onDirtyChange, onSavedChange, onSavingChange }: { dirty: boolean; saved: boolean; saving: boolean; onDirtyChange: (dirty: boolean) => void; onSavedChange: (saved: boolean) => void; onSavingChange: (saving: boolean) => void }) {
+  const formId = 'global-preview-page-form';
+  return <section role="tabpanel" id="gallery-list-panel" aria-labelledby="gallery-list-preview-tab" className={`${PANEL_CARD_CLASS} overflow-hidden !p-0`}>
+    <div className="flex flex-col gap-4 border-b border-[var(--border)] px-5 py-5 sm:flex-row sm:items-center sm:justify-between md:px-7">
+      <SectionHeading title="Preview Samples" subtitle="GLOBAL MASTER / ALL GALLERIES" />
+      <div className="flex flex-col items-start gap-2 sm:flex-row sm:items-center sm:justify-end sm:gap-3">
+        <span role="status" aria-live="polite" className={clsx('text-xs', dirty ? 'font-semibold text-[var(--accent)]' : saved ? 'text-emerald-500' : 'text-[var(--text-muted)]')}>
+          {dirty ? 'Unsaved changes' : saved ? 'Preview samples saved' : 'No changes to save'}
+        </span>
+        <button type="submit" form={formId} disabled={saving || !dirty} className="inline-flex h-11 w-full shrink-0 items-center justify-center gap-2 rounded-md bg-[var(--accent)] px-4 text-xs font-bold text-[var(--bg-deep)] hover:opacity-90 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)] disabled:cursor-not-allowed disabled:opacity-45 sm:w-auto">
+          {saving ? <Loader2 size={14} aria-hidden="true" className="animate-spin" /> : <Check size={14} aria-hidden="true" />}
+          {saving ? 'Saving…' : 'Save Preview Samples'}
+        </button>
+      </div>
+    </div>
+    <div className="mx-auto max-w-4xl px-5 py-6 md:px-7">
+      <PreviewSamplesSettings formId={formId} showGlobalLabel={false} onDirtyChange={onDirtyChange} onSavedChange={onSavedChange} onSavingChange={onSavingChange} />
+    </div>
+  </section>;
 }
 
 function GalleryDetail({ gallery, close, mode }: { gallery: GallerySummary; close: () => void; mode: GalleryMode }) {
@@ -729,11 +847,17 @@ function GalleryDetail({ gallery, close, mode }: { gallery: GallerySummary; clos
 }
 
 function GalleryDetailEditor({ data, close, initialMode }: { data: GallerySummary; close: () => void; initialMode: GalleryMode }) {
+  const deliveryOnly = data.workflow === 'delivery_only';
+  const detailMode = deliveryOnly ? 'edited' : initialMode;
   const { addToast } = useToast();
   const editFormRef = useRef<HTMLFormElement>(null);
   const qc = useQueryClient();
-  const [mode, setMode] = useState<GalleryMode>(initialMode);
-  const [selectionStatus, setSelectionStatus] = useState(data.status);
+  const [mode, setMode] = useState<GalleryMode>(detailMode);
+  const [activeTab, setActiveTab] = useState<GalleryDetailMode>(detailMode);
+  const [previewDirty, setPreviewDirty] = useState(false);
+  const [previewSaved, setPreviewSaved] = useState(false);
+  const [previewSaving, setPreviewSaving] = useState(false);
+  const [selectionStatus, setSelectionStatus] = useState<GalleryStatus>(data.status ?? 'draft');
   const [editedStatus, setEditedStatus] = useState<GalleryStatus>(data.editResultsStatus ?? (data.hasEditResults ? 'open' : 'draft'));
   const draftStatus = mode === 'edited' ? editedStatus : selectionStatus;
   const setDraftStatus = mode === 'edited' ? setEditedStatus : setSelectionStatus;
@@ -751,6 +875,7 @@ function GalleryDetailEditor({ data, close, initialMode }: { data: GallerySummar
   const [comparisonPairs, setComparisonPairs] = useState(data.comparisonPairs || []);
   const [pairsDirty, setPairsDirty] = useState(false);
   const [pairsOpen, setPairsOpen] = useState(false);
+  const [publishAfterSave, setPublishAfterSave] = useState(false);
   const managePairsRef = useRef<HTMLButtonElement>(null);
   const wasPairsOpen = useRef(false);
   useEffect(() => {
@@ -767,6 +892,34 @@ function GalleryDetailEditor({ data, close, initialMode }: { data: GallerySummar
   const [editCustomDays, setEditCustomDays] = useState(() => Math.max(1, Math.round(Number(initialEditDuration || 168) / 24)));
   const [publishWarnings, setPublishWarnings] = useState<string[]>([]);
   const markDirty = () => { setDirty(true); setSaved(false); setSaveError(''); setActionError(''); };
+  const syncFormDirty = (nextDirty: boolean) => {
+    setFeedback((current) => ({ ...current, [mode]: { ...current[mode], dirty: nextDirty, saved: nextDirty ? false : current[mode].saved, saveError: '', actionError: '' } }));
+  };
+  const selectionFormChanged = (form: HTMLFormElement) => {
+    const getValue = (name: string) => String(new FormData(form).get(name) || '').trim();
+    const initialDuration = String(data.selectionDurationHours ?? (data.selectionDurationDays || 3) * 24);
+    return getValue('title') !== data.title.trim()
+      || getValue('driveFolderUrl') !== driveUrl(data)
+      || getValue('master-limit') !== (data.maxSelections ? String(data.maxSelections) : '')
+      || getValue('selection-duration') !== initialDuration
+      || getValue('pin') !== ''
+      || selectionStatus !== data.status
+      || addonDirty;
+  };
+  const editedFormChanged = (form: HTMLFormElement, password = editResultsPassword) => {
+    const formData = new FormData(form);
+    const getValue = (name: string) => String(formData.get(name) || '').trim();
+    const initialPreset = initialEditDuration === null ? 'unlimited' : [24, 72, 168, 336].includes(Number(initialEditDuration || 168)) ? String(initialEditDuration || 168) : 'custom';
+    return getValue('editResultsFolderId') !== String(data.editResultsFolderId || '').trim()
+      || (deliveryOnly && getValue('title') !== data.title.trim())
+      || getValue('editResultsZipFileId') !== String(data.editResultsZipFileId || '').trim()
+      || editedStatus !== (data.editResultsStatus ?? (data.hasEditResults ? 'open' : 'draft'))
+      || editAccessPreset !== initialPreset
+      || (editAccessPreset === 'custom' && editCustomDays !== Math.max(1, Math.round(Number(initialEditDuration || 168) / 24)))
+      || comparisonEnabled !== Boolean(data.comparisonEnabled)
+      || pairsDirty
+      || password.trim() !== '';
+  };
   const reportActionError = (action: string, error: unknown) => {
     const detail = error instanceof Error ? error.message : 'Please try again.';
     setActionError(`${action} failed. ${detail}`);
@@ -789,6 +942,10 @@ function GalleryDetailEditor({ data, close, initialMode }: { data: GallerySummar
       setSaved(true);
       setSaveError('');
       setActionError('');
+      if (mode === 'edited' && publishAfterSave && editResultsPassword.trim()) {
+        setPublishAfterSave(false);
+        publishResults.mutate({ id: data.id, password: editResultsPassword.trim() });
+      }
     },
     onError: (error) => setSaveError(error instanceof Error ? error.message : 'Unable to save gallery changes.'),
   });
@@ -808,7 +965,14 @@ function GalleryDetailEditor({ data, close, initialMode }: { data: GallerySummar
     },
     onError: (error) => reportActionError('Sync', error),
   });
-
+  const editSync = useMutation({
+    mutationFn: syncEditResults,
+    onSuccess: (result) => {
+      addToast(`Edited Photos folder synced. ${result.photoCount} photos found.`, 'success');
+      qc.invalidateQueries({ queryKey: ['gallery-detail', data.id] });
+    },
+    onError: (error) => reportActionError('Edited Photos sync', error),
+  });
   const [editResultsPassword, setEditResultsPassword] = useState('');
   const [showEditResultsPassword, setShowEditResultsPassword] = useState(false);
   const publishResults = useMutation({
@@ -819,24 +983,17 @@ function GalleryDetailEditor({ data, close, initialMode }: { data: GallerySummar
       addToast(`Published ${result.photoCount} edited photos across ${(result.folderCount ?? 0) + 1} folders with your delivery password.`, 'success');
       setPublishWarnings(result.warnings || []);
       setEditedStatus('open');
+      setDirty(false);
+      setSaved(true);
       qc.invalidateQueries({ queryKey: ['galleries'] });
       qc.invalidateQueries({ queryKey: ['gallery-detail', data.id] });
     },
-    onError: (error) => reportActionError(data.hasEditResults ? 'Republish' : 'Publish', error),
-  });
-  const unpublishResults = useMutation({
-    mutationFn: unpublishEditResults,
-    onSuccess: () => {
-      setEditResultsPassword('');
-      setShowEditResultsPassword(false);
-      addToast('Edited photos unpublished in the app. Google Drive links remain available.', 'success');
-      setEditedStatus('draft');
-      qc.invalidateQueries({ queryKey: ['galleries'] });
-      qc.invalidateQueries({ queryKey: ['gallery-detail', data.id] });
+    onError: (error) => {
+      setDirty(true);
+      setSaved(false);
+      reportActionError(data.hasEditResults ? 'Republish' : 'Publish', error);
     },
-    onError: (error) => reportActionError('Unpublish', error),
   });
-
   const [addonOpen, setAddonOpen] = useState(false);
   const [paymentStatus, setPaymentStatus] = useState<'unpaid' | 'paid'>(data.addonStatus === 'paid' ? 'paid' : 'unpaid');
   const [addonDraftLimit, setAddonDraftLimit] = useState(() => Number(data.additionalLimit || 0));
@@ -844,7 +1001,7 @@ function GalleryDetailEditor({ data, close, initialMode }: { data: GallerySummar
   const [qrisEnabled, setQrisEnabled] = useState(() => Boolean(data.addon?.qrisEnabled));
   const [addonDirty, setAddonDirty] = useState(false);
   const [masterLimit, setMasterLimit] = useState(() => Number(data.maxSelections || 0));
-  const busy = update.isPending || sync.isPending || publishResults.isPending || unpublishResults.isPending || resetPin.isPending;
+  const busy = update.isPending || sync.isPending || editSync.isPending || publishResults.isPending || resetPin.isPending || previewSaving;
   const publishBlockReason = dirty
     ? 'Save changes first, then click Publish or Republish. Saving alone does not publish edited photos.'
     : !data.editResultsFolderId
@@ -859,46 +1016,69 @@ function GalleryDetailEditor({ data, close, initialMode }: { data: GallerySummar
   const addonEstimatedTotal = calculateAddonQuote(addonDraftLimit, addonUnitPrice, discountRules).total;
   const submittedCount = Number(data.selectionCount || 0);
   const link = publicUrl(data) + (mode === 'edited' ? '?view=edit-results' : '');
-  const driveUrl = data.driveFolderId.startsWith('http') ? data.driveFolderId : `https://drive.google.com/drive/folders/${data.driveFolderId}`;
+  const sourceDriveUrl = driveUrl(data);
 
   return (
     <Modal title={pairsOpen ? 'Manage Pairs' : data.title} close={close} busy={busy} beforeClose={() => {
       if (pairsOpen) { setPairsOpen(false); return false; }
+      if (previewDirty && !window.confirm('Discard unsaved Preview Samples?')) return false;
       return !(feedback.selection.dirty || feedback.edited.dirty || editResultsPassword) || window.confirm('Discard unsaved gallery changes and any unpublished password?');
     }} footer={pairsOpen ? <>
       <button type="button" onClick={() => setPairsOpen(false)} className="min-h-11 rounded-md border border-[var(--border)] px-4 text-sm">Cancel</button>
       <button type="submit" form="edit-result-pairs-form" className="min-h-11 rounded-md bg-[var(--accent)] px-4 text-sm font-semibold text-[var(--bg-deep)]">Apply Pairs</button>
-    </> : (
+    </> : activeTab === 'preview' ? (
+      <div className="flex w-full items-center justify-between gap-3">
+        <span role="status" aria-live="polite" className={clsx('text-xs', previewDirty ? 'font-semibold text-[var(--accent)]' : previewSaved ? 'text-emerald-500' : 'text-[var(--text-muted)]')}>
+          {previewDirty ? 'Unsaved changes' : previewSaved ? 'Preview samples saved' : 'No changes to save'}
+        </span>
+        <button type="submit" form={`global-preview-detail-form-${data.id}`} disabled={busy || !previewDirty} className="inline-flex h-11 shrink-0 items-center justify-center gap-2 rounded-md bg-[var(--accent)] px-4 text-xs font-bold text-[var(--bg-deep)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)] disabled:cursor-not-allowed disabled:opacity-45">
+          {previewSaving ? <Loader2 size={14} aria-hidden="true" className="animate-spin" /> : <Check size={14} aria-hidden="true" />}
+          {previewSaving ? 'Saving...' : 'Save Preview Samples'}
+        </button>
+      </div>
+    ) : (
       <div className="w-full space-y-2">
         {saveError && <p role="alert" className="flex items-start gap-2 text-xs leading-5 text-rose-500"><AlertCircle size={15} className="mt-0.5 shrink-0" />{saveError}</p>}
         {actionError && <p role="alert" className="flex items-start gap-2 text-xs leading-5 text-rose-500"><AlertCircle size={15} aria-hidden="true" className="mt-0.5 shrink-0" />{actionError}</p>}
         <div className="flex items-center justify-between gap-3">
-          <span role="status" className="text-xs text-[var(--text-muted)]">{dirty ? 'Unsaved changes' : mode === 'edited' && editResultsPassword ? 'Delivery password not published' : saved ? 'Changes saved' : ''}</span>
-          <button type="submit" form={mode === 'edited' ? 'edit-delivery-form' : 'edit-gallery-form'} disabled={busy} className="inline-flex h-11 min-w-36 items-center justify-center gap-2 rounded-md bg-[var(--accent)] px-4 text-xs font-bold text-[var(--bg-deep)] disabled:opacity-50">
+          <span role="status" aria-live="polite" className={clsx('inline-flex min-h-5 items-center text-xs transition-colors duration-200 motion-reduce:transition-none', dirty ? 'font-semibold text-[var(--accent)]' : saved ? 'text-emerald-500' : 'text-[var(--text-muted)]')}>
+            {dirty ? 'Unsaved changes — review this tab before saving' : mode === 'edited' && editResultsPassword ? 'Delivery password not published' : saved ? 'Changes saved' : 'No changes to save'}
+          </span>
+          <button type="submit" form={mode === 'edited' ? 'edit-delivery-form' : 'edit-gallery-form'} disabled={busy || !dirty} className="inline-flex h-11 min-w-36 items-center justify-center gap-2 rounded-md bg-[var(--accent)] px-4 text-xs font-bold text-[var(--bg-deep)] transition-[opacity,transform] duration-150 hover:opacity-90 active:scale-[0.98] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)] disabled:cursor-not-allowed disabled:opacity-45 motion-reduce:transition-none">
             {update.isPending ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />}
-            {update.isPending ? 'Saving...' : mode === 'edited' ? 'Save Edited Photos' : 'Save Photo Selection'}
+            {update.isPending ? 'Saving…' : mode === 'edited' ? 'Save Edited Photos' : 'Save Photo Selection'}
           </button>
         </div>
       </div>
     )}>
       {pairsOpen && <EditResultPairs galleryId={data.id} pairs={comparisonPairs} onApply={(pairs) => { setComparisonPairs(pairs); setPairsDirty(true); markDirty(); setPairsOpen(false); }} />}
       <div className="space-y-5" hidden={pairsOpen}>
-        <GalleryModeTabs value={mode} onChange={setMode} disabled={busy} scope="gallery-detail" />
-        <div role="tabpanel" id="gallery-detail-panel" aria-labelledby={`gallery-detail-${mode}-tab`} className="space-y-5">
+        <GalleryModeTabs value={activeTab} onChange={(next) => {
+          if (next === activeTab) return true;
+          if (activeTab === 'preview' && previewDirty && !window.confirm('Discard unsaved Preview Samples?')) return false;
+          if (activeTab === 'preview') { setPreviewDirty(false); setPreviewSaved(false); }
+          if (next !== 'preview') setMode(next);
+          setActiveTab(next);
+          return true;
+        }} disabled={busy} scope="gallery-detail" includePreview deliveryOnly={deliveryOnly} />
+        {deliveryOnly && <p className="text-xs font-semibold text-[var(--text-secondary)]">Wedding · Delivery only</p>}
+        <div role="tabpanel" id="gallery-detail-panel" aria-labelledby={`gallery-detail-${activeTab}-tab`}>
+        {activeTab === 'preview' && <PreviewSamplesSettings formId={`global-preview-detail-form-${data.id}`} onDirtyChange={setPreviewDirty} onSavedChange={setPreviewSaved} onSavingChange={setPreviewSaving} />}
+        <div className="space-y-5" hidden={activeTab === 'preview'}>
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <div hidden={mode !== 'selection'}>
+          {!deliveryOnly && <div hidden={mode !== 'selection'}>
             <p className="text-xs text-[var(--text-muted)]">
               {data.photoCount} photos, {data.selectionCount} submitted
             </p>
             <p className={clsx('mt-1.5 inline-flex items-center gap-1.5 text-[10px] font-semibold', data.isExpired ? 'text-rose-400' : 'text-[var(--text-secondary)]')}>
               <Clock3 size={12} /> {deadlineLabel(data)} · {data.selectionDurationHours ?? (data.selectionDurationDays || 3) * 24} hours
             </p>
-          </div>
+          </div>}
           <p hidden={mode !== 'edited'} className={clsx('mt-1 inline-flex items-center gap-1.5 text-[10px] font-semibold', data.hasEditResults && data.editResultsExpiresAt && Date.parse(data.editResultsExpiresAt) <= Date.now() ? 'text-rose-400' : 'text-[var(--text-muted)]')}>
             <Clock3 size={12} /> Edited Photos access: {!data.hasEditResults ? 'Not published' : !data.editResultsExpiresAt ? 'Unlimited' : Date.parse(data.editResultsExpiresAt) <= Date.now() ? 'Expired' : `expires ${formatDateValue(data.editResultsExpiresAt, dateFormat, 'Expired')}`}
           </p>
           <div className="flex flex-wrap gap-2">
-            <button
+            {!deliveryOnly && <button
               type="button"
               disabled={busy}
               hidden={mode !== 'selection'}
@@ -912,7 +1092,21 @@ function GalleryDetailEditor({ data, close, initialMode }: { data: GallerySummar
             >
               {sync.isPending ? <Loader2 size={13} className="animate-spin" /> : <FolderSync size={13} />}
               {sync.isPending ? 'Syncing...' : 'Sync'}
-            </button>
+            </button>}
+            {mode === 'edited' && <button
+              type="button"
+              disabled={busy}
+              title={dirty ? 'Save changes before syncing' : 'Sync edited photos folder'}
+              onClick={() => {
+                if (dirty) { setActionError('Sync not started. Save changes first, then click Sync.'); return; }
+                setActionError('');
+                editSync.mutate(data.id);
+              }}
+              className="inline-flex h-9 cursor-pointer items-center gap-1.5 rounded-lg border border-sky-500/30 bg-sky-500/10 px-3 text-[10px] font-bold text-sky-400 hover:bg-sky-500/15 focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {editSync.isPending ? <Loader2 size={13} className="animate-spin" /> : <FolderSync size={13} />}
+              {editSync.isPending ? 'Syncing…' : 'Sync'}
+            </button>}
             <button
               type="button"
               onClick={() => { void navigator.clipboard.writeText(link).then(() => addToast('Client link copied.', 'success')).catch(() => addToast('Unable to copy the client link.', 'error')); }}
@@ -955,12 +1149,12 @@ function GalleryDetailEditor({ data, close, initialMode }: { data: GallerySummar
         </div>
 
         <div className="space-y-4 border-t border-[var(--border)] pt-4">
-          <form
+          {!deliveryOnly && <><form
             ref={editFormRef}
             id="edit-gallery-form"
             hidden={mode !== 'selection'}
             aria-busy={update.isPending}
-            onChange={markDirty}
+            onChange={(event) => syncFormDirty(selectionFormChanged(event.currentTarget))}
             onInvalid={(event) => {
               if (event.target instanceof HTMLInputElement) setSaveError(`Changes not saved. ${event.target.validationMessage}`);
             }}
@@ -983,16 +1177,10 @@ function GalleryDetailEditor({ data, close, initialMode }: { data: GallerySummar
                id: data.id,
                status: selectionStatus,
                title: String(form.get('title') || data.title).trim(),
-               driveFolderUrl: String(form.get('driveFolderUrl') || driveUrl).trim(),
+               driveFolderUrl: String(form.get('driveFolderUrl') || sourceDriveUrl).trim(),
                pin: String(form.get('pin') || ''),
                maxSelections: nextMasterLimit,
                 ...(addonDirty ? { additionalSelectionLimit: addonDraftLimit, editAddonPrice: addonUnitPrice, editAddonPricingMode: 'per_photo', editAddonStatus: paymentStatus, qrisEnabled } : {}),
-                tutorialBeforeDriveFileId: String(form.get('tutorialBeforeDriveFileId') || '').trim(),
-                tutorialAfterDriveFileId: String(form.get('tutorialAfterDriveFileId') || '').trim(),
-                tutorialBefore2DriveFileId: String(form.get('tutorialBefore2DriveFileId') || '').trim(),
-                tutorialAfter2DriveFileId: String(form.get('tutorialAfter2DriveFileId') || '').trim(),
-                tutorialBefore3DriveFileId: String(form.get('tutorialBefore3DriveFileId') || '').trim(),
-                tutorialAfter3DriveFileId: String(form.get('tutorialAfter3DriveFileId') || '').trim(),
                 ...(durationChanged ? { selectionDurationHours: nextDurationHours } : {}),
               });
             }}
@@ -1003,29 +1191,8 @@ function GalleryDetailEditor({ data, close, initialMode }: { data: GallerySummar
                 <input name="title" required defaultValue={data.title} className={inputClass} />
               </Field>
               <Field label="Google Drive folder URL">
-                <input name="driveFolderUrl" required defaultValue={driveUrl} className={inputClass} />
+                <input name="driveFolderUrl" required defaultValue={sourceDriveUrl} className={inputClass} />
               </Field>
-              <details className="border-y border-[var(--border)] py-4">
-                <summary className="cursor-pointer text-xs font-semibold text-[var(--text-secondary)]">Before / edited preview <span className="font-normal text-[var(--text-muted)]">(optional)</span></summary>
-                <div className="mt-3 space-y-2">
-                  {[1, 2, 3].map((slot) => {
-                    const suffix = slot === 1 ? '' : String(slot);
-                    const beforeKey = `tutorialBefore${suffix}DriveFileId` as keyof typeof data;
-                    const afterKey = `tutorialAfter${suffix}DriveFileId` as keyof typeof data;
-                    return (
-                      <div key={slot} className="grid grid-cols-[auto_minmax(0,1fr)_minmax(0,1fr)] items-end gap-2">
-                        <span className="pb-2 text-[9px] font-black uppercase tracking-[0.12em] text-[var(--text-muted)]">{String(slot).padStart(2, '0')}</span>
-                        <Field label="Before photo">
-                          <input name={String(beforeKey)} defaultValue={String(data[beforeKey] || '')} placeholder="Before file link or ID" className={inputClass} />
-                        </Field>
-                        <Field label="Edited photo">
-                          <input name={String(afterKey)} defaultValue={String(data[afterKey] || '')} placeholder="Edited file link or ID" className={inputClass} />
-                        </Field>
-                      </div>
-                    );
-                  })}
-                </div>
-              </details>
               <div className="grid gap-4 sm:grid-cols-3">
                 <Field label="Client PIN">
                   <input name="pin" minLength={4} onChange={(event) => setPendingPin(Boolean(event.currentTarget.value))} aria-describedby="client-pin-save-status" placeholder="Set a new PIN (optional)" className={inputClass} />
@@ -1049,7 +1216,7 @@ function GalleryDetailEditor({ data, close, initialMode }: { data: GallerySummar
             <button type="button" disabled={busy} onClick={() => { setActionError(''); resetPin.mutate(data.id); }} className="inline-flex h-11 items-center gap-2 rounded-md border border-[var(--border)] px-3 text-xs font-semibold hover:bg-[var(--bg-elevated)] disabled:opacity-50">
               {resetPin.isPending ? <Loader2 size={15} className="animate-spin" /> : <KeyRound size={15} />} Reset PIN Attempts
             </button>
-          </div>
+          </div></>}
 
           <section hidden={mode !== 'edited'} aria-label="Edited photos publishing" className="pb-4">
             <form id="edit-delivery-form" aria-busy={update.isPending} onInvalid={(event) => {
@@ -1059,19 +1226,20 @@ function GalleryDetailEditor({ data, close, initialMode }: { data: GallerySummar
               if (busy) return;
               setSaveError('');
               setActionError('');
+              setPublishAfterSave(Boolean(editResultsPassword.trim()));
               const form = new FormData(event.currentTarget);
               update.mutate({
                 id: data.id,
-                editResultsStatus: editedStatus,
+                editResultsStatus: !data.hasEditResults && editResultsPassword.trim() && editedStatus === 'open' ? 'draft' : editedStatus,
                 editResultsFolderId: String(form.get('editResultsFolderId') || '').trim(),
                 editResultsZipFileId: String(form.get('editResultsZipFileId') || '').trim(),
                 editResultsAccessDurationHours: editAccessPreset === 'unlimited' ? null : editAccessPreset === 'custom' ? editCustomDays * 24 : Number(editAccessPreset),
-                comparisonEnabled,
-                ...(pairsDirty ? { comparisonPairs } : {}),
+                ...(deliveryOnly ? { title: String(form.get('title') || '').trim() } : { comparisonEnabled, ...(pairsDirty ? { comparisonPairs } : {}) }),
               });
             }}>
-            <fieldset disabled={busy} onChange={markDirty} className="mb-5 min-w-0 space-y-4">
+            <fieldset disabled={busy} onChange={(event) => syncFormDirty(editedFormChanged(event.currentTarget.form || event.currentTarget as unknown as HTMLFormElement))} className="mb-5 min-w-0 space-y-4">
               <legend className="mb-4 text-sm font-semibold text-[var(--text-primary)]">Edited Photos Delivery</legend>
+              {deliveryOnly && <Field label="Gallery title"><input name="title" required defaultValue={data.title} className={inputClass} /></Field>}
               <Field label="Edited photos Drive folder">
                 <input form="edit-delivery-form" name="editResultsFolderId" defaultValue={data.editResultsFolderId || ''} onChange={() => setFolderDirty(true)} placeholder="Folder URL or ID" className={inputClass} />
               </Field>
@@ -1087,10 +1255,10 @@ function GalleryDetailEditor({ data, close, initialMode }: { data: GallerySummar
               {editAccessPreset === 'custom' && <Field label="Custom duration (days)">
                 <input form="edit-delivery-form" name="editResultsCustomDays" type="number" min="1" max="3650" value={editCustomDays} onChange={(event) => { setEditCustomDays(Math.min(3650, Math.max(1, Number(event.currentTarget.value) || 1))); markDirty(); }} className={inputClass} />
               </Field>}
-              <div className="flex flex-wrap items-center justify-between gap-3 border-t border-[var(--border)] pt-4">
+              {!deliveryOnly && <div className="flex flex-wrap items-center justify-between gap-3 border-t border-[var(--border)] pt-4">
                 <label className="flex min-h-11 cursor-pointer items-center gap-3 text-sm font-medium"><input type="checkbox" checked={comparisonEnabled} onChange={(event) => setComparisonEnabled(event.target.checked)} style={{ width: 16, height: 16, padding: 0, flexShrink: 0 }} className="accent-[var(--accent)]" /><span>Enable Before / After</span></label>
                 <button ref={managePairsRef} type="button" disabled={!comparisonEnabled || folderDirty || !data.editResultsFolderId} title={folderDirty ? 'Save the folder before managing pairs' : undefined} onClick={() => setPairsOpen(true)} className="inline-flex min-h-11 items-center gap-2 rounded-md border border-[var(--border)] px-3 text-sm font-medium disabled:opacity-40"><Images size={16} /> Manage Pairs</button>
-              </div>
+              </div>}
             </fieldset>
              </form>
             {publishWarnings.map((warning) => <p key={warning} role="status" className="mb-3 text-sm text-amber-600 dark:text-amber-400">{warning}</p>)}
@@ -1103,29 +1271,24 @@ function GalleryDetailEditor({ data, close, initialMode }: { data: GallerySummar
               </div>
               <div className="flex w-full flex-col gap-2 sm:w-auto sm:min-w-72">
                 <div className="space-y-1.5">
-                  <label htmlFor="edit-results-publish-password" className="block text-[10px] font-semibold text-[var(--text-secondary)]">Edited Photos password</label>
+                  <label htmlFor="edit-results-publish-password" className="block text-[10px] font-semibold text-[var(--text-secondary)]">Password for publication</label>
                   <div className="relative">
-                    <input id="edit-results-publish-password" name="editResultsPassword" type={showEditResultsPassword ? 'text' : 'password'} disabled={busy} value={editResultsPassword} onChange={(event) => setEditResultsPassword(event.currentTarget.value.slice(0, 64))} minLength={6} maxLength={64} autoComplete="new-password" autoCapitalize="none" spellCheck={false} placeholder={data.hasEditResults ? 'Enter password to republish' : 'Minimum 6 characters'} className={clsx(inputClass, 'pr-12')} />
+                    <input id="edit-results-publish-password" name="editResultsPassword" type={showEditResultsPassword ? 'text' : 'password'} disabled={busy} value={editResultsPassword} onChange={(event) => { const form = document.getElementById('edit-delivery-form'); setEditResultsPassword(event.currentTarget.value.slice(0, 64)); setActionError(''); if (form instanceof HTMLFormElement) syncFormDirty(editedFormChanged(form, event.currentTarget.value)); }} minLength={6} maxLength={64} autoComplete="new-password" autoCapitalize="none" spellCheck={false} placeholder={data.hasEditResults ? 'Enter a new password to republish' : 'Minimum 6 characters'} aria-describedby="edit-results-publish-help" className={clsx(inputClass, 'pr-12')} />
                     <button type="button" disabled={busy} aria-label={showEditResultsPassword ? 'Hide password' : 'Show password'} title={showEditResultsPassword ? 'Hide password' : 'Show password'} aria-controls="edit-results-publish-password" onClick={() => setShowEditResultsPassword((current) => !current)} className="absolute right-0 top-0 flex h-11 w-11 items-center justify-center rounded-md text-[var(--text-secondary)] hover:text-[var(--text-primary)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)] disabled:opacity-45">
                       {showEditResultsPassword ? <EyeOff size={16} aria-hidden="true" /> : <Eye size={16} aria-hidden="true" />}
                     </button>
                   </div>
+                  <p id="edit-results-publish-help" className="text-xs leading-5 text-[var(--text-muted)]">Optional. When entered, Save Edited Photos saves your changes and publishes the latest Drive folder.</p>
                 </div>
                 <div className="flex justify-end gap-2">
-                  <button type="button" aria-describedby={publishBlockReason ? 'publish-requirements' : undefined} disabled={busy} onClick={() => {
+                  <button hidden type="button" aria-describedby={publishBlockReason ? 'publish-requirements' : undefined} disabled={busy} onClick={() => {
                     if (publishBlockReason) { setActionError(publishBlockReason); return; }
                     setActionError('');
                     publishResults.mutate({ id: data.id, password: editResultsPassword.trim() });
                   }} className="inline-flex h-11 items-center gap-1.5 rounded-md bg-[var(--accent)] px-3 text-xs font-semibold text-[var(--bg-deep)] disabled:opacity-45">
                     {publishResults.isPending ? <Loader2 size={13} className="animate-spin" /> : <Images size={13} />}
-                    {publishResults.isPending ? 'Publishing...' : data.hasEditResults ? 'Republish' : 'Publish'}
+                    {publishResults.isPending ? 'Publishing…' : data.hasEditResults ? 'Republish' : 'Publish'}
                   </button>
-                  {data.hasEditResults && <button type="button" disabled={busy} onClick={() => {
-                    if (dirty) { setActionError('Unpublish not started. Save changes first, then click Unpublish.'); return; }
-                    if (window.confirm('Unpublish edited photos from this app? Google Drive links will remain accessible until you change the folder sharing settings.')) { setActionError(''); unpublishResults.mutate(data.id); }
-                  }} className="inline-flex h-11 items-center gap-1.5 rounded-md border border-rose-500/30 px-3 text-xs font-semibold text-rose-400 disabled:opacity-45">
-                    {unpublishResults.isPending ? <Loader2 size={13} className="animate-spin" /> : <Trash2 size={13} />} Unpublish
-                  </button>}
                 </div>
                 {publishBlockReason && <p id="publish-requirements" className="text-xs leading-5 text-[var(--text-muted)]">{publishBlockReason}</p>}
               </div>
@@ -1133,7 +1296,7 @@ function GalleryDetailEditor({ data, close, initialMode }: { data: GallerySummar
             <p className="mt-3 text-[10px] leading-4 text-[var(--text-muted)]">Set the Drive folder to Anyone with the link · Viewer. The password is stored only as a secure hash and is never shown again. Republishing replaces the previous password. Anyone with a Google Drive file URL can still open it directly.</p>
           </section>
 
-          <div hidden={mode !== 'selection'} className="border-t border-[var(--border)] pt-4">
+          {!deliveryOnly && <div hidden={mode !== 'selection'} className="border-t border-[var(--border)] pt-4">
             <button type="button" onClick={() => setAddonOpen((value) => !value)} className="flex w-full cursor-pointer items-center justify-between text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)]">
               <span>
                 <span className="text-sm font-semibold text-[var(--text-primary)]">Additional Photos &amp; Payment</span>
@@ -1227,9 +1390,10 @@ function GalleryDetailEditor({ data, close, initialMode }: { data: GallerySummar
                 </dl>
               </fieldset>
             )}
-          </div>
+          </div>}
         </div>
       </div>
+        </div>
         </div>
     </Modal>
   );
@@ -1241,6 +1405,7 @@ export default function ClientGalleries() {
   const qc = useQueryClient();
   const canManage = hasPermission('manage_client_galleries');
   const { mode } = useSearch({ from: '/_layout/galleries' });
+  const listMode: GalleryMode = mode === 'preview' ? 'selection' : mode;
   const navigate = useNavigate({ from: '/galleries' });
   const [search, setSearch] = useState('');
   const debouncedSearch = useDebouncedValue(search);
@@ -1250,12 +1415,21 @@ export default function ClientGalleries() {
   const selectedId = selected?.id ?? null;
   const [createOpen, setCreateOpen] = useState(false);
   const [contactOpen, setContactOpen] = useState(false);
-  useEffect(() => { setFilter('all'); setPage(1); setSelected(null); }, [mode]);
+  const [pagePreviewDirty, setPagePreviewDirty] = useState(false);
+  const [pagePreviewSaved, setPagePreviewSaved] = useState(false);
+  const [pagePreviewSaving, setPagePreviewSaving] = useState(false);
+  useEffect(() => { setFilter('all'); setPage(1); }, [mode]);
+  useEffect(() => {
+    if (!pagePreviewDirty) return;
+    const warnBeforeUnload = (event: BeforeUnloadEvent) => event.preventDefault();
+    window.addEventListener('beforeunload', warnBeforeUnload);
+    return () => window.removeEventListener('beforeunload', warnBeforeUnload);
+  }, [pagePreviewDirty]);
   const query = useQuery({
-    queryKey: ['galleries', mode, page, filter, debouncedSearch],
-    queryFn: () => listGalleries({ mode, page, pageSize: PAGE_SIZE, status: filter, search: debouncedSearch }),
-    enabled: canManage,
-    placeholderData: (previousData, previousQuery) => previousQuery?.queryKey[1] === mode ? previousData : undefined,
+    queryKey: ['galleries', listMode, page, filter, debouncedSearch],
+    queryFn: () => listGalleries({ mode: listMode, page, pageSize: PAGE_SIZE, status: filter, search: debouncedSearch }),
+    enabled: canManage && mode !== 'preview',
+    placeholderData: (previousData, previousQuery) => previousQuery?.queryKey[1] === listMode ? previousData : undefined,
     staleTime: 60 * 1000,
     refetchInterval: 15 * 1000,
     refetchIntervalInBackground: false,
@@ -1282,6 +1456,7 @@ export default function ClientGalleries() {
       addToast('Gallery created.', 'success');
       setCreateOpen(false);
       setSelected(gallery);
+      if (gallery.workflow === 'delivery_only') void navigate({ search: { mode: 'edited' } });
       qc.invalidateQueries({ queryKey: ['galleries'] });
     },
     onError: (error) => addToast(error instanceof Error ? error.message : 'Unable to create gallery.', 'error'),
@@ -1290,7 +1465,7 @@ export default function ClientGalleries() {
   const statusUpdate = useMutation({
     mutationFn: updateGallery,
     onSuccess: () => {
-      addToast(`${mode === 'edited' ? 'Edited Photos' : 'Photo Selection'} status updated.`, 'success');
+      addToast(`${listMode === 'edited' ? 'Edited Photos' : 'Photo Selection'} status updated.`, 'success');
       qc.invalidateQueries({ queryKey: ['gallery-detail'] });
       qc.invalidateQueries({ queryKey: ['galleries'] });
     },
@@ -1361,10 +1536,10 @@ export default function ClientGalleries() {
             </button>
             <button
               type="button"
-              onClick={() => query.refetch()}
+              onClick={() => mode === 'preview' ? void qc.invalidateQueries({ queryKey: ['gallery-contact'] }) : void query.refetch()}
               className="inline-flex h-10 cursor-pointer items-center gap-2 rounded-lg border border-[var(--border)] px-3 text-[10px] font-bold uppercase hover:border-[var(--accent)]"
             >
-              <RefreshCw size={13} className={clsx(query.isFetching && 'animate-spin')} />
+              <RefreshCw size={13} aria-hidden="true" className={clsx((query.isFetching || pagePreviewSaving) && 'animate-spin')} />
               Refresh
             </button>
             <button
@@ -1378,11 +1553,14 @@ export default function ClientGalleries() {
           </div>
         </header>
 
-        <GalleryModeTabs value={mode} scope="gallery-list" onChange={(next) => {
+        <GalleryModeTabs value={mode} scope="gallery-list" includePreview onChange={(next) => {
+          if (mode === 'preview' && pagePreviewDirty && !window.confirm('Discard unsaved Preview Samples?')) return false;
+          if (mode === 'preview') { setPagePreviewDirty(false); setPagePreviewSaved(false); }
           setFilter('all'); setPage(1); setSelected(null);
           void navigate({ search: { mode: next } });
+          return true;
         }} />
-        <section role="tabpanel" id="gallery-list-panel" aria-labelledby={`gallery-list-${mode}-tab`} className={`${PANEL_CARD_CLASS} overflow-hidden !p-0`}>
+        {mode === 'preview' ? <PreviewSamplesPage dirty={pagePreviewDirty} saved={pagePreviewSaved} saving={pagePreviewSaving} onDirtyChange={setPagePreviewDirty} onSavedChange={setPagePreviewSaved} onSavingChange={setPagePreviewSaving} /> : <section role="tabpanel" id="gallery-list-panel" aria-labelledby={`gallery-list-${mode}-tab`} className={`${PANEL_CARD_CLASS} overflow-hidden !p-0`}>
           <div className="flex flex-col gap-4 border-b border-[var(--border)] px-5 py-4 sm:flex-row sm:items-center sm:justify-between md:px-7">
             <GalleryFilters filter={filter} setFilter={changeFilter} />
             <div className="flex items-center gap-3">
@@ -1411,11 +1589,11 @@ export default function ClientGalleries() {
             <div className="py-16 text-center text-rose-400">Unable to load galleries.</div>
           ) : (
             <GalleryTable
-              mode={mode}
+              mode={listMode}
               galleries={pageItems}
               selectedId={selectedId}
               onSelect={(id) => setSelected(galleries.find((gallery) => gallery.id === id) ?? null)}
-              onStatusChange={(id, status) => statusUpdate.mutate(mode === 'edited' ? { id, editResultsStatus: status } : { id, status })}
+              onStatusChange={(id, status) => statusUpdate.mutate(listMode === 'edited' ? { id, editResultsStatus: status } : { id, status })}
               onResetPin={(id) => resetPin.mutate(id)}
               onDelete={(gallery) => {
                 if (window.confirm(`Delete "${gallery.title}"?`)) remove.mutate(gallery.id);
@@ -1428,12 +1606,12 @@ export default function ClientGalleries() {
             />
           )}
           {!query.isLoading && !query.isError && <Pager page={currentPage} totalPages={totalPages} total={total} limit={PAGE_SIZE} onChange={setPage} />}
-        </section>
+        </section>}
       </div>
 
       {contactOpen && <ContactSettings close={() => setContactOpen(false)} />}
-      {createOpen && <CreateGalleryModal close={() => setCreateOpen(false)} pending={create.isPending} submit={(input) => create.mutate(input)} />}
-      {selected && <GalleryDetail key={selected.id} mode={mode} gallery={selected} close={() => setSelected(null)} />}
+      {createOpen && <CreateGalleryModal close={() => setCreateOpen(false)} pending={create.isPending} error={create.error?.message} submit={(input) => create.mutate(input)} />}
+      {selected && <GalleryDetail key={selected.id} mode={listMode} gallery={selected} close={() => setSelected(null)} />}
     </div>
   );
 }

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, memo } from 'react';
-import { Check, CheckSquare, Download, ImageOff, X } from 'lucide-react';
+import { Check, CheckSquare, Download, ImageOff, Loader2, X } from 'lucide-react';
 import clsx from 'clsx';
 
 import { galleryThumbnailUrl } from '../culling.public';
@@ -18,9 +18,11 @@ function PhotoTileView<T extends GalleryDisplayPhoto>({
     displayIndex,
     thumbnailPriority,
     thumbnailEager,
+    downloadPending = false,
     onOpen,
     onPrefetch,
     onToggle,
+    onDownload,
 }: {
     photo: T;
     selected?: boolean;
@@ -32,9 +34,11 @@ function PhotoTileView<T extends GalleryDisplayPhoto>({
     displayIndex: number;
     thumbnailPriority?: boolean;
     thumbnailEager?: boolean;
+    downloadPending?: boolean;
     onOpen: (driveFileId: string) => void;
     onPrefetch: (photo: T) => void;
     onToggle?: (photo: T) => void;
+    onDownload?: (photo: T) => void;
 }) {
     const [hasError, setHasError] = useState(false);
     const prefetchTimerRef = useRef<number | null>(null);
@@ -84,8 +88,8 @@ function PhotoTileView<T extends GalleryDisplayPhoto>({
                                 alt={displayLabel}
                                 title={displayLabel}
                                 draggable={false}
-                                width={photo.width || undefined}
-                                height={photo.height || undefined}
+                                width={photo.width || 400}
+                                height={photo.height || 300}
                                 loading={thumbnailEager || thumbnailPriority ? 'eager' : 'lazy'}
                                 decoding="async"
                                 fetchPriority={thumbnailPriority ? 'high' : 'auto'}
@@ -116,17 +120,19 @@ function PhotoTileView<T extends GalleryDisplayPhoto>({
                     </>
                 )}
                 {mode === 'delivery' ? (
-                    <a href={downloadUrl} target="_blank" rel="noreferrer" referrerPolicy="no-referrer" aria-label={`Download ${displayLabel}`} title="Download Original" className="absolute right-1 top-1 flex h-11 w-11 items-center justify-center rounded-md text-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-white">
-                        <span className="flex h-8 w-8 items-center justify-center rounded-md border border-white/30 bg-black/80 transition-colors [@media(hover:hover)]:hover:bg-black motion-reduce:transition-none"><Download size={15} /></span>
-                    </a>
+                    <button type="button" disabled={!downloadUrl || downloadPending} aria-busy={downloadPending} onClick={() => onDownload?.(photo)} aria-label={downloadPending ? `Preparing download for ${displayLabel}` : `Download ${displayLabel}`} title="Download Original" className="absolute right-1 top-1 flex h-11 w-11 items-center justify-center rounded-md text-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-white disabled:opacity-60">
+                        <span className="flex h-8 w-8 items-center justify-center rounded-md border border-white/30 bg-black/80 transition-colors [@media(hover:hover)]:hover:bg-black motion-reduce:transition-none">{downloadPending ? <Loader2 size={15} aria-hidden="true" className="animate-spin motion-reduce:animate-none" /> : <Download size={15} aria-hidden="true" />}</span>
+                    </button>
                 ) : <button
                     type="button"
                     onClick={() => onToggle?.(photo)}
                     aria-pressed={selected}
-                    className={clsx('absolute right-2 top-2 flex h-8 w-8 items-center justify-center rounded-full border transition-colors duration-150 motion-reduce:transition-none', selected ? 'border-[var(--accent)] bg-[var(--accent)] text-[var(--bg-deep)]' : 'border-white/35 bg-black/80 text-white/90 [@media(hover:hover)]:hover:border-white/70 [@media(hover:hover)]:hover:bg-black')}
+                    className="absolute right-0.5 top-0.5 flex h-11 w-11 items-center justify-center rounded-full focus-visible:outline focus-visible:outline-2 focus-visible:outline-white"
                     aria-label={selected ? `Remove ${displayLabel}` : `Select ${displayLabel}`}
                 >
-                    {selected ? <X size={14} strokeWidth={3} className="transition-transform duration-200" /> : <Check size={14} strokeWidth={3} className="transition-transform duration-200" />}
+                    <span className={clsx('flex h-8 w-8 items-center justify-center rounded-full border transition-colors duration-150 motion-reduce:transition-none', selected ? 'border-[var(--accent)] bg-[var(--accent)] text-[var(--bg-deep)]' : 'border-white/35 bg-black/80 text-white/90 [@media(hover:hover)]:hover:border-white/70 [@media(hover:hover)]:hover:bg-black')}>
+                        {selected ? <X size={14} aria-hidden="true" strokeWidth={3} className="transition-transform duration-200" /> : <Check size={14} aria-hidden="true" strokeWidth={3} className="transition-transform duration-200" />}
+                    </span>
                 </button>}
             </div>
             <div className="flex h-7 items-center justify-between gap-2 border-t border-[var(--border)] px-2 text-[9px] text-[var(--text-secondary)] sm:h-8 sm:px-2.5 sm:text-[10px]">

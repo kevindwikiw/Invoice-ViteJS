@@ -39,8 +39,7 @@ test('create gallery dialog stays compact on desktop and mobile', async ({ page 
 
     const dialog = page.getByRole('dialog', { name: 'Create gallery' });
     await expect(dialog).toBeVisible();
-    await expect(dialog.getByLabel('Before photo')).toHaveCount(3);
-    await expect(dialog.getByLabel('Edited photo')).toHaveCount(3);
+    await expect(dialog.getByLabel('Before photo')).toHaveCount(0);
     const desktopBox = await dialog.locator(':scope > div').boundingBox();
     expect(desktopBox).not.toBeNull();
     expect(desktopBox?.width ?? 0).toBeLessThanOrEqual(520);
@@ -54,9 +53,7 @@ test('create gallery dialog stays compact on desktop and mobile', async ({ page 
     expect(mobileBox?.width ?? 0).toBeLessThanOrEqual(358);
     expect(mobileBox?.height ?? 0).toBeLessThanOrEqual(760);
     await page.screenshot({ path: 'test-results/create-gallery-modal-mobile.png', animations: 'disabled' });
-    await dialog.locator('summary').click();
     await page.setViewportSize({ width: 320, height: 568 });
-    await dialog.getByLabel('Edited photo').last().scrollIntoViewIfNeeded();
     expect(await dialog.locator('.gallery-modal-scroll').evaluate((element) => element.scrollWidth <= element.clientWidth + 1)).toBe(true);
     const footerBox = await dialog.getByRole('button', { name: 'Create gallery', exact: true }).boundingBox();
     expect(footerBox!.y + footerBox!.height).toBeLessThanOrEqual(568);
@@ -108,6 +105,9 @@ test('list modes scope filters, quick status actions and edited links', async ({
     await expect(page.getByRole('tab', { name: 'Edited Photos', exact: true })).toHaveAttribute('aria-selected', 'true');
     await page.getByText(gallery.title, { exact: true }).click();
     await expect(page.getByRole('dialog').getByRole('tab', { name: 'Edited Photos', exact: true })).toHaveAttribute('aria-selected', 'true');
+    await expect(page.getByRole('dialog').getByRole('tab', { name: 'Preview Samples', exact: true })).toBeVisible();
+    await page.getByRole('dialog').getByRole('tab', { name: 'Preview Samples', exact: true }).click();
+    await expect(page.getByRole('dialog').getByText('Changes here apply to every client gallery.')).toBeVisible();
 });
 
 test('each detail tab saves only its fields and preserves the other draft', async ({ page }) => {
@@ -144,7 +144,7 @@ test('each detail tab saves only its fields and preserves the other draft', asyn
     expect(patches[0]).not.toHaveProperty('pin');
     await dialog.getByRole('tab', { name: 'Photo Selection', exact: true }).click();
     await expect(dialog.getByLabel('Gallery title')).toHaveValue('Unsaved selection title');
-    await expect(dialog.getByText('Unsaved changes', { exact: true })).toBeVisible();
+    await expect(dialog.getByRole('status').filter({ hasText: /^Unsaved changes/ })).toBeVisible();
     await dialog.getByRole('button', { name: 'Save Photo Selection', exact: true }).click();
     await expect(dialog.getByText('Changes saved', { exact: true })).toBeVisible();
     expect(patches[1]).toMatchObject({ status: 'closed', title: 'Unsaved selection title' });
@@ -160,6 +160,158 @@ test.beforeEach(async ({ page }) => {
         if (pathname.includes('/permissions')) return route.fulfill({ json: { userId: 1, role: 'admin', permissions: [], permissionOverrides: {}, featurePermissions: user.featurePermissions } });
         return route.fulfill({ json: {} });
     });
+});
+
+test('Preview Samples is a global detail tab with independent Save and validation', async ({ page }) => {
+    let settings = {
+        contactWhatsappUrl: '081234567890', message: 'Access message', requestMoreMessage: 'Request message',
+        tutorialBeforeDriveFileId: '', tutorialAfterDriveFileId: '', tutorialBefore2DriveFileId: '',
+        tutorialAfter2DriveFileId: '', tutorialBefore3DriveFileId: '', tutorialAfter3DriveFileId: '',
+    };
+    const patches: Record<string, unknown>[] = [];
+    let failPreviewOnce = true;
+    await page.route('**/api/galleries?*', (route) => route.fulfill({ json: { items: [exampleGallery], total: 1, totalPages: 1 } }));
+    await page.route('**/api/galleries/7', (route) => route.fulfill({ json: { gallery: exampleGallery, photos: [], selections: [] } }));
+    await page.route('**/api/galleries/settings/contact', (route) => {
+        if (route.request().method() === 'PATCH') {
+            const patch = route.request().postDataJSON();
+            patches.push(patch);
+            if ('tutorialBeforeDriveFileId' in patch && failPreviewOnce) {
+                failPreviewOnce = false;
+                return route.fulfill({ status: 503, json: { error: 'Preview settings unavailable.' } });
+            }
+            settings = { ...settings, ...patch };
+            return route.fulfill({ json: settings });
+        }
+        return route.fulfill({ json: settings });
+    });
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto('/galleries');
+    await page.getByRole('button', { name: 'Admin WhatsApp' }).click();
+    const contactDialog = page.getByRole('dialog', { name: 'Admin WhatsApp' });
+    await expect(contactDialog.getByText('Global Before')).toHaveCount(0);
+    await contactDialog.getByLabel('Access / unlock message template').fill('Changed access message');
+    await contactDialog.getByRole('button', { name: 'Save settings' }).click();
+    await expect.poll(() => patches.length).toBe(1);
+    await expect(contactDialog).not.toBeVisible();
+    expect(patches[0]).toEqual({ contactWhatsappUrl: '081234567890', message: 'Changed access message', requestMoreMessage: 'Request message' });
+    await page.getByText(exampleGallery.title, { exact: true }).click();
+    const dialog = page.getByRole('dialog', { name: exampleGallery.title });
+    await dialog.getByLabel('Gallery title').fill('Unsaved title');
+    const editedTab = dialog.getByRole('tab', { name: 'Edited Photos', exact: true });
+    await editedTab.click();
+    await editedTab.focus();
+    await page.keyboard.press('ArrowRight');
+    const previewTab = dialog.getByRole('tab', { name: 'Preview Samples', exact: true });
+    await expect(previewTab).toHaveAttribute('aria-selected', 'true');
+    await expect(previewTab).toBeFocused();
+    await expect(dialog.getByText('Changes here apply to every client gallery.')).toBeVisible();
+    const save = dialog.getByRole('button', { name: 'Save Preview Samples' });
+    await expect(save).toBeDisabled();
+    const before = dialog.getByRole('textbox', { name: 'Sample 1 before photo' });
+    await before.fill('before-file');
+    await expect(save).toBeEnabled();
+    await expect(dialog.getByText('Needs both photos')).toBeVisible();
+    await before.fill('');
+    await expect(save).toBeDisabled();
+    await before.fill('before-file');
+    page.once('dialog', (confirmation) => confirmation.dismiss());
+    await dialog.getByRole('button', { name: `Close ${exampleGallery.title}` }).click();
+    await expect(dialog).toBeVisible();
+    page.once('dialog', (confirmation) => confirmation.dismiss());
+    await dialog.getByRole('tab', { name: 'Photo Selection', exact: true }).click();
+    await expect(previewTab).toHaveAttribute('aria-selected', 'true');
+    await previewTab.focus();
+    page.once('dialog', (confirmation) => confirmation.dismiss());
+    await page.keyboard.press('Home');
+    await expect(previewTab).toBeFocused();
+    for (const width of [1280, 390, 320]) {
+        await page.setViewportSize({ width, height: 844 });
+        expect(await dialog.locator('.gallery-modal-scroll').evaluate((element) => element.scrollWidth <= element.clientWidth + 1)).toBe(true);
+        await expect(save).toBeInViewport();
+        await page.screenshot({ path: `test-results/admin-preview-${width}.png`, animations: 'disabled' });
+    }
+    await save.click();
+    await expect(dialog.getByRole('alert')).toContainText('Add both photos for sample 1');
+    const after = dialog.getByRole('textbox', { name: 'Sample 1 edited photo' });
+    await expect(after).toBeFocused();
+    await after.fill('after-file');
+    await expect(dialog.getByText('Complete', { exact: true })).toBeVisible();
+    await save.click();
+    await expect(dialog.getByRole('alert')).toContainText('Preview settings unavailable.');
+    await expect(save).toBeEnabled();
+    await save.click();
+    await expect.poll(() => patches.length).toBe(3);
+    expect(patches[2]).toEqual({ tutorialBeforeDriveFileId: 'before-file', tutorialAfterDriveFileId: 'after-file', tutorialBefore2DriveFileId: '', tutorialAfter2DriveFileId: '', tutorialBefore3DriveFileId: '', tutorialAfter3DriveFileId: '' });
+    expect(settings.message).toBe('Changed access message');
+    await expect(dialog.getByText('Preview samples saved', { exact: true })).toBeVisible();
+    await expect(save).toBeDisabled();
+    await dialog.getByRole('tab', { name: 'Photo Selection', exact: true }).click();
+    await expect(dialog.getByLabel('Gallery title')).toHaveValue('Unsaved title');
+    await previewTab.click();
+    await expect(before).toHaveValue('before-file');
+});
+
+test('Preview Samples offers Retry when global settings cannot load', async ({ page }) => {
+    let recover = false;
+    await page.route('**/api/galleries?*', (route) => route.fulfill({ json: { items: [exampleGallery], total: 1, totalPages: 1 } }));
+    await page.route('**/api/galleries/7', (route) => route.fulfill({ json: { gallery: exampleGallery, photos: [], selections: [] } }));
+    await page.route('**/api/galleries/settings/contact', (route) => {
+        if (!recover) return route.fulfill({ status: 503, json: { error: 'Settings unavailable' } });
+        return route.fulfill({ json: { contactWhatsappUrl: '', message: '', requestMoreMessage: '', tutorialBeforeDriveFileId: '', tutorialAfterDriveFileId: '', tutorialBefore2DriveFileId: '', tutorialAfter2DriveFileId: '', tutorialBefore3DriveFileId: '', tutorialAfter3DriveFileId: '' } });
+    });
+    await page.goto('/galleries');
+    await page.getByText(exampleGallery.title, { exact: true }).click();
+    const dialog = page.getByRole('dialog', { name: exampleGallery.title });
+    await dialog.getByRole('tab', { name: 'Preview Samples', exact: true }).click();
+    await expect(dialog.getByRole('alert')).toContainText('Unable to load preview samples.');
+    await expect(dialog.getByRole('button', { name: 'Save Preview Samples' })).toBeDisabled();
+    recover = true;
+    await dialog.getByRole('button', { name: 'Retry' }).click();
+    await expect(dialog.getByRole('textbox', { name: 'Sample 1 before photo' })).toBeVisible();
+});
+
+test('Preview Samples is available as a persistent top-level gallery tab', async ({ page }) => {
+    let settings = {
+        contactWhatsappUrl: '081234567890', message: 'Access message', requestMoreMessage: 'Request message',
+        tutorialBeforeDriveFileId: '', tutorialAfterDriveFileId: '', tutorialBefore2DriveFileId: '',
+        tutorialAfter2DriveFileId: '', tutorialBefore3DriveFileId: '', tutorialAfter3DriveFileId: '',
+    };
+    const patches: Record<string, unknown>[] = [];
+    let listRequests = 0;
+    await page.route('**/api/galleries?*', (route) => { listRequests++; return route.fulfill({ json: { items: [exampleGallery], total: 1, totalPages: 1 } }); });
+    await page.route('**/api/galleries/settings/contact', (route) => {
+        if (route.request().method() === 'PATCH') {
+            const patch = route.request().postDataJSON();
+            patches.push(patch);
+            settings = { ...settings, ...patch };
+            return route.fulfill({ json: settings });
+        }
+        return route.fulfill({ json: settings });
+    });
+    await page.setViewportSize({ width: 320, height: 700 });
+    await page.goto('/galleries');
+    const previewTab = page.getByRole('tab', { name: 'Preview Samples', exact: true });
+    await expect(previewTab).toBeVisible();
+    await previewTab.click();
+    await expect(page).toHaveURL(/mode=preview/);
+    await expect(previewTab).toHaveAttribute('aria-selected', 'true');
+    await expect(page.getByRole('heading', { name: 'Preview Samples', exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Save Preview Samples' })).toBeInViewport();
+    await page.screenshot({ path: 'test-results/admin-preview-top-level-320.png', animations: 'disabled' });
+    const requestsAtPreview = listRequests;
+    const before = page.getByRole('textbox', { name: 'Sample 1 before photo' });
+    const after = page.getByRole('textbox', { name: 'Sample 1 edited photo' });
+    await before.fill('top-level-before');
+    await after.fill('top-level-after');
+    await page.getByRole('button', { name: 'Save Preview Samples' }).click();
+    await expect.poll(() => patches.length).toBe(1);
+    expect(patches[0]).toEqual({ tutorialBeforeDriveFileId: 'top-level-before', tutorialAfterDriveFileId: 'top-level-after', tutorialBefore2DriveFileId: '', tutorialAfter2DriveFileId: '', tutorialBefore3DriveFileId: '', tutorialAfter3DriveFileId: '' });
+    expect(listRequests).toBe(requestsAtPreview);
+    await page.reload();
+    await expect(previewTab).toHaveAttribute('aria-selected', 'true');
+    await expect(before).toHaveValue('top-level-before');
+    expect(await page.locator('#gallery-list-panel').evaluate((element) => element.scrollWidth <= element.clientWidth + 1)).toBe(true);
 });
 
 test('failed create keeps draft and puts actionable toast above the modal on mobile', async ({ page }) => {
@@ -209,7 +361,7 @@ test('modal status stays a draft until Save changes and remains open after savin
     await expect(dialog.getByRole('button', { name: 'open', exact: true })).toHaveAttribute('aria-pressed', 'true');
     await expect(dialog.getByLabel('Gallery title')).toHaveValue('My unsaved title');
     expect(patches).toBe(0);
-    await expect(dialog.getByText('Unsaved changes', { exact: true })).toBeVisible();
+    await expect(dialog.getByRole('status').filter({ hasText: /^Unsaved changes/ })).toBeVisible();
     await page.screenshot({ path: 'test-results/gallery-edit-desktop.png', animations: 'disabled' });
     await page.setViewportSize({ width: 390, height: 667 });
     await dialog.getByLabel('Gallery title').fill('My saved title');
@@ -224,7 +376,8 @@ test('modal status stays a draft until Save changes and remains open after savin
     await page.screenshot({ path: 'test-results/gallery-edit-mobile.png', animations: 'disabled' });
     await dialog.getByRole('button', { name: 'Close My saved title' }).focus();
     await page.keyboard.press('Shift+Tab');
-    await expect(dialog.getByRole('button', { name: 'Save Photo Selection' })).toBeFocused();
+    await expect(dialog.getByRole('button', { name: 'Save Photo Selection' })).toBeDisabled();
+    expect(await dialog.evaluate((element) => element.contains(document.activeElement))).toBe(true);
 });
 
 test('failed Save keeps status and add-on drafts; reset PIN does not save them', async ({ page }) => {
@@ -402,11 +555,37 @@ test('publishing explains missing folder and password without sending a request'
     expect(publishes).toBe(0);
 });
 
-for (const sameCount of [true, false]) {
-    test(`comparison pairing uses confirmed drafts with ${sameCount ? 'equal' : 'different'} counts`, async ({ page }, testInfo) => {
+test('comparison pairing auto-pairs equal counts without a confirmation step', async ({ page }) => {
         await page.setViewportSize({ width: 390, height: 844 });
         const before = Array.from({ length: 2 }, (_, index) => ({ driveFileId: `before-${index}`, filename: `source-${index}.jpg`, thumbnailUrl: `/pair-image/before-${index}` }));
-        const edited = Array.from({ length: sameCount ? 2 : 3 }, (_, index) => ({ driveFileId: `edited-${index}`, filename: `final-${index}.jpg`, thumbnailUrl: `/pair-image/edited-${index}` }));
+        const edited = Array.from({ length: 2 }, (_, index) => ({ driveFileId: `edited-${index}`, filename: `final-${index}.jpg`, thumbnailUrl: `/pair-image/edited-${index}` }));
+        let gallery = { ...exampleGallery, editResultsFolderId: 'edited-folder', comparisonEnabled: false, comparisonPairs: [] as Array<{ editedDriveFileId: string; beforeDriveFileId: string }> };
+        await page.route('**/pair-image/*', (route) => route.fulfill({ contentType: 'image/svg+xml', body: '<svg xmlns="http://www.w3.org/2000/svg" width="400" height="300"><rect width="400" height="300" fill="#718578"/></svg>' }));
+        await page.route('**/api/galleries?*', (route) => route.fulfill({ json: { items: [gallery], total: 1, totalPages: 1 } }));
+        await page.route('**/api/galleries/7', (route) => {
+            if (route.request().method() === 'PATCH') { gallery = { ...gallery, ...route.request().postDataJSON() }; return route.fulfill({ json: { status: 'updated' } }); }
+            return route.fulfill({ json: { gallery, photos: [], selections: [] } });
+        });
+        await page.route('**/api/galleries/7/edit-results/pairing', (route) => route.fulfill({ json: { submitted: before, edited, comparisonPairs: gallery.comparisonPairs } }));
+        await page.goto('/galleries?mode=edited');
+        await page.getByText(gallery.title, { exact: true }).click();
+        await page.getByRole('checkbox', { name: 'Enable Before / After' }).check();
+        await page.getByRole('button', { name: 'Manage Pairs', exact: true }).click();
+        const dialog = page.getByRole('dialog', { name: 'Manage Pairs', exact: true });
+        await expect(dialog.getByText('Auto-paired by order')).toHaveCount(2);
+        await expect(dialog.getByRole('button', { name: /Confirm All/ })).toHaveCount(0);
+        await dialog.getByRole('button', { name: 'Apply Pairs' }).click();
+        await page.getByRole('button', { name: 'Save Edited Photos', exact: true }).click();
+        await expect.poll(() => gallery.comparisonPairs).toEqual([
+            { editedDriveFileId: 'edited-0', beforeDriveFileId: 'before-0' },
+            { editedDriveFileId: 'edited-1', beforeDriveFileId: 'before-1' },
+        ]);
+});
+
+test('comparison pairing realigns 70 submitted photos around a B&W variant', async ({ page }, testInfo) => {
+        await page.setViewportSize({ width: 390, height: 844 });
+        const before = Array.from({ length: 70 }, (_, index) => ({ driveFileId: `before-${index}`, filename: `source-${index}.jpg`, thumbnailUrl: `/pair-image/before-${index}` }));
+        const edited = Array.from({ length: 71 }, (_, index) => ({ driveFileId: `edited-${index}`, filename: `final-${index}.jpg`, thumbnailUrl: `/pair-image/edited-${index}` }));
         let gallery = { ...exampleGallery, editResultsFolderId: 'edited-folder', comparisonEnabled: false, comparisonPairs: [] as Array<{ editedDriveFileId: string; beforeDriveFileId: string }> };
         let saves = 0;
         await page.route('**/pair-image/*', (route) => route.fulfill({ contentType: 'image/svg+xml', body: '<svg xmlns="http://www.w3.org/2000/svg" width="400" height="300"><rect width="400" height="300" fill="#718578"/></svg>' }));
@@ -421,20 +600,30 @@ for (const sameCount of [true, false]) {
         await page.getByRole('checkbox', { name: 'Enable Before / After' }).check();
         await page.getByRole('button', { name: 'Manage Pairs', exact: true }).click();
         const dialog = page.getByRole('dialog', { name: 'Manage Pairs', exact: true });
-        await expect(dialog.getByRole('article')).toHaveCount(edited.length);
-        if (sameCount) {
-            await expect(dialog.getByText('Suggested by Order')).toHaveCount(2);
-            await dialog.getByRole('button', { name: 'Confirm All (2)' }).click();
-        } else {
-            await expect(dialog.getByRole('button', { name: /Confirm All/ })).toHaveCount(0);
-            for (const name of ['final-0.jpg', 'final-1.jpg']) {
-                await dialog.getByRole('article', { name: `Pair ${name}` }).getByRole('button', { name: 'Choose Before' }).click();
-                await dialog.getByRole('textbox', { name: 'Search Submitted Photos' }).fill('source-0');
-                await dialog.getByRole('textbox', { name: 'Search Submitted Photos' }).press('Enter');
-                await expect(dialog.getByRole('textbox', { name: 'Search Submitted Photos' })).toBeVisible();
-                await dialog.getByRole('button', { name: 'Use source-0.jpg' }).click();
-            }
-        }
+        await expect(dialog.getByRole('article')).toHaveCount(12);
+        await expect(dialog.getByText('Auto-paired by order')).toHaveCount(12);
+        await expect(dialog.getByText('Needs Review').locator('..').getByText('1', { exact: true })).toBeVisible();
+        await dialog.getByRole('button', { name: 'Apply Pairs' }).click();
+        await expect(dialog.getByRole('alert')).toContainText('1 edited photo needs a pair');
+        const finalRow = dialog.getByRole('article', { name: 'Pair final-70.jpg' });
+        await expect(finalRow).toBeVisible();
+        await expect(finalRow).toBeFocused();
+        await expect(finalRow).toContainText('No source photo left');
+
+        for (let index = 0; index < 4; index++) await dialog.getByRole('button', { name: 'Previous Pairs' }).click();
+        const variantRow = dialog.getByRole('article', { name: 'Pair final-20.jpg' });
+        const variantToggle = variantRow.getByRole('button', { name: 'B&W Variant' });
+        await variantToggle.click();
+        await expect(variantToggle).toHaveAttribute('aria-pressed', 'true');
+        await expect(variantRow).toContainText('B&W variant');
+        await expect(variantRow).toContainText('#20 source-19.jpg');
+        await expect(dialog.getByRole('article', { name: 'Pair final-21.jpg' })).toContainText('#21 source-20.jpg');
+        await expect(dialog.getByText('Needs Review').locator('..').getByText('0', { exact: true })).toBeVisible();
+
+        await variantToggle.click();
+        await expect(dialog.getByText('Needs Review').locator('..').getByText('1', { exact: true })).toBeVisible();
+        await variantToggle.click();
+        await expect(dialog.getByText('Needs Review').locator('..').getByText('0', { exact: true })).toBeVisible();
         await page.screenshot({ path: testInfo.outputPath('admin-pairs.png') });
         for (const theme of ['black', 'white']) {
             await page.evaluate((theme) => document.documentElement.classList.toggle('light', theme === 'white'), theme);
@@ -447,16 +636,18 @@ for (const sameCount of [true, false]) {
         }
         expect(saves).toBe(0);
         await dialog.getByRole('button', { name: 'Apply Pairs' }).click();
-        await page.getByLabel('Edited Photos password').fill('delivery-secret');
-        await page.getByRole('button', { name: 'Publish', exact: true }).click();
-        await expect(page.getByRole('dialog').getByRole('alert')).toContainText('Save changes first');
-        expect(saves).toBe(0);
         await page.getByRole('button', { name: 'Save Edited Photos', exact: true }).click();
         await expect.poll(() => saves).toBe(1);
-        expect(gallery.comparisonPairs).toHaveLength(2);
-        if (!sameCount) expect(new Set(gallery.comparisonPairs.map((pair) => pair.beforeDriveFileId)).size).toBe(1);
+        expect(gallery.comparisonPairs).toHaveLength(71);
+        expect(gallery.comparisonPairs[19]).toEqual({ editedDriveFileId: 'edited-19', beforeDriveFileId: 'before-19' });
+        expect(gallery.comparisonPairs[20]).toEqual({ editedDriveFileId: 'edited-20', beforeDriveFileId: 'before-19' });
+        expect(gallery.comparisonPairs[21]).toEqual({ editedDriveFileId: 'edited-21', beforeDriveFileId: 'before-20' });
+        expect(gallery.comparisonPairs[70]).toEqual({ editedDriveFileId: 'edited-70', beforeDriveFileId: 'before-69' });
         await page.getByRole('button', { name: 'Manage Pairs', exact: true }).click();
-        await expect(dialog.getByText('Confirmed', { exact: true })).toHaveCount(2);
+        await dialog.getByRole('button', { name: 'Next Pairs' }).click();
+        const reopenedVariant = dialog.getByRole('article', { name: 'Pair final-20.jpg' });
+        await expect(reopenedVariant.getByRole('button', { name: 'B&W Variant' })).toHaveAttribute('aria-pressed', 'true');
+        await expect(reopenedVariant).toContainText('B&W variant');
         await dialog.getByRole('button', { name: 'Close Manage Pairs', exact: true }).click();
         await expect(page.getByRole('dialog')).toHaveCSS('opacity', '1');
         await expect(page.getByRole('button', { name: 'Manage Pairs', exact: true })).toBeFocused();
@@ -469,6 +660,5 @@ for (const sameCount of [true, false]) {
         await dialog.getByRole('button', { name: 'Remove pair for final-0.jpg' }).click();
         await dialog.getByRole('button', { name: 'Cancel', exact: true }).click();
         await page.getByRole('button', { name: 'Manage Pairs', exact: true }).click();
-        await expect(dialog.getByText('Confirmed', { exact: true })).toHaveCount(2);
-    });
-}
+        await expect(dialog.getByRole('article', { name: 'Pair final-0.jpg' })).toContainText('Saved pair');
+});

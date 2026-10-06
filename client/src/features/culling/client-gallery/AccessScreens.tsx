@@ -1,6 +1,6 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useMutation, useQuery } from '@tanstack/react-query';
-import { Download, Loader2, Lock, MessageCircle } from 'lucide-react';
+import { Download, Eye, EyeOff, Loader2, Lock, MessageCircle } from 'lucide-react';
 import clsx from 'clsx';
 
 import { getEditResultsStatus, verifyEditResultsPassword, verifyGalleryPin } from '../culling.public';
@@ -17,20 +17,31 @@ export function PinGate({
     onEditResultsUnlocked,
     theme,
     onToggleTheme,
+    initialMode = 'gallery',
+    editedSessionAvailable = false,
+    onBackToEdited,
 }: {
     galleryId: string;
     onUnlocked: (token: string, gallery: PublicGallery) => void;
     onEditResultsUnlocked: (token: string) => void;
     theme: GalleryTheme;
     onToggleTheme: () => void;
+    initialMode?: 'gallery' | 'edited';
+    editedSessionAvailable?: boolean;
+    onBackToEdited?: () => void;
 }) {
     const [pin, setPin] = useState('');
     const [editResultsPassword, setEditResultsPassword] = useState('');
-    const [mode, setMode] = useState<'gallery' | 'edited'>('gallery');
+    const [showEditResultsPassword, setShowEditResultsPassword] = useState(false);
+    const [mode, setMode] = useState<'gallery' | 'edited'>(initialMode);
     const [error, setError] = useState('');
     const [contactUrl, setContactUrl] = useState<string | null>(null);
     const [lockCode, setLockCode] = useState<'GALLERY_CLOSED' | 'GALLERY_EXPIRED' | null>(null);
     const [isRateLimited, setIsRateLimited] = useState(false);
+    useEffect(() => {
+        setMode(initialMode);
+        setError('');
+    }, [initialMode]);
     const isClosed = lockCode !== null;
     const isExpired = lockCode === 'GALLERY_EXPIRED';
     const editResultsStatus = useQuery({ queryKey: ['public-edit-results-status', galleryId], queryFn: () => getEditResultsStatus(galleryId), staleTime: 60_000 });
@@ -96,12 +107,12 @@ export function PinGate({
                     {mode === 'gallery' && !isClosed && !isRateLimited && (
                         <div className="relative mt-7">
                             <input
+                                aria-label="Gallery PIN"
                                 value={pin}
                                 onChange={(event) => {
                                     setPin(event.target.value.slice(0, 64));
                                     if (error) setError('');
                                 }}
-                                autoFocus
                                 placeholder="Gallery PIN"
                                 className="h-11 w-full rounded-lg border border-[var(--border)] bg-[var(--bg-deep)] px-4 text-center text-base tracking-[0.2em] text-[var(--text-primary)] outline-none transition-colors placeholder:tracking-[0.2em] placeholder:text-[var(--text-muted)] focus:border-[var(--accent)]"
                             />
@@ -112,7 +123,10 @@ export function PinGate({
                     )}
                     {mode === 'edited' && (
                         <div className="relative mt-7">
-                            <input type="password" value={editResultsPassword} onChange={(event) => { setEditResultsPassword(event.currentTarget.value.slice(0, 64)); setError(''); }} autoCapitalize="none" autoComplete="current-password" placeholder="Edited photos password" className="h-11 w-full rounded-lg border border-[var(--border)] bg-[var(--bg-deep)] px-4 text-center text-sm font-semibold text-[var(--text-primary)] outline-none focus:border-[var(--accent)]" />
+                            <div className="relative">
+                                <input type={showEditResultsPassword ? 'text' : 'password'} aria-label="Edited photos password" value={editResultsPassword} onChange={(event) => { setEditResultsPassword(event.currentTarget.value.slice(0, 64)); setError(''); }} autoCapitalize="none" autoComplete="current-password" spellCheck={false} placeholder="Edited photos password" className="h-11 w-full rounded-lg border border-[var(--border)] bg-[var(--bg-deep)] px-12 text-center text-sm font-semibold text-[var(--text-primary)] outline-none focus:border-[var(--accent)]" />
+                                <button type="button" onClick={() => setShowEditResultsPassword((current) => !current)} aria-label={showEditResultsPassword ? 'Hide edited photos password' : 'Show edited photos password'} aria-pressed={showEditResultsPassword} className="absolute right-0 top-0 flex h-11 w-11 items-center justify-center rounded-md text-[var(--text-muted)] hover:text-[var(--text-primary)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)]">{showEditResultsPassword ? <EyeOff size={16} aria-hidden="true" /> : <Eye size={16} aria-hidden="true" />}</button>
+                            </div>
                             <p aria-live="polite" className={clsx('mt-1 min-h-5 text-xs leading-5 text-rose-400', error ? 'opacity-100' : 'opacity-0')}>{error || ' '}</p>
                         </div>
                     )}
@@ -124,18 +138,19 @@ export function PinGate({
                     
                     {mode === 'gallery' && !isClosed && !isRateLimited && (
                         <button type="submit" disabled={verifyMutation.isPending || pin.length < 4} className="mt-6 flex h-10 w-full items-center justify-center gap-2 rounded-lg bg-[var(--accent)] text-[10px] font-black uppercase tracking-[0.14em] text-[var(--bg-deep)] transition-opacity disabled:opacity-45">
-                            {verifyMutation.isPending ? <Loader2 size={14} className="animate-spin" /> : <Lock size={14} />}
+                            {verifyMutation.isPending ? <Loader2 size={14} aria-hidden="true" className="animate-spin" /> : <Lock size={14} aria-hidden="true" />}
                             Unlock gallery
                         </button>
                     )}
                     {mode === 'edited' && (
                         <button type="submit" disabled={verifyEdited.isPending || editResultsPassword.trim().length < 6} className="mt-2 flex h-10 w-full items-center justify-center gap-2 rounded-lg bg-[var(--accent)] text-[10px] font-black uppercase tracking-[0.14em] text-[var(--bg-deep)] disabled:opacity-45">
-                            {verifyEdited.isPending ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />} Open Edited Photos
+                            {verifyEdited.isPending ? <Loader2 size={14} aria-hidden="true" className="animate-spin" /> : <Download size={14} aria-hidden="true" />} Open Edited Photos
                         </button>
                     )}
-                    {editResultsStatus.data?.available && <button type="button" onClick={() => { setMode((current) => current === 'gallery' ? 'edited' : 'gallery'); setError(''); }} className="mt-4 text-xs font-semibold text-[var(--text-secondary)] underline underline-offset-4">
+                    {editResultsStatus.data?.available && !(mode === 'gallery' && editedSessionAvailable) && <button type="button" onClick={() => { setMode((current) => current === 'gallery' ? 'edited' : 'gallery'); setError(''); }} className="mt-4 text-xs font-semibold text-[var(--text-secondary)] underline underline-offset-4">
                         {mode === 'gallery' ? 'Have an edited photos password?' : 'Back to gallery PIN'}
                     </button>}
+                    {mode === 'gallery' && editedSessionAvailable && onBackToEdited && <button type="button" onClick={onBackToEdited} className="mt-4 block w-full text-xs font-semibold text-[var(--text-secondary)] underline underline-offset-4">Back to Edited Photos</button>}
                 </form>
             </section>
         </main>

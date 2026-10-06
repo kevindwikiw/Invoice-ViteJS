@@ -2,6 +2,7 @@
 
 export type GalleryStatus = 'draft' | 'open' | 'closed';
 export type GalleryMode = 'selection' | 'edited';
+export type GalleryWorkflow = 'selection_delivery' | 'delivery_only';
 export type AddonStatus = 'none' | 'pending' | 'quoted' | 'approved' | 'paid' | 'completed' | 'cancelled';
 export type AddonPricingMode = 'per_photo' | 'package';
 
@@ -13,17 +14,18 @@ export interface DiscountRule {
 
 export interface GallerySummary {
     id: number;
+    workflow?: GalleryWorkflow;
     publicKey?: string | null;
     title: string;
-    driveFolderId: string;
-    status: GalleryStatus;
+    driveFolderId?: string;
+    status?: GalleryStatus;
     createdAt: string;
     updatedAt: string;
     syncedAt?: string | null;
-    photoCount: number;
-    selectionCount: number;
-    selectionDurationHours: number;
-    selectionDurationDays: number;
+    photoCount?: number;
+    selectionCount?: number;
+    selectionDurationHours?: number;
+    selectionDurationDays?: number;
     selectionDeadlineAt?: string | null;
     isExpired?: boolean;
     serverTime?: string;
@@ -106,6 +108,7 @@ export interface Paginated<T> { items?: T[]; packages?: T[]; requests?: T[]; pag
 
 export interface PublicGallery {
     id: number;
+    workflow?: GalleryWorkflow;
     title: string;
     status: GalleryStatus;
     syncedAt?: string | null;
@@ -129,6 +132,7 @@ export interface PublicGallery {
     };
     hasEditResults?: boolean;
     tutorialSampleSlots?: number[];
+    tutorialSampleVersion?: string | null;
 }
 
 export interface EditResultPhoto extends GalleryDisplayPhoto {
@@ -137,6 +141,7 @@ export interface EditResultPhoto extends GalleryDisplayPhoto {
     thumbnailUrl: string;
     previewUrl: string;
     downloadUrl: string;
+    downloadResolveUrl: string;
     comparison?: { thumbnailUrl: string; previewUrl: string } | null;
 }
 
@@ -150,7 +155,7 @@ export interface EditResults {
     publishedAt: string;
     expiresAt: string | null;
     expiresIn: number | null;
-    archive: { filename: string; downloadUrl: string } | null;
+    archive: { filename: string; downloadUrl: string; downloadResolveUrl: string } | null;
 }
 
 export interface PublicGalleryPhotos {

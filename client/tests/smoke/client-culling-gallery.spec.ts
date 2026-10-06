@@ -47,6 +47,7 @@ function galleryWithTitle(title: string, deadline = '2026-09-05T03:00:00.000Z') 
 }
 
 async function installSession(page: Page, id = galleryId) {
+    await page.route(`**/api/public/galleries/${id}/edit-results/status`, (route) => route.fulfill({ json: { workflow: 'selection_delivery', available: false, photoCount: 0, status: 'draft' } }));
     await page.addInitScript(({ galleryKey, galleryToken }) => {
         localStorage.setItem(`orbit_culling_token_${galleryKey}`, galleryToken);
         localStorage.setItem(`orbit_culling_tutorial_${galleryKey}`, '1');
@@ -152,6 +153,14 @@ async function expectCompactCountdown(page: Page, width: number, height: number)
     const themeAfter = await themeToggle.boundingBox();
     expect(Math.abs((themeAfter?.x ?? 0) - (themeBefore?.x ?? 0))).toBeLessThanOrEqual(1);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+}
+
+async function chooseGalleryRefineView(page: Page, view: 'All Photos' | 'Picked' | 'Submitted') {
+    const trigger = page.getByRole('navigation', { name: 'Gallery views' }).getByRole('button').first();
+    const menu = page.getByRole('menu', { name: 'All Photos views' });
+    await trigger.click();
+    if (await menu.count() === 0) await trigger.click();
+    await menu.getByText(view, { exact: true }).click();
 }
 
 test('opens photo 101 on page 2 by driveFileId and keeps the full frame above the footer', async ({ page }) => {
@@ -288,7 +297,7 @@ test('request more refreshes QRIS availability without requiring a new gallery s
 
     const dialog = page.getByRole('dialog', { name: 'Request more edited photos' });
     await expect(dialog).toBeVisible();
-    await expect(dialog.getByRole('button', { name: 'Bayar Instan via QRIS' })).toBeVisible();
+    await expect(dialog.getByRole('button', { name: 'Pay Instantly via QRIS' })).toBeVisible();
     expect(photoRequests).toBeGreaterThanOrEqual(2);
 });
 
@@ -325,14 +334,17 @@ test('continues the lightbox across page boundaries', async ({ page }) => {
     await expect.poll(() => requestedPageSizes[0]).toBe('54');
     await page.getByRole('button', { name: 'Open photo-054.jpg' }).click();
     await expect(page.getByTestId('gallery-lightbox-footer').getByText('photo-054.jpg', { exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Close photo preview' })).toBeFocused();
 
     await page.getByRole('button', { name: 'Next photo' }).click();
     await expect(page.getByTestId('gallery-lightbox-footer').getByText('photo-055.jpg', { exact: true })).toBeVisible();
     await expect(page.getByTestId('gallery-lightbox-footer').getByText('55 / 101')).toBeVisible();
+    await expect(page).toHaveURL(/page=2/);
 
     await page.keyboard.press('ArrowLeft');
     await expect(page.getByTestId('gallery-lightbox-footer').getByText('photo-054.jpg', { exact: true })).toBeVisible();
     await expect(page.getByTestId('gallery-lightbox-footer').getByText('54 / 101')).toBeVisible();
+    await expect(page).toHaveURL(/page=1/);
 
     await page.keyboard.press('ArrowRight');
     await expect(page.getByTestId('gallery-lightbox-footer').getByText('photo-055.jpg', { exact: true })).toBeVisible();
@@ -437,19 +449,22 @@ test('toggles All Photos to the last submitted snapshot without changing the Pic
     await page.route(`**/api/public/galleries/${id}/photos/*/preview?*`, (route) => fulfillImage(route, 1600, 1067));
 
     await page.goto(`/culling/${id}`);
-    await expect(page.getByRole('button', { name: 'Picked (2)', exact: true })).toBeVisible();
-    await page.getByRole('button', { name: 'Remove photo-001.jpg', exact: true }).click();
-    await expect(page.getByRole('button', { name: 'Picked (1)', exact: true })).toBeVisible();
-
     await page.getByRole('button', { name: 'All Photos', exact: true }).click();
+    await page.getByRole('menuitem', { name: 'Picked', exact: true }).click();
+    await page.getByRole('button', { name: 'Remove photo-001.jpg', exact: true }).click();
+    await expect(page.getByRole('button', { name: 'Picked', exact: true })).toBeVisible();
+
+    await page.getByRole('button', { name: 'Picked', exact: true }).click();
+    await page.getByRole('menuitemradio', { name: 'Submitted', exact: true }).click();
     await expect(page.getByRole('button', { name: 'Submitted', exact: true })).toBeVisible();
     await expect(page.getByRole('button', { name: /^Open photo-/ })).toHaveCount(2);
     await expect(page.getByRole('button', { name: 'Open photo-001.jpg', exact: true })).toBeVisible();
     await expect(page.getByRole('button', { name: 'Select photo-001.jpg', exact: true })).toBeVisible();
 
     await page.getByRole('button', { name: 'Select photo-001.jpg', exact: true }).click();
-    await expect(page.getByRole('button', { name: 'Picked (2)', exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Remove photo-001.jpg', exact: true })).toBeVisible();
     await page.getByRole('button', { name: 'Submitted', exact: true }).click();
+    await page.getByRole('menuitemradio', { name: 'All Photos', exact: true }).click();
     await expect(page.getByRole('button', { name: 'All Photos', exact: true })).toBeVisible();
     await expect(page.getByRole('button', { name: /^Open photo-/ })).toHaveCount(3);
 });
@@ -477,7 +492,9 @@ test('keeps draft selections through reload and clears the unsaved status after 
     }));
 
     await page.goto(`/culling/${id}`);
+    await expect(page.getByRole('button', { name: 'Submit', exact: true })).toBeDisabled();
     await page.getByRole('button', { name: 'Select photo-001.jpg' }).click();
+    await expect(page.getByRole('button', { name: 'Submit', exact: true })).toBeEnabled();
     await expect(page.getByText('Not submitted')).toBeVisible();
 
     await page.reload();
@@ -488,6 +505,7 @@ test('keeps draft selections through reload and clears the unsaved status after 
     await page.getByRole('button', { name: 'Submit 1' }).click();
     await expect(page.getByText('Selection saved. 1 filenames submitted.')).toBeVisible();
     await expect(page.getByText('Not submitted')).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Submit', exact: true })).toBeDisabled();
 });
 
 test('returns to the PIN gate when an admin save invalidates the public token', async ({ page }) => {
@@ -772,13 +790,20 @@ for (const theme of ['black', 'white'] as const) {
     }
 }
 
+async function openTutorialWithPausedClock(page: Page, id: string) {
+    const metadata = page.waitForResponse((response) => response.url().includes(`/galleries/${id}/edit-results/status`));
+    await page.goto(`/culling/${id}`);
+    await (await metadata).finished();
+    await page.clock.runFor(0);
+}
+
 test('tutorial intro respects reduced motion and finishes despite a failed logo', async ({ page }) => {
     await page.emulateMedia({ reducedMotion: 'reduce' });
     await prepareTutorialIntro(page, 'intro-failed-logo', 'black');
     await page.route('**/logo.png', (route) => route.abort());
     await page.clock.install({ time: new Date('2026-09-02T03:00:00.000Z') });
     await page.clock.pauseAt(new Date('2026-09-02T03:00:01.000Z'));
-    await page.goto('/culling/intro-failed-logo');
+    await openTutorialWithPausedClock(page, 'intro-failed-logo');
     const intro = page.getByTestId('tutorial-intro');
     await expect(intro).toBeVisible();
     await expect(intro.getByAltText('The Orbit Photo')).toBeHidden();
@@ -828,7 +853,7 @@ test('crossfades the intro into the tutorial panel during handoff', async ({ pag
     await prepareTutorialIntro(page, 'intro-handoff', 'black');
     await page.clock.install({ time: new Date('2026-09-02T03:00:00.000Z') });
     await page.clock.pauseAt(new Date('2026-09-02T03:00:01.000Z'));
-    await page.goto('/culling/intro-handoff');
+    await openTutorialWithPausedClock(page, 'intro-handoff');
 
     const intro = page.getByTestId('tutorial-intro');
     await expect(intro).toBeVisible();
@@ -856,7 +881,7 @@ for (const phase of ['loading', 'handoff'] as const) {
             await prepareTutorialIntro(page, id, 'black');
             await page.clock.install({ time: new Date('2026-09-02T03:00:00.000Z') });
             await page.clock.pauseAt(new Date('2026-09-02T03:00:01.000Z'));
-            await page.goto(`/culling/${id}`);
+            await openTutorialWithPausedClock(page, id);
             const intro = page.getByTestId('tutorial-intro');
             await expect(intro).toBeVisible();
             if (phase === 'handoff') {
@@ -1015,23 +1040,23 @@ test('filters immediately from a selfie and keeps selection submit working', asy
     await expect(page.getByRole('button', { name: 'Next' })).toHaveCount(0);
 
     await page.getByRole('button', { name: 'Select photo-002.jpg' }).click();
-    await page.getByRole('button', { name: 'Picked (1)', exact: true }).click();
+    await chooseGalleryRefineView(page, 'Picked');
     await expect(page.getByRole('button', { name: /^Open photo-/ })).toHaveCount(1);
     await page.getByRole('button', { name: 'Edited Photos', exact: true }).click();
     await expect(page.getByPlaceholder('Edited photos password')).toBeVisible();
     await expect(page.getByRole('button', { name: 'Clear selfie filter' })).toHaveCount(0);
-    await page.getByRole('button', { name: 'Picked (1)', exact: true }).click();
+    await chooseGalleryRefineView(page, 'Picked');
     await expect(page.getByRole('button', { name: 'Remove photo-002.jpg' })).toBeVisible();
     await expect(page.getByRole('button', { name: 'Clear selfie filter' })).toBeVisible();
-    await page.getByRole('button', { name: 'All Photos', exact: true }).click();
+    await chooseGalleryRefineView(page, 'All Photos');
     await expect(page.getByRole('button', { name: 'Clear selfie filter' })).toBeVisible();
     await page.getByRole('button', { name: 'Clear selfie filter' }).click();
     await expect(page.getByRole('button', { name: 'Filter by selfie' })).toBeVisible();
-    await page.getByRole('button', { name: 'Picked (1)', exact: true }).click();
+    await chooseGalleryRefineView(page, 'Picked');
     await page.getByRole('button', { name: 'Filter by selfie' }).click();
     await expect(page.getByRole('dialog', { name: 'Filter by selfie' })).toBeVisible();
     await page.getByRole('button', { name: 'Close Filter by selfie' }).click();
-    await page.getByRole('button', { name: 'All Photos', exact: true }).click();
+    await chooseGalleryRefineView(page, 'All Photos');
     await expect(page.getByRole('button', { name: /^Open photo-/ })).toHaveCount(54);
     await expect(page.getByRole('button', { name: 'Next' })).toBeVisible();
     await expect(page.getByText('Not submitted')).toBeVisible();

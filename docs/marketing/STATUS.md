@@ -1,6 +1,12 @@
 # Marketing Implementation Status
 
-Last Updated: 2026-09-22
+Last Updated: 2026-10-06
+
+## Application Maintenance
+
+- 2026-10-06: Added immutable Prewedding selection/delivery and Wedding delivery-only workflows to the existing client/Hono application. Existing galleries retain selection behavior; Wedding uses the existing Edited password, Drive folder tree, and download flow.
+- This maintenance does not advance a marketing ticket or change the marketing architecture. No deployment was performed.
+- Validation: 41 server tests, 74 focused Chromium tests, client/server typechecks, and client production build pass. Browser coverage includes 320px, 390px, and desktop; legacy Selfie and removed Publish/Unpublish button scenarios remain outside this focused run. Live Drive-folder integration still needs a manual smoke test.
 
 ## Architecture Version
 
