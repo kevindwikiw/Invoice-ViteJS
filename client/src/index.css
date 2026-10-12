@@ -364,3 +364,28 @@ textarea::placeholder {
 .dark h2 {
     color: var(--text-primary) !important;
 }
+
+.gallery-area-row td[data-gallery-area] {
+    cursor: pointer;
+}
+
+.gallery-area-row:has(td[data-gallery-area="selection"]:hover) td[data-gallery-area="selection"],
+.gallery-area-row:has(td[data-gallery-area="selection"]:focus-within) td[data-gallery-area="selection"],
+.gallery-area-row:has(td[data-gallery-area="edited"]:hover) td[data-gallery-area="edited"],
+.gallery-area-row:has(td[data-gallery-area="edited"]:focus-within) td[data-gallery-area="edited"] {
+    background: var(--bg-elevated);
+}
+
+.selection-action-bar-motion {
+    transition: transform 440ms cubic-bezier(0.16, 1.12, 0.3, 1), opacity 240ms ease-out;
+}
+
+.selection-action-bar-motion[data-visible="false"] {
+    transition: transform 220ms cubic-bezier(0.4, 0, 1, 1), opacity 160ms ease-in;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .selection-action-bar-motion {
+        transition: none;
+    }
+}

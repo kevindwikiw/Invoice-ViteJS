@@ -1,21 +1,40 @@
-import { useLayoutEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type SyntheticEvent } from 'react';
-import { ImageOff, Loader2, MoveHorizontal } from 'lucide-react';
+import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type SyntheticEvent } from 'react';
+import { ImageOff, MoveHorizontal } from 'lucide-react';
 import clsx from 'clsx';
 
-export function BeforeAfterSlider({ beforeUrl, afterUrl, testId = 'tutorial', frameClass = 'h-[clamp(20rem,58dvh,31rem)] md:h-[min(60dvh,34rem)]', aspectRatio, fallbackUrl }: {
-    beforeUrl: string; afterUrl: string; testId?: 'tutorial' | 'delivery'; frameClass?: string; aspectRatio?: number; fallbackUrl?: string;
+export function BeforeAfterSlider({ beforeUrl, beforePlaceholderUrl, afterUrl, testId = 'tutorial', frameClass = 'h-[clamp(20rem,58dvh,31rem)] md:h-[min(60dvh,34rem)]', aspectRatio, fallbackUrl, onLoading, onSettled }: {
+    beforeUrl: string; beforePlaceholderUrl?: string; afterUrl: string; testId?: 'tutorial' | 'delivery'; frameClass?: string; aspectRatio?: number; fallbackUrl?: string; onLoading?: () => void; onSettled?: () => void;
 }) {
     const mediaSlotRef = useRef<HTMLDivElement>(null);
     const stageRef = useRef<HTMLDivElement>(null);
     const touchStartRef = useRef<{ pointerId: number; x: number; y: number } | null>(null);
     const [position, setPosition] = useState(50);
     const [failedAssets, setFailedAssets] = useState({ before: false, after: false });
-    const [loadedAssets, setLoadedAssets] = useState({ before: false, after: false });
-    const [placeholderUrl, setPlaceholderUrl] = useState('');
+    const [loadedAssets, setLoadedAssets] = useState({ before: false, after: Boolean(fallbackUrl) });
+    const [beforePlaceholderLoaded, setBeforePlaceholderLoaded] = useState(false);
+    const [beforePlaceholderFailed, setBeforePlaceholderFailed] = useState(false);
     const [sourceAspectRatio, setSourceAspectRatio] = useState(aspectRatio || 4 / 3);
     const [stageSize, setStageSize] = useState<{ width: number; height: number } | null>(null);
     const [attempt, setAttempt] = useState(0);
-    const pairReady = loadedAssets.before && loadedAssets.after;
+    const isTutorial = testId === 'tutorial';
+    const beforeReady = loadedAssets.before || beforePlaceholderLoaded;
+    const pairReady = beforeReady && loadedAssets.after;
+    const beforeUnavailable = failedAssets.before && (!beforePlaceholderUrl || beforePlaceholderFailed);
+    const pairUnavailable = beforeUnavailable || (failedAssets.after && !fallbackUrl);
+    const imageWidth = 1600;
+    const imageHeight = Math.max(1, Math.round(imageWidth / sourceAspectRatio));
+    const retryAssets = () => {
+        onLoading?.();
+        setFailedAssets({ before: false, after: false });
+        setLoadedAssets({ before: false, after: Boolean(fallbackUrl) });
+        setBeforePlaceholderLoaded(false);
+        setBeforePlaceholderFailed(false);
+        setAttempt((value) => value + 1);
+    };
+
+    useEffect(() => {
+        if (pairReady || pairUnavailable) onSettled?.();
+    }, [onSettled, pairReady, pairUnavailable]);
 
     useLayoutEffect(() => {
         const mediaSlot = mediaSlotRef.current;
@@ -38,8 +57,6 @@ export function BeforeAfterSlider({ beforeUrl, afterUrl, testId = 'tutorial', fr
         const image = event.currentTarget;
         const { naturalWidth, naturalHeight } = image;
         if (asset === 'after' && !aspectRatio && naturalWidth > 0 && naturalHeight > 0) setSourceAspectRatio(naturalWidth / naturalHeight);
-        setPlaceholderUrl((current) => current || image.currentSrc || image.src);
-
         const markDecoded = () => { if (image.isConnected) setLoadedAssets((current) => ({ ...current, [asset]: true })); };
         if (typeof image.decode !== 'function') {
             markDecoded();
@@ -56,6 +73,7 @@ export function BeforeAfterSlider({ beforeUrl, afterUrl, testId = 'tutorial', fr
 
     const handlePointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
         event.stopPropagation();
+        if (!pairReady) return;
         if (event.target instanceof Element && event.target.closest('button:not([role="slider"]), input, a')) return;
         if (event.pointerType === 'mouse') {
             event.currentTarget.setPointerCapture(event.pointerId);
@@ -68,6 +86,7 @@ export function BeforeAfterSlider({ beforeUrl, afterUrl, testId = 'tutorial', fr
 
     const handlePointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
         event.stopPropagation();
+        if (!pairReady) return;
         if (event.currentTarget.hasPointerCapture(event.pointerId)) {
             updatePosition(event.clientX);
             return;
@@ -111,29 +130,56 @@ export function BeforeAfterSlider({ beforeUrl, afterUrl, testId = 'tutorial', fr
 
     return (
         <div className={testId === 'delivery' ? 'h-full w-full' : undefined}>
-            <div ref={mediaSlotRef} data-testid={`${testId}-media-slot`} className={clsx('relative flex w-full items-center justify-center overflow-hidden bg-black', frameClass)}>
+            <div ref={mediaSlotRef} data-testid={`${testId}-media-slot`} className={clsx('relative flex w-full items-center justify-center overflow-hidden', isTutorial ? 'bg-[var(--bg-elevated)]' : 'bg-black', frameClass)}>
                 <div
                     ref={stageRef}
                     data-testid={`${testId}-before-after-slider`}
-                    className="relative shrink-0 touch-pan-y overflow-hidden bg-black"
+                    className={clsx('relative shrink-0 touch-pan-y overflow-hidden', isTutorial ? 'bg-[var(--bg-elevated)]' : 'bg-black')}
                     style={stageSize ? { width: stageSize.width, height: stageSize.height } : { width: '100%', aspectRatio: sourceAspectRatio }}
-                    aria-busy={!pairReady && !failedAssets.before && !failedAssets.after}
+                    aria-busy={!pairReady && !pairUnavailable}
                     onPointerDown={handlePointerDown}
                     onPointerMove={handlePointerMove}
                     onPointerUp={finishPointer}
                     onPointerCancel={finishPointer}
                 >
+                    {fallbackUrl && <img
+                        data-testid={`${testId}-image-placeholder`}
+                        src={fallbackUrl}
+                        alt=""
+                        aria-hidden="true"
+                        width={imageWidth}
+                        height={imageHeight}
+                        className="absolute inset-0 h-full w-full object-contain"
+                    />}
                     {!failedAssets.after && (
                         <img
                             key={`after-${attempt}`}
                             src={afterUrl}
                             alt="Edited result sample"
+                            width={imageWidth}
+                            height={imageHeight}
                             loading="eager"
                             decoding="async"
                             fetchPriority="high"
-                            className={clsx('absolute inset-0 h-full w-full object-contain transition-opacity duration-150 ease-out motion-reduce:transition-none', pairReady ? 'opacity-100' : 'opacity-0')}
+                            className={clsx('absolute inset-0 h-full w-full object-contain transition-opacity duration-150 ease-out motion-reduce:transition-none', loadedAssets.after && (!isTutorial || pairReady) ? 'opacity-100' : 'opacity-0')}
                             onLoad={(event) => handleAssetLoad('after', event)}
                             onError={() => setFailedAssets((current) => ({ ...current, after: true }))}
+                        />
+                    )}
+                    {beforePlaceholderUrl && !loadedAssets.before && !beforePlaceholderFailed && (
+                        <img
+                            key={`before-placeholder-${attempt}`}
+                            src={beforePlaceholderUrl}
+                            alt=""
+                            aria-hidden="true"
+                            width={imageWidth}
+                            height={imageHeight}
+                            loading="eager"
+                            decoding="async"
+                            className={clsx('absolute inset-0 h-full w-full object-contain transition-opacity duration-150 ease-out motion-reduce:transition-none', beforePlaceholderLoaded ? 'opacity-100' : 'opacity-0')}
+                            style={{ clipPath: `inset(0 ${100 - position}% 0 0)` }}
+                            onLoad={() => setBeforePlaceholderLoaded(true)}
+                            onError={() => setBeforePlaceholderFailed(true)}
                         />
                     )}
                     {!failedAssets.before && (
@@ -141,41 +187,39 @@ export function BeforeAfterSlider({ beforeUrl, afterUrl, testId = 'tutorial', fr
                             key={`before-${attempt}`}
                             src={beforeUrl}
                             alt="Before editing sample"
+                            width={imageWidth}
+                            height={imageHeight}
                             loading="eager"
                             decoding="async"
                             fetchPriority="high"
-                            className={clsx('absolute inset-0 h-full w-full object-contain transition-opacity duration-150 ease-out motion-reduce:transition-none', pairReady ? 'opacity-100' : 'opacity-0')}
+                            className={clsx('absolute inset-0 h-full w-full object-contain transition-opacity duration-150 ease-out motion-reduce:transition-none', loadedAssets.before && (!isTutorial || pairReady) ? 'opacity-100' : 'opacity-0')}
                             style={{ clipPath: `inset(0 ${100 - position}% 0 0)` }}
                             onLoad={(event) => handleAssetLoad('before', event)}
                             onError={() => setFailedAssets((current) => ({ ...current, before: true }))}
                         />
                     )}
 
-                    {!failedAssets.before && !failedAssets.after && !pairReady && (
-                        <div data-testid={`${testId}-image-loading`} className="pointer-events-none absolute inset-0 z-30 flex items-center justify-center overflow-hidden bg-black text-white/75" aria-label="Loading comparison photos">
-                            {fallbackUrl && <span className="absolute bottom-2 z-10 bg-black/80 px-3 py-2 text-xs text-white">Loading Comparison...</span>}
-                            {(fallbackUrl || placeholderUrl) && <img data-testid={`${testId}-image-placeholder`} aria-hidden="true" src={fallbackUrl || placeholderUrl} alt="" className={clsx("absolute inset-0 h-full w-full object-contain", !fallbackUrl && "opacity-70 blur-[12px]")} />}
-                            <span className="absolute inset-0 bg-black/25" />
-                            <Loader2 size={20} className="relative animate-spin motion-reduce:animate-none" />
-                        </div>
-                    )}
-
-                    {(failedAssets.before || failedAssets.after) && (
+                    {pairUnavailable && !isTutorial && (
                         <div className="absolute inset-0 z-30 flex items-end justify-center pb-4">
-                            {fallbackUrl && <img src={fallbackUrl} alt="Edited photo" className="absolute inset-0 h-full w-full object-contain" />}
                             <div role="alert" className="relative flex flex-wrap items-center justify-center gap-2 bg-black/85 px-3 py-2 text-xs text-white">
-                                <ImageOff size={16} /> Comparison Unavailable
-                                <button type="button" className="min-h-11 px-3 font-semibold underline" onClick={() => { setFailedAssets({ before: false, after: false }); setLoadedAssets({ before: false, after: false }); setAttempt((value) => value + 1); }}>Retry</button>
+                                <ImageOff size={16} aria-hidden="true" /> Comparison Unavailable
+                                <button type="button" className="min-h-11 px-3 font-semibold underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white" onClick={retryAssets}>Retry</button>
                             </div>
                         </div>
                     )}
 
-                    {pairReady && (
+                    {!pairUnavailable && !isTutorial && (
                         <>
                             <span className="pointer-events-none absolute left-2 top-2 z-10 border border-white/10 bg-black/75 px-2 py-1 text-xs font-semibold text-white shadow-sm backdrop-blur-md">Before</span>
                             <span className="pointer-events-none absolute right-2 top-2 z-10 border border-white/10 bg-black/75 px-2 py-1 text-xs font-semibold text-white shadow-sm backdrop-blur-md">Edited</span>
-                            <span data-testid={`${testId}-slider-divider`} className="pointer-events-none absolute top-[calc(50%_-_3.25rem)] z-10 h-7 w-px bg-white/80 shadow-[0_0_0_1px_rgba(0,0,0,0.18)]" style={{ left: `${position}%` }} />
-                            <span data-testid={`${testId}-slider-divider`} className="pointer-events-none absolute bottom-[calc(50%_-_3.25rem)] z-10 h-7 w-px bg-white/80 shadow-[0_0_0_1px_rgba(0,0,0,0.18)]" style={{ left: `${position}%` }} />
+                        </>
+                    )}
+                    {pairReady && (
+                        <>
+                            {isTutorial ? <span data-testid={`${testId}-slider-divider`} className="pointer-events-none absolute inset-y-0 z-10 w-px bg-white shadow-[0_0_0_1px_rgba(0,0,0,0.28)]" style={{ left: `${position}%` }} /> : <>
+                                <span data-testid={`${testId}-slider-divider`} className="pointer-events-none absolute top-[calc(50%_-_3.25rem)] z-10 h-7 w-px bg-white/80 shadow-[0_0_0_1px_rgba(0,0,0,0.18)]" style={{ left: `${position}%` }} />
+                                <span data-testid={`${testId}-slider-divider`} className="pointer-events-none absolute bottom-[calc(50%_-_3.25rem)] z-10 h-7 w-px bg-white/80 shadow-[0_0_0_1px_rgba(0,0,0,0.18)]" style={{ left: `${position}%` }} />
+                            </>}
                             <button
                                 type="button"
                                 data-testid={`${testId}-slider-handle`}
@@ -185,16 +229,22 @@ export function BeforeAfterSlider({ beforeUrl, afterUrl, testId = 'tutorial', fr
                                 aria-valuemax={100}
                                 aria-valuenow={Math.round(position)}
                                 onKeyDown={handleKeyDown}
-                                className="absolute top-1/2 z-20 flex h-11 w-11 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border border-white/75 bg-black/60 text-white shadow-[0_4px_18px_rgb(0_0_0/0.28)] backdrop-blur-md transition-[transform,background-color] duration-150 ease-out hover:scale-105 hover:bg-black/75 active:scale-[0.96] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white motion-reduce:transition-none"
+                                className={clsx('absolute top-1/2 z-20 flex h-11 w-11 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border transition-[transform,background-color] duration-150 ease-out active:scale-[0.96] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white motion-reduce:transition-none', isTutorial ? 'border-white bg-white text-black shadow-[0_3px_14px_rgb(0_0_0/0.24)] hover:bg-white/90' : 'border-white/75 bg-black/60 text-white shadow-[0_4px_18px_rgb(0_0_0/0.28)] backdrop-blur-md hover:scale-105 hover:bg-black/75')}
                                 style={{ left: `${position}%` }}
                             >
-                                <MoveHorizontal size={17} strokeWidth={1.8} />
+                                <MoveHorizontal size={17} strokeWidth={1.8} aria-hidden="true" />
                             </button>
                         </>
                     )}
                 </div>
+                {isTutorial && pairUnavailable && <div role="alert" className="absolute inset-0 z-30 flex flex-col items-center justify-center gap-2 bg-[var(--bg-elevated)] px-5 text-center text-[var(--text-primary)]">
+                    <ImageOff size={22} aria-hidden="true" className="text-[var(--text-muted)]" />
+                    <p className="text-sm font-semibold">Sample photos unavailable</p>
+                    <p className="max-w-xs text-xs leading-5 text-[var(--text-secondary)]">Try again or continue to the next sample.</p>
+                    <button type="button" onClick={retryAssets} className="mt-2 min-h-11 rounded-md border border-[var(--border)] px-4 text-sm font-medium hover:bg-[var(--bg-card)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)]">Retry</button>
+                </div>}
             </div>
-
+            {isTutorial && <div aria-hidden={!pairReady} className={clsx('flex h-8 items-center justify-between text-[13px] font-medium text-[var(--text-secondary)] transition-opacity duration-150 motion-reduce:transition-none', pairReady ? 'opacity-100' : 'opacity-0')}><span>Before</span><span>Edited</span></div>}
         </div>
     );
 }

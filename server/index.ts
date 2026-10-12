@@ -11,7 +11,7 @@ import sequencesRoutes from "./routes/sequences";
 import { feedbackAdminRoutes, publicFeedbackRoutes } from "./routes/feedback";
 import { adminGalleriesRouter, publicGalleriesRouter } from "./routes/galleries";
 import { authMiddleware } from "./middleware/auth";
-import { faceSearchRateLimiter, galleryPinRateLimiter, loginRateLimiter } from "./middleware/rate-limit";
+import { faceSearchRateLimiter, galleryEditResultsRateLimiter, galleryPinRateLimiter, loginRateLimiter } from "./middleware/rate-limit";
 import { ensureUserPermissionsTable, hasFeaturePermission } from "./permissions";
 import { databaseDriver, sqlite } from "./db/runtime";
 import { feedbackStorageDriver } from "./db/feedback";
@@ -162,7 +162,7 @@ app.use("/api/auth/me", authMiddleware);
 app.route("/api/auth", authRoutes);
 app.route("/api/public/feedback", publicFeedbackRoutes);
 app.use("/api/public/galleries/:id/verify", galleryPinRateLimiter);
-app.use("/api/public/galleries/:id/edit-results/verify", galleryPinRateLimiter);
+app.use("/api/public/galleries/:id/edit-results/verify", galleryEditResultsRateLimiter);
 app.use("/api/public/galleries/:id/face-search", faceSearchRateLimiter);
 app.route("/api/public/galleries", publicGalleriesRouter);
 

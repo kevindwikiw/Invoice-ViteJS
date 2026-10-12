@@ -1,6 +1,6 @@
 import { expect, spyOn, test } from 'bun:test';
 import { generateKeyPairSync } from 'node:crypto';
-import { listDrivePhotoTree } from './google-drive';
+import { fetchDriveFile, listDrivePhotoTree } from './google-drive';
 
 test('Drive tree follows pagination and folders, ignores shortcuts, and rejects partial reads', async () => {
     const originalConfig = process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
@@ -10,9 +10,21 @@ test('Drive tree follows pagination and folders, ignores shortcuts, and rejects 
     const photo = (id: string) => ({ id, name: `${id}.jpg`, mimeType: 'image/jpeg' });
     let mode = 'normal';
     let secondPageRead = false;
-    const fetchMock = spyOn(globalThis, 'fetch').mockImplementation(Object.assign(async (input: string | URL | Request) => {
+    let thumbnailAttempts = 0;
+    let tokenIssues = 0;
+    const fetchMock = spyOn(globalThis, 'fetch').mockImplementation(Object.assign(async (input: string | URL | Request, init?: RequestInit) => {
         const url = new URL(String(input));
-        if (url.hostname === 'oauth2.googleapis.com') return Response.json({ access_token: 'test', expires_in: 3600 });
+        if (url.hostname === 'oauth2.googleapis.com') {
+            tokenIssues += 1;
+            return Response.json({ access_token: tokenIssues > 1 ? 'refreshed' : 'test', expires_in: 3600 });
+        }
+        if (url.hostname === 'lh3.googleusercontent.com') {
+            thumbnailAttempts += 1;
+            if (mode === 'retry-thumbnail' && thumbnailAttempts === 1) return new Response('busy', { status: 503, headers: { 'Retry-After': '0' } });
+            const authorization = new Headers(init?.headers).get('Authorization');
+            if (mode === 'refresh-token' && authorization === 'Bearer test') return new Response('expired', { status: 401 });
+            return new Response('image', { headers: { 'Content-Type': 'image/jpeg' } });
+        }
         if (url.pathname.endsWith('/files')) {
             expect(url.searchParams.get('q')).toContain('trashed = false');
             expect(url.searchParams.get('q')).toContain('application/vnd.google-apps.folder');
@@ -42,6 +54,15 @@ test('Drive tree follows pagination and folders, ignores shortcuts, and rejects 
         await expect(listDrivePhotoTree('root')).rejects.toThrow('Permission denied');
         mode = 'incomplete';
         await expect(listDrivePhotoTree('root')).rejects.toThrow('incomplete folder listing');
+        mode = 'retry-thumbnail';
+        thumbnailAttempts = 0;
+        expect((await fetchDriveFile('photo', 'https://lh3.googleusercontent.com/photo=s320', 320, true)).ok).toBe(true);
+        expect(thumbnailAttempts).toBe(2);
+        mode = 'refresh-token';
+        thumbnailAttempts = 0;
+        expect((await fetchDriveFile('photo', 'https://lh3.googleusercontent.com/photo=s320', 320, true)).ok).toBe(true);
+        expect(thumbnailAttempts).toBe(2);
+        expect(tokenIssues).toBe(2);
     } finally {
         fetchMock.mockRestore();
         if (originalConfig === undefined) delete process.env.GOOGLE_SERVICE_ACCOUNT_JSON;

@@ -50,7 +50,7 @@ async function openPicked(page: Page) {
     const allPhotos = page.getByRole('button', { name: 'All Photos', exact: true });
     await allPhotos.click();
     if (await page.getByRole('menu', { name: 'All Photos views' }).count() === 0) await allPhotos.click();
-    await page.getByRole('menuitem', { name: 'Picked', exact: true }).click();
+    await page.getByRole('menuitemradio', { name: 'Picked', exact: true }).click();
 }
 
 for (const theme of ['black', 'white']) {

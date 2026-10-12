@@ -3,7 +3,7 @@ import { Buffer } from "node:buffer";
 import { createHmac } from "node:crypto";
 import writeExcelFile from "write-excel-file/node";
 import { galleryAll, galleryBatch, galleryInsertReturningId, galleryOne, galleryRun } from "../db/galleries";
-import { fetchDriveFile, getDrivePhotoMetadata, hasAnyoneViewerFolderAccess, listDrivePhotos, listDrivePhotoTree, type DriveFolder } from "../lib/google-drive";
+import { fetchDriveFile, getDrivePhotoMetadata, hasAnyoneViewerFolderAccess, listDrivePhotos, listDrivePhotoTree, type DriveFolder, type DrivePhoto } from "../lib/google-drive";
 import {
     DEFAULT_SELECTION_DURATION_HOURS,
     isSelectionDeadlineExpired,
@@ -13,7 +13,7 @@ import {
     selectionDeadlineFromNow,
 } from "../lib/gallery-deadline";
 import { getFreshGallerySettings, getGallerySettings, invalidateGallerySettingsCache } from "../lib/gallery-settings-cache";
-import { resetGalleryPinAttempts } from "../middleware/rate-limit";
+import { resetGalleryEditResultsAttempts, resetGalleryPinAttempts } from "../middleware/rate-limit";
 import { hasFeaturePermission } from "../permissions";
 import { faceSearchBodyLimit, handlePublicFaceSearch, handlePublicFaceSearchStatus, prepareGalleryFaceIndex } from "./face-index";
 import { getFaceSourceVersion } from "../lib/face-source";
@@ -39,6 +39,9 @@ const DEFAULT_ADDON_UNIT_PRICE = 10_000;
 const DEFAULT_CONTACT_MESSAGE = "Halo Kak Admin Orbit\nSaya ingin meminta bantuan untuk membuka client gallery saya yaa.\n\nIni URL saya: {{gallery_url}}\nSaya client dari: {{gallery_title}}\n\nTerima kasih, Kak!";
 const DEFAULT_REQUEST_MORE_MESSAGE = "Halo Kak Admin Orbit\nSaya ingin meminta tambahan edited photos.\n\nIni URL saya: {{gallery_url}}\nSaya client dari: {{gallery_title}}\nPilihan saat ini: {{selected_count}} foto\nSaya ingin menambah: {{requested_count}} foto\nPromo: {{promo_label}}\nEstimasi biaya: {{estimated_price}}";
 const PUBLIC_KEY_TIME_ZONE = "Asia/Jakarta";
+const PAIRING_CANDIDATE_CACHE_MS = 60_000;
+const pairingCandidateCache = new Map<number, { folderId: string; expiresAt: number; photos: Map<string, DrivePhoto> }>();
+const pendingPairingCandidates = new Map<string, Promise<Map<string, DrivePhoto>>>();
 
 type AuthUser = { sub: number; email: string; name: string; role: string };
 type GalleryStatus = "draft" | "open" | "closed";
@@ -81,6 +84,7 @@ type GalleryRow = {
     editResultsPhotoCount?: number | null;
     editResultsVersion?: number | null;
     editResultsStatus?: GalleryStatus;
+    comparisonEnabled?: number | boolean | null;
     tutorialBeforeDriveFileId?: string | null;
     tutorialAfterDriveFileId?: string | null;
     tutorialBefore2DriveFileId?: string | null;
@@ -616,7 +620,7 @@ async function requirePublicGallery(c: Context<Env>): Promise<{ gallery: Gallery
         FROM galleries WHERE ${lookup.sql}
     `, lookup.params);
     if (!gallery) return c.json({ error: "Gallery Not Found" }, 404);
-    if (!token || !await verifyGalleryToken(token, gallery.id, gallery.accessVersion)) return c.json({ error: "Gallery access expired. Enter the PIN again." }, 401);
+    if (!token || !await verifyGalleryToken(token, gallery.id, gallery.accessVersion)) return c.json({ error: "Gallery access expired. Enter the password again." }, 401);
     if (isSelectionDeadlineExpired(gallery.selectionDeadlineAt) || gallery.status !== "open") {
         const expired = isSelectionDeadlineExpired(gallery.selectionDeadlineAt);
         const settings = await getGallerySettings();
@@ -705,9 +709,10 @@ adminGalleriesRouter.get("/", async (c) => {
     const status = normalizeStatus(c.req.query("status"), "draft");
     const hasStatusFilter = c.req.query("status") === "open" || c.req.query("status") === "closed" || c.req.query("status") === "draft";
     const search = String(c.req.query("search") || "").trim().slice(0, 100);
-    const editedMode = c.req.query("mode") === "edited";
+    const mode = c.req.query("mode");
+    const editedMode = mode === "edited" || mode === "wedding";
     const conditions: string[] = [];
-    if (!editedMode) conditions.push("g.gallery_workflow = 'selection_delivery'");
+    conditions.push(mode === "wedding" ? "g.gallery_workflow = 'delivery_only'" : "g.gallery_workflow = 'selection_delivery'");
     const params: unknown[] = [];
     if (hasStatusFilter) {
         const expired = editedMode
@@ -925,7 +930,7 @@ adminGalleriesRouter.post("/", async (c) => {
     const selectionDurationDays = selectionDurationHours === null ? null : Math.ceil(selectionDurationHours / 24);
 
     if (!title || !driveFolderId || pin.length < 4 || selectionDurationHours === null || selectionDurationDays === null) {
-        return c.json({ error: "Title, Drive folder ID, a PIN of at least 4 characters, and a selection duration from 1 to 8760 hours are required." }, 400);
+        return c.json({ error: "Title, Drive folder ID, a Photo Selection password of at least 4 characters, and a selection duration from 1 to 8760 hours are required." }, 400);
     }
 
     const pinHash = await Bun.password.hash(pin, { algorithm: "bcrypt", cost: 10 });
@@ -997,6 +1002,21 @@ adminGalleriesRouter.post("/:id/reset-pin-lock", async (c) => {
     return c.json({ status: "reset" });
 });
 
+adminGalleriesRouter.post("/:id/edit-results/reset-lock", async (c) => {
+    const denied = await requireGalleryAdmin(c);
+    if (denied) return denied;
+    const id = Number(c.req.param("id"));
+    if (!Number.isInteger(id) || id <= 0) return c.json({ error: "Invalid gallery ID" }, 400);
+    const gallery = await galleryOne<GalleryRow>("SELECT id, public_key as \"publicKey\" FROM galleries WHERE id = ?", [id]);
+    if (!gallery) return c.json({ error: "Gallery not found" }, 404);
+    try {
+        await resetGalleryEditResultsAttempts([String(gallery.id), gallery.publicKey || ""]);
+    } catch {
+        return c.json({ error: "Unable to reset Edited Photos password attempts. Please try again." }, 503);
+    }
+    return c.json({ status: "reset" });
+});
+
 adminGalleriesRouter.patch("/:id", async (c) => {
     const denied = await requireGalleryAdmin(c);
     if (denied) return denied;
@@ -1004,7 +1024,7 @@ adminGalleriesRouter.patch("/:id", async (c) => {
     const id = Number(c.req.param("id"));
     if (!Number.isInteger(id)) return c.json({ error: "Invalid gallery ID" }, 400);
     const existing = await galleryOne<GalleryRow>(`
-        SELECT id, title, gallery_workflow as workflow, contact_whatsapp_url as "contactWhatsappUrl", edit_results_status as "editResultsStatus", edit_results_key_hash as "editResultsKeyHash", edit_results_photo_count as "editResultsPhotoCount", edit_results_expires_at as "editResultsExpiresAt", drive_folder_id as "driveFolderId", edit_results_folder_id as "editResultsFolderId", edit_results_zip_file_id as "editResultsZipFileId", edit_results_access_duration_hours as "editResultsAccessDurationHours", tutorial_before_drive_file_id as "tutorialBeforeDriveFileId", tutorial_after_drive_file_id as "tutorialAfterDriveFileId", tutorial_before_2_drive_file_id as "tutorialBefore2DriveFileId", tutorial_after_2_drive_file_id as "tutorialAfter2DriveFileId", tutorial_before_3_drive_file_id as "tutorialBefore3DriveFileId", tutorial_after_3_drive_file_id as "tutorialAfter3DriveFileId", pin_hash as "pinHash", status, max_selections as "maxSelections", additional_selection_limit as "additionalSelectionLimit", edit_addon_status as "editAddonStatus", edit_addon_pricing_mode as "editAddonPricingMode", edit_addon_price as "editAddonPrice", qris_enabled as "qrisEnabled",
+        SELECT id, title, gallery_workflow as workflow, contact_whatsapp_url as "contactWhatsappUrl", edit_results_status as "editResultsStatus", edit_results_key_hash as "editResultsKeyHash", edit_results_photo_count as "editResultsPhotoCount", edit_results_expires_at as "editResultsExpiresAt", edit_results_comparison_enabled as "comparisonEnabled", drive_folder_id as "driveFolderId", edit_results_folder_id as "editResultsFolderId", edit_results_zip_file_id as "editResultsZipFileId", edit_results_access_duration_hours as "editResultsAccessDurationHours", tutorial_before_drive_file_id as "tutorialBeforeDriveFileId", tutorial_after_drive_file_id as "tutorialAfterDriveFileId", tutorial_before_2_drive_file_id as "tutorialBefore2DriveFileId", tutorial_after_2_drive_file_id as "tutorialAfter2DriveFileId", tutorial_before_3_drive_file_id as "tutorialBefore3DriveFileId", tutorial_after_3_drive_file_id as "tutorialAfter3DriveFileId", pin_hash as "pinHash", status, max_selections as "maxSelections", additional_selection_limit as "additionalSelectionLimit", edit_addon_status as "editAddonStatus", edit_addon_pricing_mode as "editAddonPricingMode", edit_addon_price as "editAddonPrice", qris_enabled as "qrisEnabled",
                selection_count as "selectionCount", selection_duration_days as "selectionDurationDays", selection_duration_hours as "selectionDurationHours", selection_deadline_at as "selectionDeadlineAt", created_at as "createdAt", updated_at as "updatedAt", synced_at as "syncedAt"
         FROM galleries WHERE id = ?
     `, [id]);
@@ -1088,12 +1108,13 @@ adminGalleriesRouter.patch("/:id", async (c) => {
 
     if (!title || (!deliveryOnly && !driveFolderId)) return c.json({ error: "Title and Drive folder ID are required." }, 400);
     if (deliveryOnly && (!editResultsFolderId || !/^[A-Za-z0-9_-]+$/.test(editResultsFolderId))) return c.json({ error: "A valid Edited Photos Drive folder is required." }, 400);
-    if (body.pin !== undefined && pin.length > 0 && pin.length < 4) return c.json({ error: "PIN must be at least 4 characters." }, 400);
+    if (body.pin !== undefined && pin.length > 0 && pin.length < 4) return c.json({ error: "Photo Selection password must be at least 4 characters." }, 400);
     if (changesSelection && activeSelectionLimit && selectionCount > activeSelectionLimit) {
         return c.json({ error: `Active limit cannot be lower than ${selectionCount} submitted selections.` }, 400);
     }
 
     const comparisonStatements: Array<{ sql: string; params: unknown[] }> = [];
+    let nextComparisonPairs: Array<{ editedDriveFileId: string; beforeDriveFileId: string }> | null = null;
     if (body.comparisonEnabled !== undefined) {
         if (typeof body.comparisonEnabled !== "boolean") return c.json({ error: "Invalid comparison setting." }, 400);
         comparisonStatements.push({ sql: "UPDATE galleries SET edit_results_comparison_enabled = ? WHERE id = ?", params: [body.comparisonEnabled ? 1 : 0, id] });
@@ -1115,8 +1136,30 @@ adminGalleriesRouter.patch("/:id", async (c) => {
         }
         comparisonStatements.push({ sql: "DELETE FROM gallery_edit_result_pairs WHERE gallery_id = ?", params: [id] });
         comparisonStatements.push(...pairs.map((pair) => ({ sql: "INSERT INTO gallery_edit_result_pairs (gallery_id, edited_drive_file_id, before_drive_file_id) VALUES (?, ?, ?)", params: [id, pair.editedDriveFileId, pair.beforeDriveFileId] })));
+        nextComparisonPairs = pairs;
     }
     const statements: Array<{ sql: string; params: unknown[] }> = [...comparisonStatements];
+    let liveComparisonCount: number | undefined;
+    const comparisonChanged = body.comparisonEnabled !== undefined || body.comparisonPairs !== undefined;
+    if (comparisonChanged && Number(existing.editResultsPhotoCount || 0) > 0) {
+        const comparisonEnabled = body.comparisonEnabled ?? Boolean(existing.comparisonEnabled);
+        const pairs = nextComparisonPairs ?? (await comparisonDraft(id)).comparisonPairs;
+        const submitted = await submittedComparisonPhotos(id);
+        const beforeById = new Map(submitted.map((photo) => [photo.driveFileId, photo]));
+        const publishedRoot = new Set((await galleryAll<{ driveFileId: string }>(
+            'SELECT drive_file_id as "driveFileId" FROM gallery_edit_result_photos WHERE gallery_id = ? AND folder_id IS NULL',
+            [id],
+        )).map((photo) => photo.driveFileId));
+        const livePairs = comparisonEnabled
+            ? pairs.filter((pair) => publishedRoot.has(pair.editedDriveFileId) && beforeById.has(pair.beforeDriveFileId))
+            : [];
+        statements.push({ sql: "UPDATE gallery_edit_result_photos SET before_photo = NULL WHERE gallery_id = ?", params: [id] });
+        statements.push(...livePairs.map((pair) => ({
+            sql: "UPDATE gallery_edit_result_photos SET before_photo = ? WHERE gallery_id = ? AND drive_file_id = ? AND folder_id IS NULL",
+            params: [JSON.stringify(beforeById.get(pair.beforeDriveFileId)), id, pair.editedDriveFileId],
+        })));
+        liveComparisonCount = livePairs.length;
+    }
     if (deliveryOnly && body.title !== undefined) statements.push({ sql: "UPDATE galleries SET title = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?", params: [title, id] });
     if (changesSelection) statements.push({ sql:
         "UPDATE galleries SET title = ?, drive_folder_id = ?, tutorial_before_drive_file_id = ?, tutorial_after_drive_file_id = ?, tutorial_before_2_drive_file_id = ?, tutorial_after_2_drive_file_id = ?, tutorial_before_3_drive_file_id = ?, tutorial_after_3_drive_file_id = ?, pin_hash = ?, contact_whatsapp_url = ?, max_selections = ?, additional_selection_limit = ?, edit_addon_status = ?, edit_addon_pricing_mode = ?, edit_addon_price = ?, qris_enabled = ?, selection_duration_days = ?, selection_duration_hours = ?, selection_deadline_at = ?, status = ?, access_version = access_version + ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
@@ -1128,8 +1171,39 @@ adminGalleriesRouter.patch("/:id", async (c) => {
     });
     if (statements.length) await galleryBatch(statements);
     if (changesSelection && status === "open" && driveFolderId === existing.driveFolderId) void prepareGalleryFaceIndex(id);
-    return c.json({ status: "updated" });
+    return c.json({ status: "updated", ...(liveComparisonCount === undefined ? {} : { comparisonApplied: true, comparisonCount: liveComparisonCount }) });
 });
+
+async function pairingRootPhotos(galleryId: number, folderId: string, forceRefresh = false): Promise<Map<string, DrivePhoto>> {
+    const cached = pairingCandidateCache.get(galleryId);
+    if (!forceRefresh && cached && cached.folderId === folderId && cached.expiresAt > Date.now()) return cached.photos;
+    const pendingKey = `${galleryId}:${folderId}`;
+    const pending = pendingPairingCandidates.get(pendingKey);
+    if (pending) return pending;
+    const operation = (async () => {
+        const { photos } = await listDrivePhotoTree(folderId);
+        const rootPhotos = new Map(photos.filter((photo) => photo.folderId === null).map((photo) => [photo.id, photo]));
+        pairingCandidateCache.set(galleryId, { folderId, expiresAt: Date.now() + PAIRING_CANDIDATE_CACHE_MS, photos: rootPhotos });
+        if (pairingCandidateCache.size > 100) {
+            const oldest = pairingCandidateCache.keys().next().value;
+            if (oldest !== undefined) pairingCandidateCache.delete(oldest);
+        }
+        return rootPhotos;
+    })();
+    pendingPairingCandidates.set(pendingKey, operation);
+    try { return await operation; }
+    finally { pendingPairingCandidates.delete(pendingKey); }
+}
+
+function refreshPairingCandidate(galleryId: number, photo: DrivePhoto): void {
+    const cached = pairingCandidateCache.get(galleryId);
+    if (cached) cached.photos.set(photo.id, photo);
+}
+
+async function pairingThumbnail(fileId: string, thumbnailUrl: string | null | undefined): Promise<Response> {
+    if (!thumbnailUrl) throw new Error("Missing thumbnail");
+    return fetchDriveFile(fileId, thumbnailUrl, 320, true);
+}
 
 adminGalleriesRouter.get("/:id/edit-results/pairing", async (c) => {
     const denied = await requireGalleryAdmin(c);
@@ -1140,16 +1214,39 @@ adminGalleriesRouter.get("/:id/edit-results/pairing", async (c) => {
     if (!gallery) return c.json({ error: "Gallery not found." }, 404);
     if (!gallery.folder) return c.json({ error: "Save an edited photos folder first." }, 400);
     try {
-        const { photos: edited } = await listDrivePhotoTree(gallery.folder);
-        const rootEdited = edited.filter((photo) => photo.folderId === null);
+        const rootEdited = [...(await pairingRootPhotos(id, gallery.folder, true)).values()];
         const submitted = await submittedComparisonPhotos(id);
         c.header("Cache-Control", "no-store");
         return c.json({
             ...await comparisonDraft(id),
             submitted: submitted.map((photo) => ({ ...photo, thumbnailUrl: `/api/galleries/${id}/edit-results/pairing/before/${encodeURIComponent(photo.driveFileId)}/thumbnail` })),
-            edited: rootEdited.map((photo) => ({ driveFileId: photo.id, filename: photo.name, thumbnailUrl: photo.thumbnailLink || null, width: photo.width, height: photo.height })),
+            edited: rootEdited.map((photo) => ({ driveFileId: photo.id, filename: photo.name, thumbnailUrl: `/api/galleries/${id}/edit-results/pairing/edited/${encodeURIComponent(photo.id)}/thumbnail`, width: photo.width, height: photo.height })),
         });
     } catch { return c.json({ error: "Unable to load comparison photos from Drive." }, 502); }
+});
+
+adminGalleriesRouter.get("/:id/edit-results/pairing/edited/:fileId/thumbnail", async (c) => {
+    const denied = await requireGalleryAdmin(c);
+    if (denied) return denied;
+    const id = Number(c.req.param("id"));
+    if (!Number.isInteger(id) || id < 1) return c.json({ error: "Invalid gallery ID" }, 400);
+    const gallery = await galleryOne<{ folder: string | null }>("SELECT edit_results_folder_id as folder FROM galleries WHERE id = ?", [id]);
+    if (!gallery?.folder) return c.json({ error: "Edited photos folder not found." }, 404);
+    try {
+        const fileId = c.req.param("fileId");
+        const photo = (await pairingRootPhotos(id, gallery.folder)).get(fileId);
+        if (!photo) return c.json({ error: "Edited photo not found in the root folder." }, 404);
+        let response: Response;
+        try {
+            response = await pairingThumbnail(photo.id, photo.thumbnailLink);
+        } catch {
+            const refreshed = await getDrivePhotoMetadata(fileId);
+            if (!refreshed.mimeType.startsWith("image/")) throw new Error("Edited photo is no longer an image.");
+            refreshPairingCandidate(id, refreshed);
+            response = await pairingThumbnail(refreshed.id, refreshed.thumbnailLink);
+        }
+        return new Response(response.body, { headers: { "Content-Type": response.headers.get("Content-Type") || photo.mimeType, "Cache-Control": "private, max-age=300, stale-while-revalidate=60", "X-Content-Type-Options": "nosniff" } });
+    } catch { return c.json({ error: "Unable to load edited thumbnail. Retry in a moment." }, 502); }
 });
 
 adminGalleriesRouter.get("/:id/edit-results/pairing/before/:fileId/thumbnail", async (c) => {
@@ -1166,6 +1263,7 @@ adminGalleriesRouter.get("/:id/edit-results/pairing/before/:fileId/thumbnail", a
 
 async function comparisonImage(photo: BeforePhoto, width: 320 | 1600): Promise<Response> {
     try {
+        if (width === 320) return await pairingThumbnail(photo.driveFileId, photo.thumbnailUrl);
         if (!photo.thumbnailUrl) throw new Error("Missing thumbnail");
         return await fetchDriveFile(photo.driveFileId, photo.thumbnailUrl, width, true);
     } catch {
@@ -1870,7 +1968,7 @@ publicGalleriesRouter.post("/:id/verify", async (c) => {
             contactUrl: settings.contact_whatsapp_url ? `https://wa.me/${settings.contact_whatsapp_url}?text=${encodeURIComponent(text)}` : null,
         }, 403);
     }
-    if (!pin || !await Bun.password.verify(pin, gallery.pinHash)) return c.json({ error: "Invalid PIN." }, 401);
+    if (!pin || !await Bun.password.verify(pin, gallery.pinHash)) return c.json({ error: "Invalid Photo Selection password." }, 401);
     const token = await createGalleryToken(gallery.id, gallery.accessVersion);
     return c.json({ token, expiresIn: GALLERY_TOKEN_TTL_SECONDS, gallery: galleryPublicShape(gallery, await getFreshGallerySettings()) });
 });

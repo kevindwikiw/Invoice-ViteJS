@@ -35,6 +35,9 @@ assert.throws(() => parseComparisonPairs({}));
 assert.throws(() => parseComparisonPairs([{ editedDriveFileId: 'x', beforeDriveFileId: 'b' }, { editedDriveFileId: 'x', beforeDriveFileId: 'c' }]));
 assert.throws(() => parseComparisonPairs([{ editedDriveFileId: 'https://evil.test', beforeDriveFileId: 'b' }]));
 assert.equal(readBeforePhoto('bad-json'), null);
+assert.equal(readBeforePhoto(JSON.stringify({ driveFileId: 'before-a', mimeType: 'image/jpeg' })), null);
+assert.equal(readBeforePhoto(JSON.stringify({ driveFileId: 'before-a', filename: 'before-a.jpg', mimeType: 'image/jpeg', thumbnailUrl: null, width: '1200', height: 900 })), null);
+assert.deepEqual(readBeforePhoto(JSON.stringify({ driveFileId: 'before-a', filename: 'before-a.jpg', mimeType: 'image/jpeg', thumbnailUrl: null, width: 1200, height: 900 })), { driveFileId: 'before-a', filename: 'before-a.jpg', mimeType: 'image/jpeg', thumbnailUrl: null, width: 1200, height: 900 });
 await run("INSERT INTO galleries (id, title, public_key, drive_folder_id, edit_results_folder_id, pin_hash, status) VALUES (1, 'Gallery', 'gallery', 'source', 'edited', 'hash', 'closed')");
 await run("INSERT INTO galleries (id, title, public_key, drive_folder_id, pin_hash) VALUES (2, 'Other', 'other', 'other-source', 'hash')");
 for (const [file, order] of [['before-a', 1], ['before-b', 0], ['unsubmitted', 2]] as const) {
@@ -47,12 +50,15 @@ app.route('/admin', adminGalleriesRouter);
 app.route('/public', publicGalleriesRouter);
 const request = (path: string, method = 'GET', body?: unknown, authenticated = true) => app.request(path, { method, headers: { 'content-type': 'application/json', ...(authenticated ? { 'x-test-admin': '1' } : {}) }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
 type Archive = { filename: string; downloadUrl: string; downloadResolveUrl: string };
-type Payload = { archive: Archive | null; code?: string; downloadUrl?: string; filename?: string; submitted: Array<{ driveFileId: string }>; edited: unknown[]; comparisonEnabled: boolean; comparisonCount: number; token: string; warnings: string[]; photos: Array<{ driveFileId?: string; downloadResolveUrl?: string; comparison: { previewUrl: string } | null }> };
+type Payload = { archive: Archive | null; code?: string; downloadUrl?: string; filename?: string; submitted: Array<{ driveFileId: string }>; edited: Array<{ driveFileId: string; thumbnailUrl: string }>; comparisonEnabled: boolean; comparisonCount: number; token: string; warnings: string[]; photos: Array<{ driveFileId?: string; downloadResolveUrl?: string; comparison: { previewUrl: string } | null }> };
 const json = async (response: Response) => await response.json() as Payload;
 assert.equal((await request('/admin/1/edit-results/pairing', 'GET', undefined, false)).status, 401);
 const candidates = await json(await request('/admin/1/edit-results/pairing'));
 assert.deepEqual(candidates.submitted.map((p: any) => p.driveFileId), ['before-b', 'before-a']);
 assert.equal(candidates.edited.length, 3);
+assert.equal(candidates.edited[0]!.thumbnailUrl, '/api/galleries/1/edit-results/pairing/edited/color/thumbnail');
+assert.equal((await request('/admin/1/edit-results/pairing/edited/color/thumbnail')).status, 200);
+assert.equal((await request('/admin/1/edit-results/pairing/edited/not-in-folder/thumbnail')).status, 404);
 assert.equal(candidates.comparisonEnabled, false);
 assert.equal((await request('/admin/2/edit-results/pairing/before/before-a/thumbnail')).status, 404);
 assert.equal((await request('/admin/1', 'PATCH', { comparisonEnabled: 'true' })).status, 400);
@@ -125,10 +131,11 @@ assert.equal((await request(`/public/gallery/edit-results/photos/color/before/th
 assert.equal(fetched.at(-1)!.width, 320);
 assert.equal((await request(`/public/gallery/edit-results/photos/unsubmitted/before/preview?token=${token}`)).status, 404);
 assert.equal((await request('/public/gallery/edit-results/photos/color/before/preview?token=bad')).status, 401);
-// Change drafts and selections without changing the published comparison.
-await request('/admin/1', 'PATCH', { comparisonPairs: [] });
+// Saving comparison pairs updates the active snapshot without rotating Edited access.
+const clearedComparisons = await json(await request('/admin/1', 'PATCH', { comparisonPairs: [] }));
+assert.equal(clearedComparisons.comparisonCount, 0);
+assert.equal((await request(beforePath)).status, 404);
 await run('DELETE FROM gallery_selections WHERE gallery_id = 1');
-assert.equal((await request(beforePath)).status, 200);
 await request('/admin/1/edit-results/publish', 'POST', { password: 'delivery-pass' });
 assert.equal((await request(beforePath)).status, 401);
 token = await login();
@@ -157,7 +164,8 @@ for (const claims of [{ ...editedClaims, exp: 1 }, { ...editedClaims, gid: 2 }])
 }
 folderSnapshot = [{ id: 'no-watermark', parentId: null, name: 'No Watermark' }, { id: 'empty', parentId: 'no-watermark', name: 'Empty' }];
 const nestedCandidates = await json(await request('/admin/1/edit-results/pairing'));
-assert.deepEqual((nestedCandidates.edited as any[]).map((photo) => photo.driveFileId), ['color']);
+assert.deepEqual(nestedCandidates.edited.map((photo) => photo.driveFileId), ['color']);
+assert.equal((await request('/admin/1/edit-results/pairing/edited/bw/thumbnail')).status, 404);
 const nestedPairResponse = await request('/admin/1', 'PATCH', { comparisonPairs: [{ editedDriveFileId: 'bw', beforeDriveFileId: 'before-a' }] });
 assert.equal(nestedPairResponse.status, 400);
 assert.match((await nestedPairResponse.json() as any).error, /root folder/);

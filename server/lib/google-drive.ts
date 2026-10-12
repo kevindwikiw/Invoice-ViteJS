@@ -90,7 +90,8 @@ async function createServiceAccountAssertion(scope: string): Promise<string> {
     return `${input}.${base64Url(signature)}`;
 }
 
-export async function getDriveAccessToken(): Promise<string> {
+export async function getDriveAccessToken(forceRefresh = false): Promise<string> {
+    if (forceRefresh) tokenCache.delete(DRIVE_SCOPE);
     return (await scopedDriveToken(DRIVE_SCOPE)).accessToken;
 }
 
@@ -135,6 +136,52 @@ async function issueDriveToken(scope: string): Promise<DriveToken> {
     return token;
 }
 
+const DRIVE_RETRY_STATUSES = new Set([429, 500, 502, 503, 504]);
+
+function driveRetryDelay(response: Response | null, attempt: number): number {
+    const retryAfter = response?.headers.get("Retry-After");
+    if (retryAfter && /^\d+$/.test(retryAfter)) return Math.min(2_000, Number(retryAfter) * 1_000);
+    return Math.min(2_000, 250 * 2 ** attempt) + Math.floor(Math.random() * 150);
+}
+
+async function discardResponse(response: Response): Promise<void> {
+    try { await response.body?.cancel(); }
+    catch { /* The response may already be closed. */ }
+}
+
+async function fetchDriveGet(url: string, input: { accept?: string; timeoutMs?: number } = {}): Promise<Response> {
+    let lastError: unknown;
+    let refreshedToken = false;
+    for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+            const token = await getDriveAccessToken(refreshedToken);
+            refreshedToken = false;
+            const response = await fetch(url, {
+                headers: {
+                    Authorization: `Bearer ${token}`,
+                    ...(input.accept ? { Accept: input.accept } : {}),
+                },
+                signal: AbortSignal.timeout(input.timeoutMs || 30_000),
+            });
+            if (response.ok) return response;
+            if (response.status === 401 && attempt < 2) {
+                await discardResponse(response);
+                refreshedToken = true;
+                continue;
+            }
+            if (!DRIVE_RETRY_STATUSES.has(response.status) || attempt === 2) return response;
+            const delay = driveRetryDelay(response, attempt);
+            await discardResponse(response);
+            await Bun.sleep(delay);
+        } catch (error) {
+            lastError = error;
+            if (attempt === 2) throw error;
+            await Bun.sleep(driveRetryDelay(null, attempt));
+        }
+    }
+    throw lastError instanceof Error ? lastError : new Error("Unable to reach Google Drive.");
+}
+
 function driveSearchQuery(folderId: string, includeFolders = false): string {
     const safeFolderId = folderId.replace(/'/g, "\\'");
     return `'${safeFolderId}' in parents and trashed = false and (mimeType contains 'image/'${includeFolders ? " or mimeType = 'application/vnd.google-apps.folder'" : ''})`;
@@ -145,7 +192,6 @@ export async function listDrivePhotos(folderId: string): Promise<DrivePhoto[]> {
 }
 
 async function listDriveEntries(folderId: string, includeFolders = false): Promise<DrivePhoto[]> {
-    const token = await getDriveAccessToken();
     const photos: DrivePhoto[] = [];
     let pageToken = "";
 
@@ -160,10 +206,7 @@ async function listDriveEntries(folderId: string, includeFolders = false): Promi
         });
         if (pageToken) params.set("pageToken", pageToken);
 
-        const response = await fetch(`${DRIVE_API_BASE}/files?${params.toString()}`, {
-            headers: { Authorization: `Bearer ${token}` },
-            signal: AbortSignal.timeout(30_000),
-        });
+        const response = await fetchDriveGet(`${DRIVE_API_BASE}/files?${params.toString()}`);
         const data = await response.json().catch(() => ({})) as {
             nextPageToken?: string;
             incompleteSearch?: boolean;
@@ -228,11 +271,7 @@ export async function listDrivePhotoTree(rootId: string): Promise<{ folders: Dri
 }
 
 export async function getDrivePhotoMetadata(fileId: string): Promise<DrivePhoto> {
-    const token = await getDriveAccessToken();
-    const response = await fetch(`${DRIVE_API_BASE}/files/${encodeURIComponent(fileId)}?supportsAllDrives=true&fields=id,name,mimeType,thumbnailLink,webViewLink,webContentLink,resourceKey,copyRequiresWriterPermission,capabilities(canDownload),downloadRestrictions(effectiveDownloadRestrictionWithContext),size,imageMediaMetadata(width,height)`, {
-        headers: { Authorization: `Bearer ${token}` },
-        signal: AbortSignal.timeout(30_000),
-    });
+    const response = await fetchDriveGet(`${DRIVE_API_BASE}/files/${encodeURIComponent(fileId)}?supportsAllDrives=true&fields=id,name,mimeType,thumbnailLink,webViewLink,webContentLink,resourceKey,copyRequiresWriterPermission,capabilities(canDownload),downloadRestrictions(effectiveDownloadRestrictionWithContext),size,imageMediaMetadata(width,height)`);
     const data = await response.json().catch(() => ({})) as DrivePhoto & {
         error?: { message?: string };
         capabilities?: { canDownload?: boolean };
@@ -259,10 +298,7 @@ export async function getDrivePhotoMetadata(fileId: string): Promise<DrivePhoto>
 }
 
 export async function hasAnyoneViewerFolderAccess(folderId: string): Promise<boolean | null> {
-    const token = await getDriveAccessToken();
-    const response = await fetch(`${DRIVE_API_BASE}/files/${encodeURIComponent(folderId)}/permissions?supportsAllDrives=true&fields=permissions(type,role)`, {
-        headers: { Authorization: `Bearer ${token}` },
-    });
+    const response = await fetchDriveGet(`${DRIVE_API_BASE}/files/${encodeURIComponent(folderId)}/permissions?supportsAllDrives=true&fields=permissions(type,role)`);
     const data = await response.json().catch(() => ({})) as { permissions?: Array<{ type?: string; role?: string }>; error?: { message?: string } };
     // Google allows a reader to list files while sometimes denying permission
     // audits. Let the caller verify public access using the download URLs.
@@ -277,18 +313,14 @@ function resizedThumbnailUrl(thumbnailLink: string, width: number, preferWebp = 
 }
 
 export async function fetchDriveFile(fileId: string, thumbnailLink?: string, width?: number, preserveAspectRatio = false): Promise<Response> {
-    const token = await getDriveAccessToken();
     const url = thumbnailLink
         ? resizedThumbnailUrl(thumbnailLink, width || 320, true, preserveAspectRatio)
         : `${DRIVE_API_BASE}/files/${encodeURIComponent(fileId)}?alt=media&supportsAllDrives=true`;
-    const headers = {
-        Authorization: `Bearer ${token}`,
-        Accept: "image/webp,image/*;q=0.8,*/*;q=0.5",
-    };
-    let response = await fetch(url, { headers });
+    let response = await fetchDriveGet(url, { accept: "image/webp,image/*;q=0.8,*/*;q=0.5", timeoutMs: 10_000 });
 
     if (!response.ok && thumbnailLink) {
-        response = await fetch(resizedThumbnailUrl(thumbnailLink, width || 320, false, preserveAspectRatio), { headers });
+        await discardResponse(response);
+        response = await fetchDriveGet(resizedThumbnailUrl(thumbnailLink, width || 320, false, preserveAspectRatio), { accept: "image/*;q=0.8,*/*;q=0.5", timeoutMs: 10_000 });
     }
 
     if (!response.ok) {

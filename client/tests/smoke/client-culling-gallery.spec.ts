@@ -92,11 +92,10 @@ async function expectMobileGalleryViewport(page: Page, width: number, height: nu
     await page.setViewportSize({ width, height });
     await expect(page.getByTestId('gallery-header')).toBeVisible();
     await expect(page.getByTestId('gallery-toolbar')).toBeVisible();
-    await expect(page.getByRole('button', { name: 'Submit', exact: true })).toBeVisible();
+    await expect(page.getByTestId('gallery-toolbar').getByRole('button', { name: 'Submit', exact: true })).toHaveCount(0);
 
     const layout = await page.evaluate(() => {
         const grid = document.querySelector('[data-testid="gallery-grid"]')?.getBoundingClientRect();
-        const submit = [...document.querySelectorAll('button')].find((button) => button.textContent?.trim() === 'Submit')?.getBoundingClientRect();
         const visibleTiles = [...document.querySelectorAll('button[aria-label^="Open photo-"]')]
             .filter((node) => {
                 const rect = node.getBoundingClientRect();
@@ -108,34 +107,24 @@ async function expectMobileGalleryViewport(page: Page, width: number, height: nu
             scrollWidth: document.documentElement.scrollWidth,
             viewportWidth: window.innerWidth,
             gridTop: grid?.top ?? Number.POSITIVE_INFINITY,
-            submitRight: submit?.right ?? 0,
             visibleTiles,
         };
     });
 
     expect(layout.scrollWidth).toBeLessThanOrEqual(layout.viewportWidth + 1);
-    expect(layout.submitRight).toBeLessThanOrEqual(layout.viewportWidth + 1);
-    expect(layout.gridTop).toBeLessThan(180);
+    expect(layout.gridTop).toBeLessThan(230);
     expect(layout.visibleTiles).toBeGreaterThanOrEqual(6);
 }
 
-async function expectSubmissionActionLayout(page: Page, compact: boolean) {
-    const action = page.getByTestId('submission-action');
-    const status = page.getByTestId('submission-status');
-    const submit = page.getByRole('button', { name: 'Submit', exact: true });
-    const [actionBox, statusBox, submitBox] = await Promise.all([
-        action.boundingBox(),
-        status.boundingBox(),
-        submit.boundingBox(),
+async function expectToolbarAlignedWithGrid(page: Page) {
+    const [toolbar, grid] = await Promise.all([
+        page.getByTestId('gallery-toolbar-inner').boundingBox(),
+        page.getByTestId('gallery-grid').boundingBox(),
     ]);
-
-    expect(actionBox).not.toBeNull();
-    expect(statusBox).not.toBeNull();
-    expect(submitBox).not.toBeNull();
-    expect(Math.abs(statusBox!.y - submitBox!.y)).toBeLessThanOrEqual(1);
-    expect(actionBox!.height).toBeGreaterThanOrEqual(44);
-    expect(statusBox!.x + statusBox!.width).toBeLessThanOrEqual(submitBox!.x + 1);
-    expect(actionBox!.width).toBe(compact ? 188 : 228);
+    expect(toolbar).not.toBeNull();
+    expect(grid).not.toBeNull();
+    expect(toolbar!.x).toBeCloseTo(grid!.x, 0);
+    expect(toolbar!.x + toolbar!.width).toBeCloseTo(grid!.x + grid!.width, 0);
 }
 
 async function expectCompactCountdown(page: Page, width: number, height: number) {
@@ -155,12 +144,53 @@ async function expectCompactCountdown(page: Page, width: number, height: number)
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
 }
 
+test('Edited Photos does not poll closed selection endpoints in the background', async ({ page }) => {
+    const id = 'edited-with-closed-selection';
+    let photoRequests = 0;
+    let faceStatusRequests = 0;
+    await page.addInitScript(({ galleryKey, galleryToken }) => {
+        localStorage.setItem(`orbit_culling_token_${galleryKey}`, galleryToken);
+        localStorage.setItem(`orbit:edit-results-token:${galleryKey}`, 'edited-session-token');
+        localStorage.setItem(`orbit_culling_tutorial_${galleryKey}`, '1');
+    }, { galleryKey: id, galleryToken: token });
+    await page.route(`**/api/public/galleries/${id}/edit-results/status`, (route) => route.fulfill({ json: {
+        workflow: 'selection_delivery', title: 'Closed Selection', available: true, photoCount: 1, status: 'open',
+    } }));
+    await page.route(`**/api/public/galleries/${id}/edit-results?*`, (route) => route.fulfill({ json: {
+        title: 'Closed Selection', photos: [], folders: [], archive: null,
+    } }));
+    await page.route(`**/api/public/galleries/${id}/photos?*`, (route) => {
+        photoRequests += 1;
+        return route.fulfill({ status: 403, json: { error: 'Gallery is closed.', code: 'GALLERY_CLOSED' } });
+    });
+    await page.route(`**/api/public/galleries/${id}/face-search/status`, (route) => {
+        faceStatusRequests += 1;
+        return route.fulfill({ status: 403, json: { error: 'Gallery is closed.', code: 'GALLERY_CLOSED' } });
+    });
+
+    await page.goto(`/culling/${id}?view=edit-results`);
+    await expect(page.getByRole('button', { name: 'Edited Photos', exact: true })).toHaveAttribute('aria-pressed', 'true');
+    await page.waitForTimeout(300);
+    expect(photoRequests).toBe(0);
+    expect(faceStatusRequests).toBe(0);
+
+    await page.getByRole('button', { name: 'All Photos', exact: true }).click();
+    await expect.poll(() => photoRequests).toBeGreaterThan(0);
+    await expect.poll(() => faceStatusRequests).toBeGreaterThan(0);
+    await page.waitForTimeout(5_200);
+    expect(faceStatusRequests).toBe(1);
+});
+
 async function chooseGalleryRefineView(page: Page, view: 'All Photos' | 'Picked' | 'Submitted') {
     const trigger = page.getByRole('navigation', { name: 'Gallery views' }).getByRole('button').first();
     const menu = page.getByRole('menu', { name: 'All Photos views' });
     await trigger.click();
     if (await menu.count() === 0) await trigger.click();
     await menu.getByText(view, { exact: true }).click();
+}
+
+function selfieTab(page: Page) {
+    return page.getByRole('navigation', { name: 'Gallery views' }).getByRole('button', { name: 'Selfie', exact: true });
 }
 
 test('opens photo 101 on page 2 by driveFileId and keeps the full frame above the footer', async ({ page }) => {
@@ -202,6 +232,10 @@ test('opens photo 101 on page 2 by driveFileId and keeps the full frame above th
 
     await page.goto(`/culling/${galleryId}`);
     await expect(page.getByRole('heading', { level: 1, name: 'Full Frame Test Gallery' })).toBeVisible();
+    await expect(page.getByTestId('gallery-header').getByTestId('gallery-countdown')).toBeVisible();
+    await expect(page.getByTestId('gallery-event-bar')).toHaveCount(0);
+    expect((await page.getByTestId('gallery-header').boundingBox())?.height).toBeLessThan(110);
+    await expect(page.getByTestId('gallery-toolbar').getByRole('heading')).toHaveCount(0);
     await expect(page.getByRole('button', { name: /^Open photo-/ })).toHaveCount(54);
     const grid = page.getByTestId('gallery-grid');
     await expect(grid.locator('img[fetchpriority="high"]')).toHaveCount(1);
@@ -215,16 +249,32 @@ test('opens photo 101 on page 2 by driveFileId and keeps the full frame above th
     expect(await page.evaluate(async () => (await document.fonts.load('400 16px Inter')).length)).toBeGreaterThan(0);
     expect(externalFontRequests).toEqual([]);
     await expectMobileGalleryViewport(page, 320, 568);
+    await expectToolbarAlignedWithGrid(page);
+    await expect(page.getByTestId('gallery-header').getByRole('heading', { level: 1 })).toHaveCSS('font-size', '14px');
+    await expect(page.getByTestId('selection-action-bar')).toHaveCount(0);
+    await page.screenshot({ path: 'test-results/culling-local-fonts-320.png' });
     await expectMobileGalleryViewport(page, 375, 667);
     await expectMobileGalleryViewport(page, 390, 844);
     await expectCompactCountdown(page, 320, 568);
-    await expectSubmissionActionLayout(page, true);
+    await expect(page.getByTestId('selection-summary').getByRole('status')).toHaveCount(1);
     await expectCompactCountdown(page, 390, 844);
     await page.screenshot({ path: 'test-results/culling-local-fonts-mobile.png' });
     await expectCompactCountdown(page, 1440, 900);
+    await expectToolbarAlignedWithGrid(page);
     await expect(page.getByText('Photo Selection', { exact: true })).toBeVisible();
-    await expectSubmissionActionLayout(page, false);
+    await expect(page.getByTestId('gallery-header').getByRole('heading', { level: 1 })).toHaveCSS('font-size', '18px');
+    await expect(page.getByTestId('gallery-toolbar').getByRole('button', { name: 'All Photos' })).toHaveCSS('font-size', '15px');
+    await expect(page.getByTestId('gallery-toolbar').getByTestId('selection-summary')).toContainText('0/30 selected');
+    await expect(page.getByTestId('selection-action-bar')).toHaveCount(0);
     await page.screenshot({ path: 'test-results/culling-local-fonts-desktop.png' });
+    await page.setViewportSize({ width: 1920, height: 900 });
+    await expectToolbarAlignedWithGrid(page);
+    await page.setViewportSize({ width: 1024, height: 768 });
+    await expectToolbarAlignedWithGrid(page);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
+    await expect(page.getByTestId('gallery-header').getByTestId('gallery-countdown')).toBeVisible();
+    await expect(page.getByTestId('gallery-toolbar').getByTestId('selection-summary')).toContainText('0/30 selected');
+    await page.screenshot({ path: 'test-results/culling-local-fonts-1024.png' });
     await expectMobileGalleryViewport(page, 414, 896);
 
     const nextPage = page.getByRole('button', { name: 'Next' });
@@ -260,6 +310,57 @@ test('opens photo 101 on page 2 by driveFileId and keeps the full frame above th
     await expectLightboxFrame(page, 1);
 });
 
+test('reveals Request More without adding a toolbar row or shifting the gallery', async ({ page }) => {
+    const id = 'request-more-threshold';
+    await page.setViewportSize({ width: 320, height: 568 });
+    await installSession(page, id);
+    await page.route(`**/api/public/galleries/${id}/contact`, (route) => route.fulfill({ json: {
+        contactWhatsappUrl: '+628123456789', requestMoreMessage: 'Request {{requested_count}} photos',
+    } }));
+    await page.route(`**/api/public/galleries/${id}/photos?*`, (route) => route.fulfill({ json: {
+        gallery: { ...gallery('2026-09-05T03:00:00.000Z'), maxSelections: 6, photoCount: 6 },
+        photos: Array.from({ length: 6 }, (_, index) => photo(index + 1)),
+        page: 1, pageSize: 54, total: 6, totalPages: 1, selectedDriveFileIds: [], selectedPhotos: [],
+    } }));
+    await page.route(`**/api/public/galleries/${id}/photos/*/thumbnail?*`, (route) => fulfillImage(route, 320, 320));
+    await page.goto(`/culling/${id}`);
+    const toolbar = page.getByTestId('gallery-toolbar');
+    const moreGroup = page.getByTestId('request-more-group');
+    await expect(moreGroup).toHaveAttribute('aria-hidden', 'true');
+    const initialToolbar = await toolbar.boundingBox();
+    const initialMore = await moreGroup.boundingBox();
+    const summary = page.getByTestId('selection-summary');
+    await expect(summary).toHaveCSS('translate', '64px');
+    const initialSummary = await summary.boundingBox();
+    await page.screenshot({ path: 'test-results/request-more-before-threshold-320.png' });
+    for (let index = 1; index <= 5; index += 1) {
+        await page.getByRole('button', { name: `Select photo-${String(index).padStart(3, '0')}.jpg` }).click();
+    }
+    await expect(moreGroup).toHaveAttribute('aria-hidden', 'false');
+    await expect(moreGroup).toHaveCSS('opacity', '1');
+    await expect(summary).toHaveCSS('translate', 'none');
+    await expect(page.getByRole('button', { name: 'Request more editing slots' })).toBeVisible();
+    const shownToolbar = await toolbar.boundingBox();
+    const shownMore = await moreGroup.boundingBox();
+    const shownSummary = await summary.boundingBox();
+    expect(shownToolbar?.height).toBe(initialToolbar?.height);
+    expect(shownMore?.x).toBeCloseTo(initialMore?.x ?? 0, 0);
+    expect(shownSummary?.x ?? 0).toBeLessThan(initialSummary?.x ?? 0);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
+    await page.screenshot({ path: 'test-results/request-more-threshold-320.png' });
+    await page.getByRole('button', { name: 'Remove photo-005.jpg' }).click();
+    await expect(moreGroup).toHaveAttribute('aria-hidden', 'true');
+    expect((await toolbar.boundingBox())?.height).toBe(initialToolbar?.height);
+
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.getByRole('button', { name: 'Select photo-005.jpg' }).click();
+    await expect(moreGroup).toHaveCSS('opacity', '1');
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    await expect(moreGroup).toHaveCSS('transition-property', 'none');
+    await expect(summary).toHaveCSS('transition-property', 'none');
+});
+
 test('request more refreshes QRIS availability without requiring a new gallery session', async ({ page }) => {
     const id = 'qris-refresh-gallery';
     await installSession(page, id);
@@ -291,15 +392,143 @@ test('request more refreshes QRIS availability without requiring a new gallery s
     await page.route(`**/api/public/galleries/${id}/photos/*/thumbnail?*`, (route) => fulfillImage(route, 320, 320));
 
     await page.goto(`/culling/${id}`);
-    const requestMore = page.getByRole('button', { name: 'Request More' });
+    await page.setViewportSize({ width: 320, height: 568 });
+    await expect(page.getByTestId('gallery-header').getByTestId('gallery-countdown')).toBeVisible();
+    await expect(page.getByTestId('gallery-countdown-value')).toHaveText(/\d+d \d{2}:\d{2}:\d{2}/);
+    await expect(page.getByTestId('gallery-header').getByTestId('selection-summary')).toHaveCount(0);
+    await expect(page.getByTestId('selection-summary')).not.toHaveAttribute('aria-live');
+    await expect(page.getByTestId('selection-summary')).toContainText('0/1 selected');
+    await expect(page.getByTestId('selection-count-announcement')).toHaveAttribute('aria-live', 'polite');
+    await expect(page.getByTestId('selection-count-announcement')).toHaveText('0 selected of 1; 1 remaining');
+    await expect(page.getByTestId('gallery-toolbar').getByRole('button', { name: 'Request more editing slots' })).toBeVisible();
+    await expect(page.getByTestId('gallery-toolbar').getByRole('button', { name: 'Request more editing slots' })).toContainText('More');
+    await expect(page.getByTestId('gallery-header').getByRole('button', { name: 'Request more editing slots' })).toHaveCount(0);
+    const navBounds = await page.getByRole('navigation', { name: 'Gallery views' }).boundingBox();
+    const selectionBounds = await page.getByTestId('selection-summary').boundingBox();
+    const moreBounds = await page.getByTestId('gallery-toolbar').getByRole('button', { name: 'Request more editing slots' }).boundingBox();
+    expect((navBounds?.x ?? 0) + (navBounds?.width ?? 0)).toBeLessThanOrEqual(selectionBounds?.x ?? 0);
+    expect((selectionBounds?.x ?? 0) + (selectionBounds?.width ?? 0)).toBeLessThanOrEqual(moreBounds?.x ?? 0);
+    await expect(page.getByTestId('selection-action-bar')).toHaveCount(0);
+    expect((await page.getByTestId('gallery-toolbar').boundingBox())?.height).toBeLessThan(65);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
+    await page.screenshot({ path: 'test-results/culling-request-more-320.png' });
+    await page.getByRole('button', { name: 'Select photo-001.jpg' }).click();
+    await expect(page.getByTestId('selection-summary')).toContainText('1/1 selected');
+    await expect(page.getByTestId('selection-count-announcement')).toHaveText('1 selected of 1; 0 remaining');
+    await expect(page.getByTestId('selection-action-bar').getByRole('button', { name: 'Review Selection' })).toBeInViewport();
+    await expect(page.getByTestId('selection-action-bar').getByRole('button', { name: 'Review Selection' })).toBeEnabled();
+    await page.getByRole('button', { name: 'Switch to white mode' }).click();
+    await page.setViewportSize({ width: 390, height: 844 });
+    await expect(page.getByTestId('selection-action-bar').getByRole('button', { name: 'Review Selection' })).toBeEnabled();
+    expect((await page.getByTestId('gallery-toolbar').boundingBox())?.height).toBeLessThan(65);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
+    await page.screenshot({ path: 'test-results/culling-request-more-full-390-white.png' });
+    await page.setViewportSize({ width: 640, height: 800 });
+    await expect(page.getByTestId('gallery-toolbar').getByRole('button', { name: 'Request more editing slots' })).toBeVisible();
+    await expect(page.getByTestId('selection-summary')).toContainText('1/1 selected');
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
+    await page.screenshot({ path: 'test-results/culling-request-more-640-white.png' });
+    await page.setViewportSize({ width: 1280, height: 800 });
+    const requestMore = page.getByRole('button', { name: 'Request more editing slots' });
     await expect(requestMore).toBeVisible();
+    const headerUtilities = await page.getByTestId('header-utilities').boundingBox();
+    const requestMoreGroup = await page.getByTestId('request-more-group').boundingBox();
+    expect(Math.abs(((headerUtilities?.x ?? 0) + (headerUtilities?.width ?? 0)) - ((requestMoreGroup?.x ?? 0) + (requestMoreGroup?.width ?? 0)))).toBeLessThanOrEqual(1);
+    await expectToolbarAlignedWithGrid(page);
+    const gridBounds = await page.getByTestId('gallery-grid').boundingBox();
+    expect((requestMoreGroup?.x ?? 0) + (requestMoreGroup?.width ?? 0)).toBeCloseTo((gridBounds?.x ?? 0) + (gridBounds?.width ?? 0), 0);
+    await page.screenshot({ path: 'test-results/culling-request-more-desktop.png' });
+    for (const width of [320, 390, 1280]) {
+        await page.setViewportSize({ width, height: 800 });
+        await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+        const footerLink = await page.getByRole('link', { name: '@theorbitphoto on Instagram' }).boundingBox();
+        const actionBar = await page.getByTestId('selection-action-bar').boundingBox();
+        expect(footerLink).not.toBeNull();
+        expect(actionBar).not.toBeNull();
+        expect((footerLink?.y ?? 0) + (footerLink?.height ?? 0)).toBeLessThanOrEqual((actionBar?.y ?? 0) + 1);
+        expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
+    }
 
     qrisEnabled = true;
+    await page.route('**/api/payments/qris/create', (route) => route.fulfill({ json: {
+        success: true, orderId: 'request-more-theme', grossAmount: 50000, requestedCount: 5,
+        qrUrl: 'data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" width="224" height="224"%3E%3Crect width="224" height="224" fill="white"/%3E%3C/svg%3E',
+    } }));
+    await page.route('**/api/payments/status/*', (route) => route.fulfill({ json: { orderId: 'request-more-theme', status: 'pending', grossAmount: 50000 } }));
     await requestMore.click();
 
-    const dialog = page.getByRole('dialog', { name: 'Request more edited photos' });
+    const dialog = page.getByRole('dialog', { name: 'Request More Photos' });
     await expect(dialog).toBeVisible();
-    await expect(dialog.getByRole('button', { name: 'Pay Instantly via QRIS' })).toBeVisible();
+    await expect(dialog.getByRole('button', { name: 'Pay via QRIS' })).toBeVisible();
+    await expect(dialog.getByRole('group', { name: 'Additional photo packages' }).getByRole('button')).toHaveCount(3);
+    const summaryHeight = (await dialog.locator('dl').boundingBox())?.height;
+    const discountedPackage = dialog.getByRole('button', { name: /\+10 photos/ });
+    await discountedPackage.click();
+    await expect(discountedPackage).toContainText('Save 10%');
+    await expect(discountedPackage.locator('s')).toHaveCount(0);
+    await expect(dialog.locator('s')).toHaveCSS('text-decoration-line', 'line-through');
+    await expect(dialog.getByText('Bundle discount').locator('..')).toContainText('10%');
+    expect((await dialog.locator('dl').boundingBox())?.height).toBeCloseTo(summaryHeight ?? 0, 0);
+    await expect(discountedPackage.getByText('Save 10%')).toHaveCSS('color', 'rgb(155, 228, 214)');
+    await page.setViewportSize({ width: 320, height: 568 });
+    const mobileSummaryHeight = (await dialog.locator('dl').boundingBox())?.height;
+    const packageBoxes = await Promise.all([5, 10, 20].map((count) => dialog.getByRole('button', { name: new RegExp(`\\+${count} photos`) }).boundingBox()));
+    expect(packageBoxes.map((box) => box?.height)).toEqual([96, 96, 96]);
+    expect(packageBoxes.map((box) => box?.y)).toEqual([packageBoxes[0]?.y, packageBoxes[0]?.y, packageBoxes[0]?.y]);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
+    await page.screenshot({ path: 'test-results/request-more-discount-white-320.png' });
+    await dialog.getByRole('button', { name: /\+5 photos/ }).click();
+    await expect(dialog.getByRole('button', { name: /\+5 photos/ })).toHaveAttribute('aria-pressed', 'true');
+    await expect(dialog.getByText('Bundle discount').locator('..')).toContainText('None');
+    expect((await dialog.locator('dl').boundingBox())?.height).toBeCloseTo(mobileSummaryHeight ?? 0, 0);
+    const customAmount = dialog.getByRole('spinbutton', { name: 'Custom amount' });
+    await customAmount.fill('');
+    await expect(customAmount).toHaveValue('');
+    await customAmount.blur();
+    await expect(customAmount).toHaveValue('5');
+    await dialog.evaluate((element) => Promise.all(element.getAnimations({ subtree: true }).map((animation) => animation.finished)));
+    const modalBackground = () => dialog.locator('.gallery-modal-panel').evaluate((panel) => getComputedStyle(panel).backgroundColor);
+    expect(await modalBackground()).toBe('rgb(255, 255, 255)');
+    await page.setViewportSize({ width: 320, height: 568 });
+    await page.screenshot({ path: 'test-results/request-more-white-320.png' });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
+    await dialog.locator('.gallery-modal-scroll').evaluate((element) => { element.scrollTop = element.scrollHeight; });
+    await expect(dialog.getByRole('link', { name: 'Request via WhatsApp' })).toBeVisible();
+    await page.screenshot({ path: 'test-results/request-more-white-actions-320.png' });
+    await dialog.getByRole('button', { name: 'Pay via QRIS' }).click();
+    const qrisDialog = page.getByRole('dialog', { name: 'QRIS Payment' });
+    await expect(qrisDialog).toBeVisible();
+    await expect(qrisDialog.getByAltText('QRIS payment code')).toBeVisible();
+    await qrisDialog.locator('.gallery-modal-panel').evaluate((element) => Promise.all(element.getAnimations().map((animation) => animation.finished)));
+    expect(await qrisDialog.locator('.gallery-modal-panel').evaluate((panel) => getComputedStyle(panel).backgroundColor)).toBe('rgb(255, 255, 255)');
+    await page.screenshot({ path: 'test-results/qris-white-320.png' });
+    await qrisDialog.getByRole('button', { name: 'Close QRIS Payment' }).click();
+    await expect(dialog).toBeVisible();
+    await dialog.getByRole('button', { name: 'Close Request More Photos' }).click();
+    await page.getByRole('button', { name: 'Switch to black mode' }).click();
+    await requestMore.click();
+    await expect(dialog).toBeVisible();
+    await dialog.evaluate((element) => Promise.all(element.getAnimations({ subtree: true }).map((animation) => animation.finished)));
+    expect(await modalBackground()).toBe('rgb(13, 13, 13)');
+    await dialog.getByRole('button', { name: /\+20 photos/ }).click();
+    await expect(dialog.getByRole('button', { name: /\+20 photos/ }).getByText('Save 20%')).toHaveCSS('color', 'rgb(8, 108, 97)');
+    await expect(dialog.getByText('Bundle discount').locator('..')).toContainText('20%');
+    await expect(dialog.getByRole('button', { name: /\+20 photos/ })).toHaveCSS('background-color', 'rgb(255, 255, 255)');
+    await page.screenshot({ path: 'test-results/request-more-discount-black-320.png' });
+    await dialog.getByRole('button', { name: /\+5 photos/ }).click();
+    await page.screenshot({ path: 'test-results/request-more-black-320.png' });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
+    await dialog.getByRole('button', { name: 'Pay via QRIS' }).click();
+    await expect(qrisDialog).toBeVisible();
+    await qrisDialog.locator('.gallery-modal-panel').evaluate((element) => Promise.all(element.getAnimations().map((animation) => animation.finished)));
+    expect(await qrisDialog.locator('.gallery-modal-panel').evaluate((panel) => getComputedStyle(panel).backgroundColor)).toBe('rgb(13, 13, 13)');
+    await page.screenshot({ path: 'test-results/qris-black-320.png' });
+    await qrisDialog.getByRole('button', { name: 'Close QRIS Payment' }).click();
+    await page.route('**/api/payments/qris/create', (route) => route.fulfill({ json: {
+        success: true, orderId: 'missing-qr', grossAmount: 50000, requestedCount: 5,
+    } }));
+    await dialog.getByRole('button', { name: 'Pay via QRIS' }).click();
+    await expect(qrisDialog.getByRole('alert')).toContainText('QR code unavailable');
     expect(photoRequests).toBeGreaterThanOrEqual(2);
 });
 
@@ -450,15 +679,55 @@ test('toggles All Photos to the last submitted snapshot without changing the Pic
     await page.route(`**/api/public/galleries/${id}/photos/*/thumbnail?*`, (route) => fulfillImage(route, 320, 320));
     await page.route(`**/api/public/galleries/${id}/photos/*/preview?*`, (route) => fulfillImage(route, 1600, 1067));
 
+    await page.setViewportSize({ width: 360, height: 720 });
     await page.goto(`/culling/${id}`);
+    await expect(page.getByTestId('selection-summary')).toContainText('2/30 selected');
+    await expect(page.getByTestId('selection-count-announcement')).toContainText('28 remaining');
+    const views = page.getByRole('navigation', { name: 'Gallery views' });
+    const viewLabelFits = () => views.getByRole('button').first().locator('span').first().evaluate((label) => label.scrollWidth <= label.clientWidth + 1);
+    const initialViewBounds = await views.getByRole('button').first().boundingBox();
+    const initialEditedBounds = await views.getByRole('button', { name: 'Edited Photos' }).boundingBox();
+    expect(await viewLabelFits()).toBe(true);
     await page.getByRole('button', { name: 'All Photos', exact: true }).click();
-    await page.getByRole('menuitem', { name: 'Picked', exact: true }).click();
+    await page.getByRole('menuitemradio', { name: 'Picked', exact: true }).click();
     await page.getByRole('button', { name: 'Remove photo-001.jpg', exact: true }).click();
+    await expect(page.getByTestId('selection-summary')).toContainText('1/30 selected');
+    await expect(page.getByTestId('selection-count-announcement')).toContainText('29 remaining');
     await expect(page.getByRole('button', { name: 'Picked', exact: true })).toBeVisible();
+    const pickedViewBounds = await views.getByRole('button').first().boundingBox();
+    expect(pickedViewBounds?.width).toBe(initialViewBounds?.width);
+    expect(await viewLabelFits()).toBe(true);
+    expect((await views.getByRole('button', { name: 'Edited Photos' }).boundingBox())?.x).toBe(initialEditedBounds?.x);
+    await page.setViewportSize({ width: 320, height: 720 });
+    expect(await viewLabelFits()).toBe(true);
+    await page.setViewportSize({ width: 360, height: 720 });
 
     await page.getByRole('button', { name: 'Picked', exact: true }).click();
+    await expect(page.getByRole('menuitemradio', { name: 'Picked', exact: true })).toHaveAttribute('aria-checked', 'true');
+    await expect(page.getByRole('menuitemradio', { name: 'All Photos', exact: true })).toHaveAttribute('aria-checked', 'false');
     await page.getByRole('menuitemradio', { name: 'Submitted', exact: true }).click();
     await expect(page.getByRole('button', { name: 'Submitted', exact: true })).toBeVisible();
+    expect((await views.getByRole('button').first().boundingBox())?.width).toBe(initialViewBounds?.width);
+    expect(await viewLabelFits()).toBe(true);
+    expect((await views.getByRole('button', { name: 'Edited Photos' }).boundingBox())?.x).toBe(initialEditedBounds?.x);
+    for (const width of [320, 390]) {
+        await page.setViewportSize({ width, height: 720 });
+        expect(await viewLabelFits()).toBe(true);
+        await expect(views.getByRole('button', { name: 'Submitted', exact: true }).getByText('Sent', { exact: true })).toBeVisible();
+        const tabWidths = await views.getByRole('button').evaluateAll((buttons) => buttons.map((button) => button.getBoundingClientRect().width));
+        expect(tabWidths[0]).toBeGreaterThanOrEqual(44);
+        expect(tabWidths[1]).toBeGreaterThan(tabWidths[0]);
+        expect(tabWidths[2]).toBeCloseTo(44, 0);
+        const tabEdge = await views.boundingBox();
+        const firstPhoto = await page.getByTestId('gallery-grid').locator(':scope > *').first().boundingBox();
+        expect(Math.abs((tabEdge?.x ?? 0) + (tabEdge?.width ?? 0) - ((firstPhoto?.x ?? 0) + (firstPhoto?.width ?? 0)))).toBeLessThanOrEqual(1);
+        const editedLabel = views.getByRole('button', { name: 'Edited Photos' }).getByText('Edited', { exact: true });
+        await expect(editedLabel).toBeVisible();
+        expect(await editedLabel.evaluate((label) => label.scrollWidth <= label.clientWidth + 1)).toBe(true);
+        await expect(views.getByRole('button', { name: 'Selfie' }).locator('svg').first()).toHaveAttribute('width', '16');
+        expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
+        await expect(page.getByTestId('gallery-toolbar').getByRole('button', { name: 'Submit', exact: true })).toHaveCount(0);
+    }
     await expect(page.getByRole('button', { name: /^Open photo-/ })).toHaveCount(2);
     await expect(page.getByRole('button', { name: 'Open photo-001.jpg', exact: true })).toBeVisible();
     await expect(page.getByRole('button', { name: 'Select photo-001.jpg', exact: true })).toBeVisible();
@@ -494,20 +763,307 @@ test('keeps draft selections through reload and clears the unsaved status after 
     }));
 
     await page.goto(`/culling/${id}`);
-    await expect(page.getByRole('button', { name: 'Submit', exact: true })).toBeDisabled();
+    await expect(page.getByTestId('selection-action-bar')).toHaveCount(0);
     await page.getByRole('button', { name: 'Select photo-001.jpg' }).click();
-    await expect(page.getByRole('button', { name: 'Submit', exact: true })).toBeEnabled();
-    await expect(page.getByText('Not submitted')).toBeVisible();
+    await expect(page.getByTestId('selection-action-bar').getByRole('button', { name: 'Review Selection' })).toBeEnabled();
+    await expect(page.getByTestId('selection-summary').getByRole('status')).toHaveText('Not submitted');
 
     await page.reload();
     await expect(page.getByRole('button', { name: 'Remove photo-001.jpg' })).toHaveAttribute('aria-pressed', 'true');
-    await expect(page.getByText('Not submitted')).toBeVisible();
+    await expect(page.getByTestId('selection-summary').getByRole('status')).toHaveText('Not submitted');
+    await expect(page.getByTestId('selection-action-bar')).toBeVisible();
 
-    await page.getByRole('button', { name: 'Submit', exact: true }).click();
-    await page.getByRole('button', { name: 'Submit 1' }).click();
+    await page.getByRole('button', { name: 'Review Selection' }).click();
+    const review = page.getByRole('dialog', { name: 'Review Selection' });
+    await expect(review.getByRole('img', { name: 'photo-001.jpg' })).toBeVisible();
+    await review.getByRole('button', { name: 'Submit for Editing' }).click();
     await expect(page.getByText('Selection saved. 1 filenames submitted.')).toBeVisible();
-    await expect(page.getByText('Not submitted')).toHaveCount(0);
-    await expect(page.getByRole('button', { name: 'Submit', exact: true })).toBeDisabled();
+    await expect(page.getByTestId('selection-summary').getByRole('status')).toHaveText('Submitted');
+    await expect(page.getByTestId('gallery-toolbar').getByText('Submitted', { exact: true })).toHaveClass(/sr-only/);
+    await expect(page.getByTestId('selection-action-bar')).toHaveCount(0);
+});
+
+test('selection action bar enters once, stays stable through six picks, and exits cleanly', async ({ page }) => {
+    const id = 'selection-bar-motion';
+    await page.setViewportSize({ width: 320, height: 568 });
+    await installSession(page, id);
+    await page.route(`**/api/public/galleries/${id}/contact`, (route) => route.fulfill({ json: {} }));
+    await page.route(`**/api/public/galleries/${id}/photos?*`, (route) => route.fulfill({ json: {
+        gallery: { ...gallery('2026-09-05T03:00:00.000Z'), maxSelections: 10, photoCount: 6 },
+        photos: Array.from({ length: 6 }, (_, index) => photo(index + 1)),
+        page: 1, pageSize: 54, total: 6, totalPages: 1, selectedDriveFileIds: [], selectedPhotos: [],
+    } }));
+    await page.route(`**/api/public/galleries/${id}/photos/*/thumbnail?*`, (route) => fulfillImage(route, 320, 320));
+    await page.goto(`/culling/${id}`);
+    await expect(page.getByTestId('selection-action-bar')).toHaveCount(0);
+    await page.getByRole('button', { name: 'Select photo-001.jpg' }).click();
+    const bar = page.getByTestId('selection-action-bar');
+    await expect(bar).toBeVisible();
+    await expect(bar).toHaveCSS('opacity', '1');
+    await expect(bar).toHaveCSS('transform', 'none');
+    await expect(bar).toHaveCSS('transition-duration', '0.44s, 0.24s');
+    const firstBox = await bar.boundingBox();
+    for (let index = 2; index <= 6; index += 1) {
+        await page.getByRole('button', { name: `Select photo-${String(index).padStart(3, '0')}.jpg` }).click();
+    }
+    await expect(bar).toContainText('6/10');
+    expect((await bar.boundingBox())?.height).toBe(firstBox?.height);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
+    await page.screenshot({ path: 'test-results/selection-action-bar-320.png' });
+    await page.setViewportSize({ width: 390, height: 844 });
+    await expect(bar).toBeInViewport();
+    for (let index = 1; index <= 6; index += 1) {
+        await page.getByRole('button', { name: `Remove photo-${String(index).padStart(3, '0')}.jpg` }).click();
+    }
+    await expect(bar).toHaveCount(0);
+
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    await page.getByRole('button', { name: 'Select photo-001.jpg' }).click();
+    await expect(bar).toBeVisible();
+    await expect(bar).toHaveCSS('transition-property', 'none');
+    await page.getByRole('button', { name: 'Remove photo-001.jpg' }).click();
+    await expect(bar).toHaveCount(0);
+});
+
+test('mobile pagination does not keep a second Review bar spacer', async ({ page }) => {
+    const id = 'selection-pagination-spacing';
+    await page.setViewportSize({ width: 320, height: 700 });
+    await installSession(page, id);
+    await page.route(`**/api/public/galleries/${id}/contact`, (route) => route.fulfill({ json: {} }));
+    await page.route(`**/api/public/galleries/${id}/photos?*`, (route) => route.fulfill({ json: {
+        gallery: { ...gallery('2026-12-09T03:00:00.000Z'), maxSelections: 70, photoCount: 60 },
+        photos: Array.from({ length: 54 }, (_, index) => photo(index + 1)),
+        page: 1, pageSize: 54, total: 60, totalPages: 2, selectedDriveFileIds: [], selectedPhotos: [],
+    } }));
+    await page.route(`**/api/public/galleries/${id}/photos/*/thumbnail?*`, (route) => fulfillImage(route, 320, 320));
+
+    await page.goto(`/culling/${id}`);
+    await page.getByRole('button', { name: 'Select photo-001.jpg' }).click();
+    const pagination = page.getByRole('navigation', { name: 'Gallery pages' });
+    await expect(pagination).toBeVisible();
+    await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+    const navBox = await pagination.boundingBox();
+    const footerBox = await page.locator('main > footer').boundingBox();
+    const barBox = await page.getByTestId('selection-action-bar').boundingBox();
+    expect(navBox).not.toBeNull();
+    expect(footerBox).not.toBeNull();
+    expect(barBox).not.toBeNull();
+    expect(footerBox!.y - (navBox!.y + navBox!.height)).toBeLessThanOrEqual(48);
+    expect(navBox!.y + navBox!.height).toBeLessThan(barBox!.y);
+    await page.screenshot({ path: 'test-results/culling-pagination-action-bar-320.png', animations: 'disabled' });
+});
+
+test('review keeps the draft on failure, restores focus on Back, and retries submission', async ({ page }) => {
+    const id = 'review-retry-gallery';
+    await installSession(page, id);
+    await page.route(`**/api/public/galleries/${id}/contact`, (route) => route.fulfill({ json: {} }));
+    await page.route(`**/api/public/galleries/${id}/photos?*`, (route) => route.fulfill({ json: {
+        gallery: gallery('2026-09-05T03:00:00.000Z'), photos: [photo(1), photo(2)],
+        page: 1, pageSize: 54, total: 2, totalPages: 1, selectedDriveFileIds: [], selectedPhotos: [],
+    } }));
+    await page.route(`**/api/public/galleries/${id}/photos/*/thumbnail?*`, (route) => fulfillImage(route, 320, 320));
+    let attempts = 0;
+    await page.route(`**/api/public/galleries/${id}/selections`, (route) => {
+        attempts += 1;
+        return attempts === 1
+            ? route.fulfill({ status: 500, json: { error: 'Please try again.' } })
+            : route.fulfill({ json: { status: 'submitted', selectionCount: 1, filenames: ['photo-001.jpg'] } });
+    });
+
+    await page.goto(`/culling/${id}`);
+    await page.getByRole('button', { name: 'Select photo-001.jpg' }).click();
+    const reviewButton = page.getByRole('button', { name: 'Review Selection' });
+    await reviewButton.click();
+    let dialog = page.getByRole('dialog', { name: 'Review Selection' });
+    await expect(dialog.getByRole('img', { name: 'photo-001.jpg' })).toBeVisible();
+    await dialog.getByRole('button', { name: 'Back' }).click();
+    await expect(reviewButton).toBeFocused();
+
+    await reviewButton.click();
+    dialog = page.getByRole('dialog', { name: 'Review Selection' });
+    await dialog.getByRole('button', { name: 'Submit for Editing' }).click();
+    await expect(dialog.getByRole('alert')).toContainText('Please try again.');
+    await expect(dialog.getByRole('alert')).toBeFocused();
+    await expect(page.getByRole('button', { name: 'Remove photo-001.jpg' })).toHaveAttribute('aria-pressed', 'true');
+    await expect(dialog.getByRole('button', { name: 'Submit for Editing' })).toBeEnabled();
+    await dialog.getByRole('button', { name: 'Submit for Editing' }).click();
+    await expect(page.getByRole('dialog', { name: 'Review Selection' })).toHaveCount(0);
+    await expect(page.getByRole('status').filter({ hasText: 'Selection saved. 1 filenames submitted.' })).toBeFocused();
+    await expect(page.getByTestId('selection-action-bar')).toHaveCount(0);
+    expect(attempts).toBe(2);
+});
+
+test('review shows a steady opening state and cancels it when changing views', async ({ page }) => {
+    const id = 'review-opening-gallery';
+    await installSession(page, id);
+    await page.route(`**/api/public/galleries/${id}/contact`, (route) => route.fulfill({ json: {} }));
+    await page.route(`**/api/public/galleries/${id}/photos?*`, (route) => route.fulfill({ json: {
+        gallery: gallery('2026-09-05T03:00:00.000Z'), photos: [photo(1)],
+        page: 1, pageSize: 54, total: 1, totalPages: 1, selectedDriveFileIds: [], selectedPhotos: [],
+    } }));
+    await page.route(`**/api/public/galleries/${id}/photos/*/thumbnail?*`, (route) => fulfillImage(route, 320, 320));
+
+    await page.goto(`/culling/${id}`);
+    await page.setViewportSize({ width: 320, height: 640 });
+    await page.getByRole('button', { name: 'Select photo-001.jpg' }).click();
+    await page.clock.install();
+    await page.clock.pauseAt(new Date());
+    const reviewWidth = (await page.getByRole('button', { name: 'Review Selection' }).boundingBox())?.width;
+    await page.getByRole('button', { name: 'Review Selection' }).click();
+    await expect(page.getByRole('button', { name: 'Opening review…' })).toBeDisabled();
+    expect((await page.getByRole('button', { name: 'Opening review…' }).boundingBox())?.width).toBe(reviewWidth);
+    await page.screenshot({ path: 'test-results/culling-review-opening-320.png' });
+    await expect(page.getByTestId('selection-action-bar').getByRole('status')).toHaveText('Opening selection review');
+    await expect(page.getByRole('dialog', { name: 'Review Selection' })).toHaveCount(0);
+    await page.clock.runFor(299);
+    await expect(page.getByRole('dialog', { name: 'Review Selection' })).toHaveCount(0);
+    await page.clock.runFor(1);
+    await expect(page.getByRole('dialog', { name: 'Review Selection' })).toBeVisible();
+
+    await page.keyboard.press('Escape');
+    await page.getByRole('button', { name: 'Review Selection' }).click();
+    await page.getByRole('button', { name: 'All Photos', exact: true }).click();
+    await page.getByRole('menuitemradio', { name: 'Picked' }).click();
+    await page.clock.runFor(300);
+    await expect(page.getByRole('dialog', { name: 'Review Selection' })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Review Selection' })).toBeEnabled();
+});
+
+test('review renders only the current page of a 70-photo selection', async ({ page }) => {
+    const id = 'large-review-gallery';
+    await installSession(page, id);
+    const selected = Array.from({ length: 70 }, (_, index) => photo(index + 1));
+    await page.addInitScript(({ galleryKey, items }) => {
+        localStorage.setItem(`orbit_culling_selected_${galleryKey}`, JSON.stringify(items.map((item) => item.driveFileId)));
+        localStorage.setItem(`orbit_culling_selected_photo_meta_${galleryKey}`, JSON.stringify(Object.fromEntries(items.map((item) => [item.driveFileId, item]))));
+    }, { galleryKey: id, items: selected });
+    await page.route(`**/api/public/galleries/${id}/contact`, (route) => route.fulfill({ json: {} }));
+    await page.route(`**/api/public/galleries/${id}/photos?*`, (route) => route.fulfill({ json: {
+        gallery: { ...gallery('2026-09-05T03:00:00.000Z'), maxSelections: 70, photoCount: 70 },
+        photos: [photo(1)], page: 1, pageSize: 54, total: 70, totalPages: 2,
+        selectedDriveFileIds: [], selectedPhotos: [],
+    } }));
+    await page.route(`**/api/public/galleries/${id}/photos/*/thumbnail?*`, (route) => fulfillImage(route, 320, 320));
+
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto(`/culling/${id}`);
+    await page.getByRole('button', { name: 'Review Selection' }).click();
+    const dialog = page.getByRole('dialog', { name: 'Review Selection' });
+    await expect(dialog).toContainText('70 photos selected');
+    await expect(dialog.locator('.gallery-modal-panel')).toHaveCSS('background-color', 'rgb(13, 13, 13)');
+    await expect(dialog.getByRole('img')).toHaveCount(10);
+    await expect(dialog.getByRole('status')).toHaveText('1–10 of 70');
+    await page.screenshot({ path: 'test-results/culling-review-70-390.png', animations: 'disabled' });
+    await page.setViewportSize({ width: 320, height: 640 });
+    expect(await dialog.evaluate((element) => element.scrollWidth <= element.clientWidth + 1)).toBe(true);
+    await expect(dialog.getByRole('button', { name: 'Submit for Editing' })).toBeInViewport();
+    await expect(dialog.getByRole('navigation', { name: 'Review pages' })).toBeInViewport();
+    await page.screenshot({ path: 'test-results/culling-review-70-320.png', animations: 'disabled' });
+    const reviewScroll = dialog.locator('.gallery-modal-scroll');
+    await reviewScroll.evaluate((element) => { element.scrollTop = element.scrollHeight; });
+    expect(await reviewScroll.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
+    const nextReviewPage = dialog.getByRole('button', { name: 'Next review page' });
+    await nextReviewPage.click();
+    await expect(dialog.getByRole('status')).toHaveText('11–20 of 70');
+    await expect(nextReviewPage).toBeFocused();
+    await expect.poll(() => reviewScroll.evaluate((element) => element.scrollTop)).toBe(0);
+    await expect(dialog.getByRole('img', { name: 'photo-011.jpg' })).toBeVisible();
+    await expect(dialog.getByRole('img', { name: 'photo-001.jpg' })).toHaveCount(0);
+    for (let pageNumber = 3; pageNumber <= 7; pageNumber += 1) {
+        await nextReviewPage.click();
+    }
+    await expect(dialog.getByRole('status')).toHaveText('61–70 of 70');
+    await expect(dialog.getByRole('img')).toHaveCount(10);
+    await expect(dialog.getByRole('button', { name: 'Submit for Editing' })).toBeEnabled();
+    await dialog.getByRole('button', { name: 'Close Review Selection' }).click();
+    await page.getByRole('button', { name: 'Switch to white mode' }).click();
+    await page.getByRole('button', { name: 'Review Selection' }).click();
+    await expect(page.getByRole('dialog', { name: 'Review Selection' }).locator('.gallery-modal-panel')).toHaveCSS('background-color', 'rgb(255, 255, 255)');
+    await page.screenshot({ path: 'test-results/culling-review-70-white-320.png', animations: 'disabled' });
+});
+
+test('review can clear a previous submission without leaving an empty action bar', async ({ page }) => {
+    const id = 'review-clear-gallery';
+    await installSession(page, id);
+    await page.route(`**/api/public/galleries/${id}/contact`, (route) => route.fulfill({ json: {} }));
+    await page.route(`**/api/public/galleries/${id}/photos?*`, (route) => route.fulfill({ json: {
+        gallery: { ...gallery('2026-09-05T03:00:00.000Z'), selectionCount: 1 }, photos: [photo(1)],
+        page: 1, pageSize: 54, total: 1, totalPages: 1,
+        selectedDriveFileIds: [photo(1).driveFileId], selectedPhotos: [photo(1)],
+    } }));
+    await page.route(`**/api/public/galleries/${id}/photos/*/thumbnail?*`, (route) => fulfillImage(route, 320, 320));
+    let submittedIds: string[] | undefined;
+    await page.route(`**/api/public/galleries/${id}/selections`, (route) => {
+        const body = route.request().postDataJSON() as { selections?: { driveFileId: string }[] };
+        submittedIds = body.selections?.map((item) => item.driveFileId);
+        return route.fulfill({ json: { status: 'submitted', selectionCount: 0, filenames: [] } });
+    });
+
+    await page.goto(`/culling/${id}`);
+    await expect(page.getByRole('button', { name: 'Remove photo-001.jpg' })).toBeVisible();
+    await expect(page.getByTestId('selection-action-bar')).toHaveCount(0);
+    await page.getByRole('button', { name: 'Remove photo-001.jpg' }).click();
+    await page.getByRole('button', { name: 'Review Changes' }).click();
+    const dialog = page.getByRole('dialog', { name: 'Review Selection Changes' });
+    await expect(dialog).toContainText('This removes the previous submission');
+    await dialog.getByRole('button', { name: 'Clear Selection' }).click();
+    await expect(page.getByTestId('selection-action-bar')).toHaveCount(0);
+    expect(submittedIds).toEqual([]);
+});
+
+test('keeps PIN header branding and theme toggle in place after unlock', async ({ page }) => {
+    const id = 'pin-header-alignment';
+    await page.addInitScript((galleryKey) => localStorage.setItem(`orbit_culling_tutorial_${galleryKey}`, '1'), id);
+    await page.route(`**/api/public/galleries/${id}/edit-results/status`, (route) => route.fulfill({ json: { workflow: 'selection_delivery', title: 'Full Frame Test Gallery', available: false, photoCount: 0, status: 'draft' } }));
+    await page.route(`**/api/public/galleries/${id}/verify`, (route) => route.fulfill({ json: { token, expiresIn: 3600, gallery: gallery('2026-12-09T03:00:00.000Z', '2026-10-09T03:00:00.000Z') } }));
+    await page.route(`**/api/public/galleries/${id}/photos?*`, (route) => route.fulfill({ json: {
+        gallery: gallery('2026-12-09T03:00:00.000Z', '2026-10-09T03:00:00.000Z'), photos: [photo(1)],
+        page: 1, pageSize: 54, total: 1, totalPages: 1, selectedDriveFileIds: [], selectedPhotos: [],
+    } }));
+    await page.route(`**/api/public/galleries/${id}/contact`, (route) => route.fulfill({ json: {} }));
+    await page.route(`**/api/public/galleries/${id}/photos/*/thumbnail?*`, (route) => fulfillImage(route, 320, 320));
+
+    for (const width of [320, 390, 1440]) {
+        await page.setViewportSize({ width, height: width === 320 ? 640 : 900 });
+        await page.goto(`/culling/${id}`);
+        await expect(page.getByRole('heading', { name: 'Enter Password' })).toBeVisible();
+        if (width === 320) await page.getByRole('button', { name: 'Switch to white mode' }).click();
+        if (width === 390) await page.getByRole('button', { name: 'Switch to black mode' }).click();
+        const gateHeader = page.getByTestId('gallery-header');
+        await expect(gateHeader.getByText('Full Frame Test Gallery')).toBeVisible();
+        await expect(gateHeader.getByText('Photo Selection')).toBeVisible();
+        await expect(page.locator('form').getByRole('img', { name: 'Orbit Logo' })).toBeVisible();
+        const selectionPassword = page.getByLabel('Photo Selection password', { exact: true });
+        await expect(selectionPassword).toHaveAttribute('type', 'password');
+        if (width === 320) {
+            await page.getByRole('button', { name: 'Unlock Photo Selection' }).click();
+            await expect(page.getByRole('alert')).toContainText('Enter at least 4 characters.');
+            await expect(selectionPassword).toBeFocused();
+            await selectionPassword.fill('1234');
+            await page.getByRole('button', { name: 'Show photo selection password' }).press('Enter');
+            await expect(selectionPassword).toHaveAttribute('type', 'text');
+            await page.getByRole('button', { name: 'Hide photo selection password' }).press('Enter');
+            await expect(selectionPassword).toHaveAttribute('type', 'password');
+        }
+        const gateLogo = await gateHeader.getByRole('img', { name: 'Orbit Logo' }).boundingBox();
+        const gateToggle = await gateHeader.getByRole('button', { name: /Switch to (white|black) mode/ }).boundingBox();
+        if (width === 320 || width === 1440) await page.screenshot({ path: `test-results/pin-gate-${width}.png`, animations: 'disabled' });
+        await selectionPassword.fill('1234');
+        await page.getByRole('button', { name: 'Unlock Photo Selection' }).click();
+        await expect(page.getByTestId('gallery-grid')).toBeVisible();
+        const cullingHeader = page.getByTestId('gallery-header');
+        const cullingLogo = await cullingHeader.getByRole('img', { name: 'Orbit Logo' }).boundingBox();
+        const cullingToggle = await cullingHeader.getByRole('button', { name: /Switch to (white|black) mode/ }).boundingBox();
+        expect(gateLogo).not.toBeNull();
+        expect(gateToggle).not.toBeNull();
+        expect(cullingLogo).not.toBeNull();
+        expect(cullingToggle).not.toBeNull();
+        expect(cullingLogo!.x).toBeCloseTo(gateLogo!.x, 0);
+        expect(cullingLogo!.y).toBeCloseTo(gateLogo!.y, 0);
+        expect(cullingToggle!.x).toBeCloseTo(gateToggle!.x, 0);
+        expect(cullingToggle!.y).toBeCloseTo(gateToggle!.y, 0);
+        await page.evaluate((galleryKey) => localStorage.removeItem(`orbit_culling_token_${galleryKey}`), id);
+    }
 });
 
 test('returns to the PIN gate when an admin save invalidates the public token', async ({ page }) => {
@@ -521,7 +1077,7 @@ test('returns to the PIN gate when an admin save invalidates the public token', 
     }));
 
     await page.goto(`/culling/${id}`);
-    await expect(page.getByRole('heading', { name: 'Enter PIN' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Enter Password' })).toBeVisible();
     await expect(page.evaluate((galleryKey) => localStorage.getItem(`orbit_culling_token_${galleryKey}`), id)).resolves.toBeNull();
 });
 
@@ -532,6 +1088,8 @@ test('shows the before and edited tutorial slider with pointer and keyboard cont
     const tutorialRequests = new Set<string>();
     let releaseFirstBefore!: () => void;
     const firstBeforeGate = new Promise<void>((resolve) => { releaseFirstBefore = resolve; });
+    let releaseSecondAfter!: () => void;
+    const secondAfterGate = new Promise<void>((resolve) => { releaseSecondAfter = resolve; });
 
     await page.route(`**/api/public/galleries/${id}/contact`, (route) => route.fulfill({ json: {} }));
     await page.route(`**/api/public/galleries/${id}/photos?*`, (route) => route.fulfill({
@@ -557,10 +1115,13 @@ test('shows the before and edited tutorial slider with pointer and keyboard cont
             return fulfillImage(route, 1600, 1067);
         })();
     });
-    await page.route(`**/api/public/galleries/${id}/tutorial/*/after?*`, (route) => {
+    await page.route(`**/api/public/galleries/${id}/tutorial/*/after?*`, async (route) => {
         const slot = Number(new URL(route.request().url()).pathname.match(/\/tutorial\/(\d+)\/after$/)?.[1] || 1);
         tutorialRequests.add(`${slot}:after`);
-        if (slot === 2) return fulfillImage(route, 1067, 1600);
+        if (slot === 2) {
+            await secondAfterGate;
+            return fulfillImage(route, 1067, 1600);
+        }
         if (slot === 3) return fulfillImage(route, 1200, 1200);
         return fulfillImage(route, 1600, 1067);
     });
@@ -568,18 +1129,29 @@ test('shows the before and edited tutorial slider with pointer and keyboard cont
     await page.goto(`/culling/${id}`);
     await page.getByRole('button', { name: 'How to Submit' }).click();
     await expect(page.getByTestId('tutorial-confidence-step')).toBeVisible();
-    await expect(page.getByText('Sample 01 / 03')).toBeVisible();
+    await expect(page.getByText('Sample 1 of 3')).toBeVisible();
     const beforeImage = page.getByAltText('Before editing sample');
     const afterImage = page.getByAltText('Edited result sample');
-    await expect(page.getByTestId('tutorial-image-placeholder')).toBeVisible();
+    await expect(page.getByTestId('tutorial-image-loading')).toBeVisible();
+    const loadingSpinner = page.getByTestId('tutorial-image-loading').locator('svg');
+    await expect(loadingSpinner).toHaveCSS('animation-name', 'spin');
+    await expect(loadingSpinner).toHaveCSS('animation-duration', '0.7s');
+    const initialSpinnerTransform = await loadingSpinner.evaluate((element) => getComputedStyle(element).transform);
+    await page.waitForTimeout(250);
+    await expect.poll(() => loadingSpinner.evaluate((element) => getComputedStyle(element).transform)).not.toBe(initialSpinnerTransform);
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    await expect(loadingSpinner).toHaveCSS('animation-name', 'none');
+    await page.emulateMedia({ reducedMotion: 'no-preference' });
     await expect(beforeImage).toHaveCSS('opacity', '0');
-    await expect(afterImage).toHaveCSS('opacity', '0');
     await expect(page.getByTestId('tutorial-slider-handle')).toHaveCount(0);
+    await expect.poll(() => tutorialRequests.size).toBe(2);
+    await page.screenshot({ path: 'test-results/tutorial-loading-mobile.png' });
     releaseFirstBefore();
     await expect(page.getByTestId('tutorial-image-loading')).toHaveCount(0);
     await expect(beforeImage).toHaveCSS('opacity', '1');
     await expect(afterImage).toHaveCSS('opacity', '1');
-    await expect.poll(() => tutorialRequests.size).toBe(6);
+    await expect.poll(() => tutorialRequests.size).toBe(2);
+    await page.screenshot({ path: 'test-results/tutorial-ready-mobile.png' });
 
     const panel = page.getByTestId('tutorial-panel');
     const initialPanelBox = await panel.boundingBox();
@@ -598,8 +1170,8 @@ test('shows the before and edited tutorial slider with pointer and keyboard cont
     expect(initialMediaSlotBox).not.toBeNull();
     await expect(slider).toHaveCSS('touch-action', 'pan-y');
     const dividers = page.getByTestId('tutorial-slider-divider');
-    await expect(dividers).toHaveCount(2);
-    expect((await dividers.nth(0).boundingBox())?.height).toBeLessThan((sliderBox?.height ?? 0) / 2);
+    await expect(dividers).toHaveCount(1);
+    expect((await dividers.first().boundingBox())?.height).toBeCloseTo(sliderBox?.height ?? 0, 0);
     await page.mouse.move((sliderBox?.x ?? 0) + (sliderBox?.width ?? 0) * 0.25, (sliderBox?.y ?? 0) + (sliderBox?.height ?? 0) / 2);
     await page.mouse.down();
     await page.mouse.move((sliderBox?.x ?? 0) + (sliderBox?.width ?? 0) * 0.75, (sliderBox?.y ?? 0) + (sliderBox?.height ?? 0) / 2);
@@ -611,7 +1183,14 @@ test('shows the before and edited tutorial slider with pointer and keyboard cont
     await expect(handle).toHaveAttribute('aria-valuenow', '70');
 
     await page.getByRole('button', { name: 'Next sample' }).click();
-    await expect(page.getByText('Sample 02 / 03')).toBeVisible();
+    await expect(page.getByText('Sample 2 of 3')).toBeVisible();
+    await expect.poll(() => tutorialRequests.size).toBe(4);
+    await expect(page.getByTestId('tutorial-image-loading')).toHaveCount(1);
+    await expect(page.getByTestId('tutorial-before-after-slider')).toHaveCount(2);
+    await expect(page.getByTestId('tutorial-before-after-slider').first()).toBeVisible();
+    releaseSecondAfter();
+    await expect(page.getByTestId('tutorial-image-loading')).toHaveCount(0);
+    await expect(page.getByTestId('tutorial-before-after-slider')).toHaveCount(1);
     await expect(page.getByAltText('Before editing sample')).toBeVisible();
     await expect.poll(async () => {
         const box = await slider.boundingBox();
@@ -623,7 +1202,10 @@ test('shows the before and edited tutorial slider with pointer and keyboard cont
     expect(portraitMediaSlotBox?.height).toBeCloseTo(initialMediaSlotBox?.height ?? 0, 0);
     expect(portraitSliderBox?.height ?? 0).toBeGreaterThan((sliderBox?.height ?? 0) * 1.35);
     await page.getByRole('button', { name: 'Next sample' }).click();
-    await expect(page.getByText('Sample 03 / 03')).toBeVisible();
+    await expect(page.getByText('Sample 3 of 3')).toBeVisible();
+    await expect.poll(() => tutorialRequests.size).toBe(6);
+    await expect(page.getByTestId('tutorial-before-after-slider')).toHaveCount(1);
+    await expect(page.getByTestId('tutorial-image-loading')).toHaveCount(0);
     await expect(page.getByAltText('Before editing sample')).toBeVisible();
     await expect.poll(async () => {
         const box = await slider.boundingBox();
@@ -636,23 +1218,26 @@ test('shows the before and edited tutorial slider with pointer and keyboard cont
     expect(squareSliderBox?.height ?? 0).toBeGreaterThan(sliderBox?.height ?? 0);
 
     await page.setViewportSize({ width: 1440, height: 900 });
+    await page.screenshot({ path: 'test-results/tutorial-ready-desktop.png' });
     const desktopPanelBox = await panel.boundingBox();
     const desktopMediaSlotBox = await mediaSlot.boundingBox();
     const desktopFooterBox = await page.getByTestId('tutorial-footer').boundingBox();
     expect(desktopPanelBox?.width).toBeCloseTo(672, 0);
     expect(desktopPanelBox?.height).toBeCloseTo(868, 0);
-    expect(desktopMediaSlotBox?.height).toBeCloseTo(540, 0);
+    expect(desktopMediaSlotBox?.height).toBeCloseTo(448, 0);
     expect((desktopFooterBox?.y ?? 0) + (desktopFooterBox?.height ?? 0)).toBeLessThanOrEqual(900);
     await page.getByRole('button', { name: 'Previous' }).click();
-    await expect(page.getByText('Sample 02 / 03')).toBeVisible();
+    await expect(page.getByText('Sample 2 of 3')).toBeVisible();
+    await expect(page.getByTestId('tutorial-before-after-slider')).toHaveCount(1);
     await expect.poll(async () => {
         const box = await slider.boundingBox();
         return (box?.width ?? 0) / (box?.height ?? 1);
     }).toBeCloseTo(1067 / 1600, 1);
     const desktopPortraitSliderBox = await slider.boundingBox();
-    expect(desktopPortraitSliderBox?.height ?? 0).toBeGreaterThan((portraitSliderBox?.height ?? 0) * 1.08);
+    expect(desktopPortraitSliderBox?.height ?? 0).toBeGreaterThanOrEqual((portraitSliderBox?.height ?? 0) - 1);
     await page.getByRole('button', { name: 'Next sample' }).click();
-    await expect(page.getByText('Sample 03 / 03')).toBeVisible();
+    await expect(page.getByText('Sample 3 of 3')).toBeVisible();
+    await expect(page.getByTestId('tutorial-before-after-slider')).toHaveCount(1);
 
     await page.setViewportSize({ width: 320, height: 568 });
     const compactPanelBox = await panel.boundingBox();
@@ -681,7 +1266,7 @@ test('shows the before and edited tutorial slider with pointer and keyboard cont
     await page.getByRole('button', { name: 'Ready to choose' }).click();
     await expect(page.getByTestId('tutorial-ready-step')).toBeVisible();
     await expect(page.getByRole('heading', { name: 'Ready to Choose' })).toBeVisible();
-    await expect(page.getByTestId('tutorial-ready-step')).toContainText("Choose the moments that matter, review them in Picked, then submit when you're ready.");
+    await expect(page.getByTestId('tutorial-ready-step')).toContainText('Mark the photos you want edited, review them in Picked, then submit.');
     await expect(page.getByTestId('tutorial-ready-checklist')).toHaveCount(0);
     expect((await panel.boundingBox())?.height).toBeCloseTo(compactPanelBox?.height ?? 0, 0);
 
@@ -711,14 +1296,28 @@ test('shows only complete tutorial sample slots', async ({ page }) => {
         },
     }));
     await page.route(`**/api/public/galleries/${id}/photos/*/thumbnail?*`, (route) => fulfillImage(route, 320, 320));
-    await page.route(`**/api/public/galleries/${id}/tutorial/*/before?*`, (route) => fulfillImage(route, 1600, 1067));
-    await page.route(`**/api/public/galleries/${id}/tutorial/*/after?*`, (route) => fulfillImage(route, 1600, 1067));
+    await page.route(`**/api/public/galleries/${id}/tutorial/*/before?*`, (route) => fulfillImage(route, 1067, 1600));
+    await page.route(`**/api/public/galleries/${id}/tutorial/*/after?*`, (route) => fulfillImage(route, 1067, 1600));
 
     await page.goto(`/culling/${id}`);
     await page.getByRole('button', { name: 'How to Submit' }).click();
-    await expect(page.getByText('Sample 01 / 02')).toBeVisible();
+    await expect(page.getByText('Sample 1 of 2')).toBeVisible();
+    await expect(page.getByTestId('tutorial-before-after-slider')).toHaveAttribute('aria-busy', 'false');
+    for (const width of [320, 390]) {
+        await page.setViewportSize({ width, height: 700 });
+        const frame = await page.getByTestId('tutorial-media-slot').boundingBox();
+        const photo = await page.getByTestId('tutorial-before-after-slider').boundingBox();
+        const footer = await page.getByTestId('tutorial-footer').boundingBox();
+        expect((photo?.width ?? 0) / (frame?.width ?? 1)).toBeGreaterThan(0.72);
+        expect((await page.getByRole('heading', { name: 'Choose with Confidence' }).boundingBox())?.height).toBeLessThanOrEqual(24);
+        await expect(page.getByTestId('tutorial-panel').getByText('Before', { exact: true })).toBeInViewport();
+        await expect(page.getByTestId('tutorial-panel').getByText('Edited', { exact: true })).toBeInViewport();
+        expect((footer?.y ?? 0) + (footer?.height ?? 0)).toBeLessThanOrEqual(700);
+        expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
+        await page.screenshot({ path: `test-results/tutorial-portrait-${width}.png`, animations: 'disabled' });
+    }
     await page.getByRole('button', { name: 'Next sample' }).click();
-    await expect(page.getByText('Sample 02 / 02')).toBeVisible();
+    await expect(page.getByText('Sample 2 of 2')).toBeVisible();
 });
 
 test('skips the awareness step when no tutorial samples are configured', async ({ page }) => {
@@ -746,164 +1345,79 @@ test('skips the awareness step when no tutorial samples are configured', async (
     await expect(page.getByTestId('tutorial-confidence-step')).toHaveCount(0);
 });
 
-async function prepareTutorialIntro(page: Page, id: string, theme: 'black' | 'white') {
+test('opens the guide immediately without a timed splash on mobile and desktop', async ({ page }) => {
+    for (const width of [320, 390, 1440]) {
+        const id = `guide-immediate-${width}`;
+        await page.setViewportSize({ width, height: width === 320 ? 568 : 900 });
+        await installSession(page, id);
+        await page.route(`**/api/public/galleries/${id}/contact`, (route) => route.fulfill({ json: {} }));
+        await page.route(`**/api/public/galleries/${id}/photos?*`, (route) => route.fulfill({
+            json: { gallery: { ...gallery('2026-09-05T03:00:00.000Z'), tutorialSampleSlots: [] }, photos: [photo(1)], page: 1, pageSize: 54, total: 1, totalPages: 1, selectedDriveFileIds: [], selectedPhotos: [] },
+        }));
+        await page.route(`**/api/public/galleries/${id}/photos/*/thumbnail?*`, (route) => fulfillImage(route, 320, 320));
+        await page.goto(`/culling/${id}`);
+        await page.getByRole('button', { name: 'How to Submit' }).click();
+        await expect(page.getByTestId('tutorial-panel')).toBeVisible();
+        await expect(page.getByTestId('tutorial-intro')).toHaveCount(0);
+        await expect(page.getByRole('heading', { name: 'How to Submit' })).toBeVisible();
+        const box = await page.getByTestId('tutorial-panel').boundingBox();
+        expect(box).not.toBeNull();
+        expect(box!.x).toBeGreaterThanOrEqual(0);
+        expect(box!.x + box!.width).toBeLessThanOrEqual(width);
+        await page.getByRole('button', { name: 'Close tutorial' }).click();
+    }
+});
+
+test('opens the first-visit guide directly after gallery access', async ({ page }) => {
+    const id = 'guide-first-visit';
     await installSession(page, id);
-    await page.addInitScript(({ id, theme }) => {
-        localStorage.removeItem(`orbit_culling_tutorial_${id}`);
-        localStorage.setItem(`orbit_culling_theme_${id}`, theme);
-    }, { id, theme });
+    await page.addInitScript((galleryKey) => localStorage.removeItem(`orbit_culling_tutorial_${galleryKey}`), id);
     await page.route(`**/api/public/galleries/${id}/contact`, (route) => route.fulfill({ json: {} }));
     await page.route(`**/api/public/galleries/${id}/photos?*`, (route) => route.fulfill({
-        json: {
-            gallery: { ...gallery('2026-09-05T03:00:00.000Z'), tutorialSampleSlots: [] },
-            photos: [photo(1)], page: 1, pageSize: 54, total: 1, totalPages: 1,
-            selectedDriveFileIds: [], selectedPhotos: [],
-        },
+        json: { gallery: { ...gallery('2026-09-05T03:00:00.000Z'), tutorialSampleSlots: [] }, photos: [photo(1)], page: 1, pageSize: 54, total: 1, totalPages: 1, selectedDriveFileIds: [], selectedPhotos: [] },
     }));
     await page.route(`**/api/public/galleries/${id}/photos/*/thumbnail?*`, (route) => fulfillImage(route, 320, 320));
-}
-
-for (const theme of ['black', 'white'] as const) {
-    for (const viewport of [{ width: 320, height: 568 }, { width: 390, height: 844 }, { width: 1440, height: 900 }]) {
-        test(`tutorial intro logo fits ${theme} at ${viewport.width}px`, async ({ page }) => {
-            await page.setViewportSize(viewport);
-            await prepareTutorialIntro(page, `intro-${theme}-${viewport.width}`, theme);
-            await page.goto(`/culling/intro-${theme}-${viewport.width}`);
-            const intro = page.getByTestId('tutorial-intro');
-            const logo = intro.getByRole('img', { name: 'The Orbit Photo' });
-            await expect(logo).toBeVisible();
-            await expect.poll(() => logo.evaluate((img: HTMLImageElement) => img.complete && img.naturalWidth > 0)).toBe(true);
-            await expect(logo).toHaveCSS('filter', theme === 'black' ? 'brightness(0) invert(1)' : 'brightness(0)');
-            await expect.poll(async () => Number(await intro.getByRole('progressbar').getAttribute('aria-valuenow'))).toBeGreaterThanOrEqual(20);
-            const box = await logo.boundingBox();
-            expect(box).not.toBeNull();
-            expect(box!.x).toBeGreaterThanOrEqual(0);
-            expect(box!.x + box!.width).toBeLessThanOrEqual(viewport.width);
-            expect(box!.width).toBeGreaterThanOrEqual(viewport.width >= 640 ? 319 : 239);
-            expect(box!.y + box!.height).toBeLessThan(viewport.height);
-            await page.screenshot({ path: `test-results/tutorial-intro-${theme}-${viewport.width}.png` });
-            await expect(page.getByTestId('tutorial-submit-step')).toBeVisible({ timeout: 4500 });
-            await expect(intro).toHaveCount(0);
-            await page.getByRole('button', { name: 'Close tutorial' }).click();
-            await page.getByRole('button', { name: 'How to Submit' }).click();
-            await expect(page.getByTestId('tutorial-submit-step')).toBeVisible();
-            await expect(intro).toHaveCount(0);
-        });
-    }
-}
-
-async function openTutorialWithPausedClock(page: Page, id: string) {
-    const metadata = page.waitForResponse((response) => response.url().includes(`/galleries/${id}/edit-results/status`));
     await page.goto(`/culling/${id}`);
-    await (await metadata).finished();
-    await page.clock.runFor(0);
-}
-
-test('tutorial intro respects reduced motion and finishes despite a failed logo', async ({ page }) => {
-    await page.emulateMedia({ reducedMotion: 'reduce' });
-    await prepareTutorialIntro(page, 'intro-failed-logo', 'black');
-    await page.route('**/logo.png', (route) => route.abort());
-    await page.clock.install({ time: new Date('2026-09-02T03:00:00.000Z') });
-    await page.clock.pauseAt(new Date('2026-09-02T03:00:01.000Z'));
-    await openTutorialWithPausedClock(page, 'intro-failed-logo');
-    const intro = page.getByTestId('tutorial-intro');
-    await expect(intro).toBeVisible();
-    await expect(intro.getByAltText('The Orbit Photo')).toBeHidden();
-    const introKeyframes = await intro.evaluate((element) => element.getAnimations({ subtree: true }).flatMap((animation) => (animation.effect as KeyframeEffect).getKeyframes()));
-    expect(introKeyframes.length).toBeGreaterThan(0);
-    expect(introKeyframes.every((keyframe) => keyframe.transform === undefined || keyframe.transform === 'none')).toBe(true);
-    const start = Number(await intro.getByRole('progressbar').getAttribute('aria-valuenow'));
-    const progressUpdates = await intro.getByRole('progressbar').evaluateHandle((element) => {
-        const values: number[] = [];
-        const observer = new MutationObserver(() => values.push(Number(element.getAttribute('aria-valuenow'))));
-        observer.observe(element, { attributes: true, attributeFilter: ['aria-valuenow'] });
-        return { values, observer };
-    });
-    await page.clock.runFor(1000);
-    const next = Number(await intro.getByRole('progressbar').getAttribute('aria-valuenow'));
-    expect(next).toBeGreaterThan(start);
-    const values = await progressUpdates.evaluate(({ values, observer }) => {
-        observer.disconnect();
-        return values;
-    });
-    expect(values.length).toBeGreaterThanOrEqual(25);
-    expect(values.slice(1).every((value, index) => value - values[index] === 1)).toBe(true);
-    await expect(intro).toBeVisible();
-    await page.clock.runFor(2799);
-    await expect(intro).toBeVisible();
+    await expect(page.getByTestId('tutorial-panel')).toBeVisible();
+    await expect(page.getByTestId('tutorial-intro')).toHaveCount(0);
+    await page.getByRole('button', { name: 'Close tutorial' }).click();
     await expect(page.getByTestId('tutorial-panel')).toHaveCount(0);
-    await page.clock.runFor(1);
-    await expect(intro.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '100');
-    const panel = page.getByTestId('tutorial-panel');
-    await expect(panel).toHaveCount(1);
-    await expect(panel).toHaveAttribute('aria-hidden', 'true');
-    await expect(panel).toHaveAttribute('inert', '');
-    await expect(panel).toHaveCSS('pointer-events', 'none');
-    const panelKeyframes = await panel.evaluate((element) => element.getAnimations().flatMap((animation) => (animation.effect as KeyframeEffect).getKeyframes()));
-    expect(panelKeyframes.every((keyframe) => keyframe.transform === undefined || keyframe.transform === 'none')).toBe(true);
-    await page.clock.runFor(199);
-    await expect(intro).toBeVisible();
-    await page.clock.runFor(1);
-    await expect(intro).toHaveCount(0);
-    await expect(panel).not.toHaveAttribute('aria-hidden', 'true');
-    await expect(panel).not.toHaveAttribute('inert', '');
-    await expect(page.getByTestId('tutorial-submit-step')).toBeVisible();
-    await expect(panel.getByRole('button', { name: 'Close tutorial' })).toBeFocused();
+    await page.getByRole('button', { name: 'How to Submit' }).click();
+    await expect(page.getByTestId('tutorial-panel')).toBeVisible();
 });
 
-test('crossfades the intro into the tutorial panel during handoff', async ({ page }) => {
-    await prepareTutorialIntro(page, 'intro-handoff', 'black');
-    await page.clock.install({ time: new Date('2026-09-02T03:00:00.000Z') });
-    await page.clock.pauseAt(new Date('2026-09-02T03:00:01.000Z'));
-    await openTutorialWithPausedClock(page, 'intro-handoff');
+test('shows an in-place tutorial image error and recovers on retry', async ({ page }) => {
+    const id = 'tutorial-image-retry';
+    await installSession(page, id);
+    await page.route(`**/api/public/galleries/${id}/contact`, (route) => route.fulfill({ json: {} }));
+    await page.route(`**/api/public/galleries/${id}/photos?*`, (route) => route.fulfill({
+        json: { gallery: { ...gallery('2026-09-05T03:00:00.000Z'), tutorialSampleSlots: [1] }, photos: [photo(1)], page: 1, pageSize: 54, total: 1, totalPages: 1, selectedDriveFileIds: [], selectedPhotos: [] },
+    }));
+    await page.route(`**/api/public/galleries/${id}/photos/*/thumbnail?*`, (route) => fulfillImage(route, 320, 320));
+    let beforeRequests = 0;
+    let releaseRetry!: () => void;
+    const retryGate = new Promise<void>((resolve) => { releaseRetry = resolve; });
+    await page.route(`**/api/public/galleries/${id}/tutorial/1/before?*`, async (route) => {
+        beforeRequests += 1;
+        if (beforeRequests === 1) return route.fulfill({ status: 502 });
+        await retryGate;
+        return fulfillImage(route, 1600, 1067);
+    });
+    await page.route(`**/api/public/galleries/${id}/tutorial/1/after?*`, (route) => fulfillImage(route, 1600, 1067));
 
-    const intro = page.getByTestId('tutorial-intro');
-    await expect(intro).toBeVisible();
-    await page.clock.runFor(3799);
-    await expect(page.getByTestId('tutorial-panel')).toHaveCount(0);
-    await page.clock.runFor(17);
-
-    const panel = page.getByTestId('tutorial-panel');
-    await expect(intro).toHaveCount(1);
-    await expect(panel).toHaveAttribute('aria-hidden', 'true');
-    const panelKeyframes = await panel.evaluate((element) => element.getAnimations().flatMap((animation) => (animation.effect as KeyframeEffect).getKeyframes()));
-    expect(panelKeyframes.some((keyframe) => String(keyframe.transform).includes('scale(0.985)'))).toBe(true);
-    expect(panelKeyframes.some((keyframe) => String(keyframe.transform).includes('translateY(8px)'))).toBe(true);
-
-    await page.clock.runFor(184);
-    await expect(intro).toHaveCount(0);
-    await expect(panel).not.toHaveAttribute('aria-hidden', 'true');
-    await expect(panel.getByRole('button', { name: 'Close tutorial' })).toBeFocused();
+    await page.goto(`/culling/${id}`);
+    await page.getByRole('button', { name: 'How to Submit' }).click();
+    const error = page.getByRole('alert').filter({ hasText: 'Sample photos unavailable' });
+    await expect(error).toBeVisible();
+    await expect(page.getByTestId('tutorial-slider-handle')).toHaveCount(0);
+    await error.getByRole('button', { name: 'Retry' }).click();
+    await expect(error).toHaveCount(0);
+    await expect(page.getByTestId('tutorial-image-loading')).toHaveCount(1);
+    releaseRetry();
+    await expect(page.getByTestId('tutorial-image-loading')).toHaveCount(0);
+    await expect(page.getByTestId('tutorial-slider-handle')).toBeVisible();
+    expect(beforeRequests).toBe(2);
 });
-
-for (const phase of ['loading', 'handoff'] as const) {
-    for (const closeWith of ['escape', 'button'] as const) {
-        test(`tutorial intro cancels animations and timers on ${closeWith} during ${phase}`, async ({ page }) => {
-            const id = `intro-close-${phase}-${closeWith}`;
-            await prepareTutorialIntro(page, id, 'black');
-            await page.clock.install({ time: new Date('2026-09-02T03:00:00.000Z') });
-            await page.clock.pauseAt(new Date('2026-09-02T03:00:01.000Z'));
-            await openTutorialWithPausedClock(page, id);
-            const intro = page.getByTestId('tutorial-intro');
-            await expect(intro).toBeVisible();
-            if (phase === 'handoff') {
-                const panel = page.getByTestId('tutorial-panel');
-                await page.clock.runFor(3799);
-                await expect(panel).toHaveCount(0);
-                await page.clock.runFor(17);
-                await expect(panel).toHaveAttribute('aria-hidden', 'true');
-            }
-            const dialog = page.getByRole('dialog', { name: 'How photo selection works' });
-            const activeAnimations = await dialog.evaluateHandle((element) => element.getAnimations({ subtree: true }));
-            if (closeWith === 'escape') await page.keyboard.press('Escape');
-            else await intro.getByRole('button', { name: 'Close tutorial' }).click({ force: phase === 'handoff' });
-            await expect(dialog).toHaveCount(0);
-            expect(await activeAnimations.evaluate((animations) => animations.every((animation) => animation.playState === 'idle'))).toBe(true);
-            await page.clock.runFor(4100);
-            await expect(page.getByTestId('tutorial-panel')).toHaveCount(0);
-        });
-    }
-}
 
 test('filters immediately from a selfie and keeps selection submit working', async ({ page }) => {
     const id = 'face-filter-gallery';
@@ -983,7 +1497,7 @@ test('filters immediately from a selfie and keeps selection submit working', asy
 
     await page.goto(`/culling/${id}`);
     await expect(page.getByRole('button', { name: /^Open photo-/ })).toHaveCount(54);
-    await page.getByRole('button', { name: 'Filter by selfie' }).click();
+    await selfieTab(page).click();
     const dialog = page.getByRole('dialog', { name: 'Filter by selfie' });
     await expect(dialog).toBeVisible();
     await expect(dialog.locator('input[type="checkbox"]')).not.toBeChecked();
@@ -1037,7 +1551,7 @@ test('filters immediately from a selfie and keeps selection submit working', asy
     await dialog.getByRole('button', { name: 'Show 1 photos' }).click();
     await page.setViewportSize({ width: 390, height: 844 });
 
-    await expect(page.getByRole('button', { name: 'Clear selfie filter' })).toBeVisible();
+    await expect(selfieTab(page)).toHaveAttribute('aria-pressed', 'true');
     await expect(page.getByRole('button', { name: /^Open photo-/ })).toHaveCount(1);
     await expect(page.getByRole('button', { name: 'Next' })).toHaveCount(0);
 
@@ -1045,25 +1559,26 @@ test('filters immediately from a selfie and keeps selection submit working', asy
     await chooseGalleryRefineView(page, 'Picked');
     await expect(page.getByRole('button', { name: /^Open photo-/ })).toHaveCount(1);
     await page.getByRole('button', { name: 'Edited Photos', exact: true }).click();
-    await expect(page.getByPlaceholder('Edited photos password')).toBeVisible();
-    await expect(page.getByRole('button', { name: 'Clear selfie filter' })).toHaveCount(0);
+    await expect(page.getByLabel('Edited photos password', { exact: true })).toBeVisible();
     await chooseGalleryRefineView(page, 'Picked');
     await expect(page.getByRole('button', { name: 'Remove photo-002.jpg' })).toBeVisible();
-    await expect(page.getByRole('button', { name: 'Clear selfie filter' })).toBeVisible();
-    await chooseGalleryRefineView(page, 'All Photos');
-    await expect(page.getByRole('button', { name: 'Clear selfie filter' })).toBeVisible();
-    await page.getByRole('button', { name: 'Clear selfie filter' }).click();
-    await expect(page.getByRole('button', { name: 'Filter by selfie' })).toBeVisible();
+    await selfieTab(page).click();
+    await expect(page.getByRole('button', { name: /^Open photo-/ })).toHaveCount(1);
+    await selfieTab(page).click();
+    await expect(page.getByRole('dialog', { name: 'Filter by selfie' })).toBeVisible();
+    await page.getByRole('dialog', { name: 'Filter by selfie' }).getByRole('button', { name: 'Reset', exact: true }).click();
+    await page.getByRole('button', { name: 'Close Filter by selfie' }).click();
+    await expect(page.getByRole('button', { name: /^Open photo-/ })).toHaveCount(0);
     await chooseGalleryRefineView(page, 'Picked');
-    await page.getByRole('button', { name: 'Filter by selfie' }).click();
+    await selfieTab(page).click();
     await expect(page.getByRole('dialog', { name: 'Filter by selfie' })).toBeVisible();
     await page.getByRole('button', { name: 'Close Filter by selfie' }).click();
     await chooseGalleryRefineView(page, 'All Photos');
     await expect(page.getByRole('button', { name: /^Open photo-/ })).toHaveCount(54);
     await expect(page.getByRole('button', { name: 'Next' })).toBeVisible();
-    await expect(page.getByText('Not submitted')).toBeVisible();
-    await page.getByRole('button', { name: 'Submit', exact: true }).click();
-    await page.getByRole('button', { name: 'Submit 1' }).click();
+    await expect(page.getByTestId('selection-summary').getByRole('status')).toHaveText('Not submitted');
+    await page.getByRole('button', { name: 'Review Selection' }).click();
+    await page.getByRole('dialog', { name: 'Review Selection' }).getByRole('button', { name: 'Submit for Editing' }).click();
     await expect(page.getByText('Selection saved. 1 filenames submitted.')).toBeVisible();
 
     const layout = await page.evaluate(() => ({
@@ -1093,7 +1608,7 @@ test('selfie search shows index-changed errors and can retry without browser sca
             : route.fulfill({ json: { status: 'complete', total: 1, matches: [photo(1)] } });
     });
     await page.goto(`/culling/${id}`);
-    await page.getByRole('button', { name: 'Filter by selfie' }).click();
+    await selfieTab(page).click();
     const dialog = page.getByRole('dialog', { name: 'Filter by selfie' });
     const file = { name: 'selfie.png', mimeType: 'image/png', buffer: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aM1sAAAAASUVORK5CYII=', 'base64') };
     await dialog.getByLabel('Choose selfie', { exact: true }).setInputFiles(file);
@@ -1128,7 +1643,7 @@ for (const theme of ['black', 'white'] as const) {
         // The admin/body theme is deliberately opposite to the gallery's local theme.
         await page.evaluate((theme) => document.documentElement.classList.toggle('light', theme === 'black'), theme);
         const adminAccent = await page.evaluate(() => getComputedStyle(document.body).getPropertyValue('--accent'));
-        await page.getByRole('button', { name: 'Filter by selfie' }).click();
+        await selfieTab(page).click();
         const dialog = page.getByRole('dialog', { name: 'Filter by selfie' });
         const chooser = dialog.getByRole('button', { name: 'Choose selfie', exact: true });
         await expect(chooser).toHaveCSS('background-color', accent);
@@ -1210,7 +1725,7 @@ for (const theme of ['black', 'white'] as const) {
         await expect(dialog.getByRole('button', { name: 'Choose selfie', exact: true })).toBeEnabled();
         await page.keyboard.press('Escape');
         await expect(dialog).toHaveCount(0);
-        await expect(page.getByRole('button', { name: 'Filter by selfie' })).toBeFocused();
+        await expect(selfieTab(page)).toBeFocused();
         expect(await page.evaluate(() => getComputedStyle(document.body).getPropertyValue('--accent'))).toBe(adminAccent);
     });
 }
@@ -1240,12 +1755,12 @@ test('hides selfie filtering offline and reveals its mobile label when the worke
 
     await page.goto(`/culling/${id}`);
     await expect.poll(() => statusRequests).toBeGreaterThan(0);
-    await expect(page.getByRole('button', { name: 'Filter by selfie' })).toHaveCount(0);
+    await expect(selfieTab(page)).toBeDisabled();
     await expect(page.getByRole('button', { name: /^Open photo-/ })).toHaveCount(1);
     ready = true;
-    const filter = page.getByRole('button', { name: 'Filter by selfie' });
-    await expect(filter).toBeVisible({ timeout: 8_000 });
-    await expect(filter).toHaveAttribute('title', 'Filter by selfie');
+    const filter = selfieTab(page);
+    await expect(filter).toBeEnabled({ timeout: 8_000 });
+    await expect(filter).toHaveAttribute('title', 'Selfie');
     for (const width of [320, 390]) {
         await page.setViewportSize({ width, height: 740 });
         const bounds = await filter.boundingBox();

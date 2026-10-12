@@ -34,9 +34,12 @@ assert.equal((await one<any>('SELECT gallery_workflow FROM galleries WHERE id = 
 assert.deepEqual(db!.query('SELECT selection_deadline_at, edit_results_expires_at, access_version, edit_results_version FROM galleries WHERE id = 1').get(), before);
 
 const { adminGalleriesRouter, publicGalleriesRouter } = await import('../routes/galleries');
+const { galleryEditResultsRateLimiter, galleryPinRateLimiter } = await import('../middleware/rate-limit');
 const { default: paymentsRouter } = await import('../routes/payments');
 const app = new Hono<any>();
 app.use('/admin/*', async (c, next) => { c.set('user', { sub: 1, role: 'superadmin', email: 'test@example.invalid', name: 'Admin' }); await next(); });
+app.use('/public/:id/verify', galleryPinRateLimiter);
+app.use('/public/:id/edit-results/verify', galleryEditResultsRateLimiter);
 app.route('/admin', adminGalleriesRouter);
 app.route('/public', publicGalleriesRouter);
 app.route('/payments', paymentsRouter);
@@ -65,9 +68,14 @@ const selectionList = await json(await request('/admin?mode=selection&pageSize=1
 assert.equal(selectionList.total, 1);
 assert.equal(selectionList.items[0].workflow, 'selection_delivery');
 const editedList = await json(await request('/admin?mode=edited'));
-assert.equal(editedList.total, 2);
-assert.ok(editedList.items.some((item: any) => item.id === id));
-assert.equal((await json(await request('/admin?mode=edited&status=draft'))).total, 1);
+assert.equal(editedList.total, 1);
+assert.equal(editedList.items[0].workflow, 'selection_delivery');
+const weddingList = await json(await request('/admin?mode=wedding&pageSize=1'));
+assert.equal(weddingList.total, 1);
+assert.equal(weddingList.totalPages, 1);
+assert.equal(weddingList.items[0].id, id);
+assert.equal((await json(await request('/admin?mode=wedding&status=draft'))).total, 1);
+assert.equal((await json(await request('/admin?mode=edited&status=draft'))).total, 0);
 assert.deepEqual((await json(await request(`/admin/${id}`))).photos, []);
 
 for (const [path, method] of [['verify', 'POST'], ['photos', 'GET'], ['photo-manifest', 'GET'], ['selections', 'POST'], ['face-search', 'POST'], ['face-search/status', 'GET'], ['photos/photo/thumbnail?pt=standalone', 'GET'], ['photos/photo/preview', 'GET'], ['photos/photo/content', 'GET'], ['tutorial/1/before', 'GET']] as const) {
@@ -108,6 +116,16 @@ assert.equal(status.workflow, 'delivery_only');
 assert.equal(status.title, 'Updated Wedding');
 assert.equal(status.available, true);
 assert.equal((await request(`/public/${slug}/edit-results/verify`, 'POST', { password: 'wrong-password' })).status, 401);
+for (let attempt = 0; attempt < 4; attempt++) assert.equal((await request(`/public/${slug}/edit-results/verify`, 'POST', { password: 'wrong-password' })).status, 401);
+assert.equal((await json(await request(`/public/${slug}/edit-results/verify`, 'POST', { password: 'wedding-password' }))).code, 'EDIT_RESULTS_RATE_LIMITED');
+assert.equal((await json(await request(`/public/${slug}/verify`, 'POST', { pin: 'wrong' }))).code, 'SELECTION_NOT_AVAILABLE');
+assert.equal((await json(await request(`/admin/${id}/edit-results/reset-lock`, 'POST'))).status, 'reset');
+for (let attempt = 0; attempt < 5; attempt++) await request('/public/legacy/verify', 'POST', { pin: 'wrong' });
+assert.equal((await request('/public/legacy/verify', 'POST', { pin: 'wrong' })).status, 429);
+assert.equal((await json(await request('/admin/1/edit-results/reset-lock', 'POST'))).status, 'reset');
+assert.equal((await request('/public/legacy/verify', 'POST', { pin: 'wrong' })).status, 429);
+assert.equal((await json(await request('/admin/1/reset-pin-lock', 'POST'))).status, 'reset');
+assert.notEqual((await request('/public/legacy/verify', 'POST', { pin: 'wrong' })).status, 429);
 const access = await json(await request(`/public/${slug}/edit-results/verify`, 'POST', { password: 'wedding-password' }));
 const listing = await json(await request(`/public/${slug}/edit-results?token=${access.token}`));
 assert.equal(listing.expiresAt, null);
@@ -121,7 +139,8 @@ assert.equal((await request(`/admin/${id}`, 'PATCH', { editResultsStatus: 'open'
 assert.equal((await json(await request(`/public/${slug}/edit-results?token=${access.token}`))).code, 'EDIT_RESULTS_TOKEN_INVALID');
 await run("UPDATE galleries SET edit_results_expires_at = '2000-01-01' WHERE id = ?", [id]);
 assert.equal((await json(await request(`/public/${slug}/edit-results/verify`, 'POST', { password: 'wedding-password' }))).code, 'EDIT_RESULTS_EXPIRED');
-assert.equal((await json(await request('/admin?mode=edited&status=closed'))).total, 1);
+assert.equal((await json(await request('/admin?mode=wedding&status=closed'))).total, 1);
+assert.equal((await json(await request('/admin?mode=edited&status=closed'))).total, 0);
 assert.ok(driveReads > 0);
 
 const prewedCreation = await request('/admin', 'POST', { title: 'New Prewed', driveFolderUrl: 'source-new', pin: '4321', status: 'open', maxSelections: 70, selectionDurationHours: 72 });

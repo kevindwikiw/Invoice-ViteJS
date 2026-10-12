@@ -19,6 +19,7 @@ for (const theme of ['black', 'white']) {
                 if (route.request().url().includes('/before/')) {
                     beforeRequests += 1;
                     if (fail) return route.fulfill({ status: 502, body: 'unavailable' });
+                    await new Promise((resolve) => setTimeout(resolve, 600));
                 }
                 const portrait = route.request().url().includes('edited-1');
                 return route.fulfill({ contentType: 'image/svg+xml', body: `<svg xmlns="http://www.w3.org/2000/svg" width="${portrait ? 900 : 1200}" height="${portrait ? 1200 : 900}"><rect width="100%" height="100%" fill="#58796f"/><circle cx="450" cy="400" r="200" fill="#b5d2c8"/></svg>` });
@@ -35,6 +36,8 @@ for (const theme of ['black', 'white']) {
             await expect(page.getByTestId('gallery-lightbox-image')).toHaveAttribute('src', /edited-0\/preview/);
             fail = false;
             await page.getByRole('button', { name: 'Retry', exact: true }).click();
+            await expect(page.getByTestId('delivery-image-placeholder')).toBeVisible();
+            await expect(page.getByTestId('delivery-image-loading')).toHaveCount(0);
             const handle = page.getByRole('slider', { name: 'Compare before and edited photo' });
             await expect(handle).toHaveAttribute('aria-valuenow', '50');
             await handle.focus();

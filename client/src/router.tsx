@@ -108,8 +108,8 @@ const feedbackInboxRoute = createRoute({
 const clientGalleriesRoute = createRoute({
     getParentRoute: () => layoutRoute,
     path: '/galleries',
-    validateSearch: (search: Record<string, unknown>): { mode: 'selection' | 'edited' | 'preview' } => ({
-        mode: search.mode === 'edited' || search.mode === 'preview' ? search.mode : 'selection',
+    validateSearch: (search: Record<string, unknown>): { mode: 'selection' | 'wedding' | 'preview' } => ({
+        mode: search.mode === 'wedding' || search.mode === 'preview' ? search.mode : 'selection',
     }),
     component: ClientGalleriesRoute,
 })

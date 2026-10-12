@@ -4,6 +4,7 @@ import { fetchWithAuth } from '../../lib/api';
 import { parseError } from './culling.public';
 import type { 
     GallerySummary, 
+    GalleryListMode,
     EditResultPair,
     EditResultPairing,
     GalleryListResponse, 
@@ -16,7 +17,7 @@ import type {
     EditPackage 
 } from './culling.types';
 
-export async function listGalleries(input: { mode?: 'selection' | 'edited'; page?: number; pageSize?: number; status?: 'all' | GalleryStatus; search?: string } = {}): Promise<GalleryListResponse> {
+export async function listGalleries(input: { mode?: GalleryListMode; page?: number; pageSize?: number; status?: 'all' | GalleryStatus; search?: string } = {}): Promise<GalleryListResponse> {
     const params = new URLSearchParams({
         page: String(input.page || 1),
         pageSize: String(input.pageSize || 10),
@@ -59,13 +60,14 @@ export async function createGallery(input: CreateGalleryInput): Promise<GalleryS
     return response.json();
 }
 
-export async function updateGallery(input: { id: number; editResultsStatus?: GalleryStatus; title?: string; comparisonEnabled?: boolean; comparisonPairs?: EditResultPair[]; driveFolderId?: string; driveFolderUrl?: string; editResultsFolderId?: string; editResultsZipFileId?: string; editResultsAccessDurationHours?: number | null; pin?: string; status?: GalleryStatus; contactWhatsappUrl?: string; maxSelections?: number; selectionDurationHours?: number; additionalSelectionLimit?: number; editAddonStatus?: string; editAddonPricingMode?: string; editAddonPrice?: number; editAddonPackageId?: number | null; qrisEnabled?: boolean }): Promise<void> {
+export async function updateGallery(input: { id: number; editResultsStatus?: GalleryStatus; title?: string; comparisonEnabled?: boolean; comparisonPairs?: EditResultPair[]; driveFolderId?: string; driveFolderUrl?: string; editResultsFolderId?: string; editResultsZipFileId?: string; editResultsAccessDurationHours?: number | null; pin?: string; status?: GalleryStatus; contactWhatsappUrl?: string; maxSelections?: number; selectionDurationHours?: number; additionalSelectionLimit?: number; editAddonStatus?: string; editAddonPricingMode?: string; editAddonPrice?: number; editAddonPackageId?: number | null; qrisEnabled?: boolean }): Promise<{ status: string; comparisonApplied?: boolean; comparisonCount?: number }> {
     const { id, ...body } = input;
     const response = await fetchWithAuth(`/galleries/${id}`, {
         method: 'PATCH',
         body: JSON.stringify(body),
     });
     if (!response.ok) throw await parseError(response, 'Unable to update gallery.');
+    return response.json();
 }
 
 export async function listAddonRequests(page = 1, pageSize = 10): Promise<Paginated<AddonRequest>> {
@@ -121,6 +123,11 @@ export async function deleteGallery(id: number): Promise<void> {
 export async function resetGalleryPinLock(id: number): Promise<void> {
     const response = await fetchWithAuth(`/galleries/${id}/reset-pin-lock`, { method: 'POST' });
     if (!response.ok) throw await parseError(response, 'Unable to reset PIN lock.');
+}
+
+export async function resetGalleryEditResultsLock(id: number): Promise<void> {
+    const response = await fetchWithAuth(`/galleries/${id}/edit-results/reset-lock`, { method: 'POST' });
+    if (!response.ok) throw await parseError(response, 'Unable to unlock Edited Photos password attempts.');
 }
 
 export async function getGalleryDetail(id: number): Promise<GalleryDetail> {

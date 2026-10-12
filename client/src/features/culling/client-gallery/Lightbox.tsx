@@ -254,7 +254,7 @@ function LightboxView<T extends GalleryDisplayPhoto>({
                         </div>
                     )}
                     {comparisonEnabled && comparison && <div className="absolute inset-y-2 left-10 right-10 z-20 sm:inset-y-5 sm:left-16 sm:right-16">
-                        <BeforeAfterSlider key={`${photo.driveFileId}-${comparison.previewUrl}`} testId="delivery" beforeUrl={comparison.previewUrl} afterUrl={currentUrl} fallbackUrl={currentUrl} frameClass="h-full" aspectRatio={photo.width && photo.height ? photo.width / photo.height : undefined} />
+                        <BeforeAfterSlider key={`${photo.driveFileId}-${comparison.previewUrl}`} testId="delivery" beforeUrl={comparison.previewUrl} beforePlaceholderUrl={comparison.thumbnailUrl} afterUrl={currentUrl} fallbackUrl={currentUrl} frameClass="h-full" aspectRatio={photo.width && photo.height ? photo.width / photo.height : undefined} />
                     </div>}
                     <img 
                         data-testid="gallery-lightbox-image"

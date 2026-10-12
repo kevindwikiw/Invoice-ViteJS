@@ -43,7 +43,19 @@ export const galleryPinRateLimiter = async (c: Context, next: Next) => {
     const result = await hitRateLimitSafely(`gallery_pin:${clientIp(c)}:${galleryId}`, windowMs, maxAttempts);
     if (!result.allowed) {
         c.header("Retry-After", String(result.retryAfter || 0));
-        return c.json({ error: "Too many PIN attempts. Please try again later.", retryAfter: result.retryAfter || 0, code: "PIN_RATE_LIMITED" }, 429);
+        return c.json({ error: "Too many password attempts. Please try again later.", retryAfter: result.retryAfter || 0, code: "PIN_RATE_LIMITED" }, 429);
+    }
+    await next();
+};
+
+export const galleryEditResultsRateLimiter = async (c: Context, next: Next) => {
+    const windowMs = Number.parseInt(process.env.GALLERY_PIN_RATE_LIMIT_WINDOW_MS || "900000", 10);
+    const maxAttempts = Number.parseInt(process.env.GALLERY_PIN_RATE_LIMIT_MAX || "5", 10);
+    const galleryId = c.req.param("id") || "unknown";
+    const result = await hitRateLimitSafely(`gallery_edited:${clientIp(c)}:${galleryId}`, windowMs, maxAttempts);
+    if (!result.allowed) {
+        c.header("Retry-After", String(result.retryAfter || 0));
+        return c.json({ error: "Too many Edited Photos password attempts. Please contact the photographer to unlock access.", retryAfter: result.retryAfter || 0, code: "EDIT_RESULTS_RATE_LIMITED" }, 429);
     }
     await next();
 };
@@ -65,6 +77,15 @@ export const resetGalleryPinAttempts = async (identifiers: string[]) => {
         await resetRateLimitSuffixes("gallery_pin", identifiers.filter(Boolean));
     } catch (error) {
         logRateLimitStorageError("gallery_pin", "Unable to reset gallery PIN rate limits.", error);
+        throw error;
+    }
+};
+
+export const resetGalleryEditResultsAttempts = async (identifiers: string[]) => {
+    try {
+        await resetRateLimitSuffixes("gallery_edited", identifiers.filter(Boolean));
+    } catch (error) {
+        logRateLimitStorageError("gallery_edited", "Unable to reset Edited Photos password rate limits.", error);
         throw error;
     }
 };

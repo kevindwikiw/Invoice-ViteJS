@@ -2,6 +2,7 @@
 
 export type GalleryStatus = 'draft' | 'open' | 'closed';
 export type GalleryMode = 'selection' | 'edited';
+export type GalleryListMode = GalleryMode | 'wedding';
 export type GalleryWorkflow = 'selection_delivery' | 'delivery_only';
 export type AddonStatus = 'none' | 'pending' | 'quoted' | 'approved' | 'paid' | 'completed' | 'cancelled';
 export type AddonPricingMode = 'per_photo' | 'package';

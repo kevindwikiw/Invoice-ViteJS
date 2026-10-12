@@ -48,9 +48,9 @@ for (const access of ['edited-only', 'expired', 'closed', 'invalid', 'open'] as 
         } else if (access === 'edited-only' || access === 'invalid') {
             await expect(allPhotos).toBeEnabled();
             await allPhotos.click();
-            await expect(page.getByLabel('Gallery PIN', { exact: true })).toBeVisible();
+            await expect(page.getByLabel('Photo Selection password', { exact: true })).toBeVisible();
             await expect(page.getByRole('button', { name: 'Back to Edited Photos', exact: true })).toBeVisible();
-            await expect(page.getByRole('button', { name: 'Have an edited photos password?' })).toHaveCount(0);
+            await expect(page.getByRole('button', { name: 'Use Edited Photos password' })).toHaveCount(0);
             await page.getByRole('button', { name: 'Back to Edited Photos', exact: true }).click();
             await expect(page.getByText('No edited photos are available.')).toBeVisible();
             await expect.poll(() => page.evaluate((galleryId) => localStorage.getItem(`orbit:edit-results-token:${galleryId}`), id)).toBe('edited-token');

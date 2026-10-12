@@ -1,10 +1,10 @@
-import { useLayoutEffect, useRef, type CSSProperties, type ReactNode } from 'react';
+import { useLayoutEffect, useRef, type CSSProperties, type ReactNode, type Ref } from 'react';
 import { createPortal } from 'react-dom';
 import { X } from 'lucide-react';
 import clsx from 'clsx';
 import './gallery-modal.css';
 
-export function GalleryModal({ title, close, beforeClose, children, footer, busy = false, widthClass = 'max-w-2xl', maxHeightClass = 'max-h-[90dvh]', layerClass = 'z-[100]', style }: {
+export function GalleryModal({ title, close, beforeClose, children, footer, busy = false, widthClass = 'max-w-2xl', maxHeightClass = 'max-h-[90dvh]', layerClass = 'z-[100]', style, scrollRef }: {
     title: string;
     close: () => void;
     beforeClose?: () => boolean;
@@ -15,6 +15,7 @@ export function GalleryModal({ title, close, beforeClose, children, footer, busy
     maxHeightClass?: string;
     layerClass?: string;
     style?: CSSProperties;
+    scrollRef?: Ref<HTMLDivElement>;
 }) {
     const overlayRef = useRef<HTMLDivElement>(null);
     const panelRef = useRef<HTMLDivElement>(null);
@@ -82,7 +83,7 @@ export function GalleryModal({ title, close, beforeClose, children, footer, busy
                     <h2 className="min-w-0 break-words text-base font-semibold text-[var(--text-primary)]">{title}</h2>
                     <button type="button" disabled={busy} onClick={dismiss} aria-label={`Close ${title}`} className="flex h-11 w-11 shrink-0 items-center justify-center rounded-md text-[var(--text-muted)] hover:bg-[var(--bg-hover)] focus-visible:outline-2 focus-visible:outline-[var(--accent)] disabled:opacity-40"><X size={18} /></button>
                 </header>
-                <div className="gallery-modal-scroll min-h-0 overflow-y-auto overscroll-contain px-4 py-5 sm:px-6">{children}</div>
+                <div ref={scrollRef} className="gallery-modal-scroll min-h-0 overflow-y-auto overscroll-contain px-4 py-5 sm:px-6">{children}</div>
                 {footer && <footer className="gallery-modal-footer flex shrink-0 items-center justify-end gap-2 border-t border-[var(--border)] bg-[var(--bg-card)] px-4 py-3 sm:px-6">{footer}</footer>}
             </div>
         </div>, document.body,

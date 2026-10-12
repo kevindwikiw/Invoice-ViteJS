@@ -1,18 +1,32 @@
 import { useEffect, useState } from 'react';
 import { useMutation, useQuery } from '@tanstack/react-query';
-import { Download, Eye, EyeOff, Loader2, Lock, MessageCircle } from 'lucide-react';
-import clsx from 'clsx';
+import { Download, Loader2, Lock, MessageCircle } from 'lucide-react';
 
 import { getEditResultsStatus, verifyEditResultsPassword, verifyGalleryPin } from '../culling.public';
 import type { PublicGallery } from '../culling.types';
 
 import { BLACK_THEME, WHITE_THEME } from './constants';
 import { OrbitLogo, ThemeToggle } from './GalleryChrome';
+import { GalleryPasswordField } from './GalleryPasswordField';
 import { tokenKey } from './storage';
 import type { GalleryTheme } from './types';
 
+function AccessHeader({ theme, onToggleTheme, title, section = 'Photo Selection' }: { theme: GalleryTheme; onToggleTheme: () => void; title?: string; section?: 'Photo Selection' | 'Edited Photos' }) {
+    return <header data-testid="gallery-header" className="h-20 shrink-0 border-b border-[var(--border)] bg-[var(--bg-deep)] px-2.5 sm:px-8 lg:h-16">
+        <div className="mx-auto grid h-full max-w-[1600px] grid-cols-[auto_minmax(0,1fr)_auto] grid-rows-[2.75rem_1.5rem] items-center gap-x-2 py-1 lg:flex lg:py-0">
+            <OrbitLogo theme={theme} />
+            <div className="col-span-3 row-start-2 flex min-w-0 items-baseline gap-2 lg:ml-5">
+                <span className="shrink-0 text-[11px] font-medium uppercase text-[var(--text-muted)] sm:text-xs lg:text-[13px]">{section}</span>
+                <p title={title} className="min-w-0 truncate text-sm font-semibold leading-tight text-[var(--text-primary)] sm:text-[15px] lg:text-lg">{title || 'Gallery'}</p>
+            </div>
+            <div className="col-start-3 row-start-1 lg:ml-auto"><ThemeToggle theme={theme} onToggle={onToggleTheme} /></div>
+        </div>
+    </header>;
+}
+
 export function PinGate({
     galleryId,
+    title,
     onUnlocked,
     onEditResultsUnlocked,
     theme,
@@ -22,6 +36,7 @@ export function PinGate({
     onBackToEdited,
 }: {
     galleryId: string;
+    title?: string;
     onUnlocked: (token: string, gallery: PublicGallery) => void;
     onEditResultsUnlocked: (token: string) => void;
     theme: GalleryTheme;
@@ -32,7 +47,6 @@ export function PinGate({
 }) {
     const [pin, setPin] = useState('');
     const [editResultsPassword, setEditResultsPassword] = useState('');
-    const [showEditResultsPassword, setShowEditResultsPassword] = useState(false);
     const [mode, setMode] = useState<'gallery' | 'edited'>(initialMode);
     const [error, setError] = useState('');
     const [contactUrl, setContactUrl] = useState<string | null>(null);
@@ -48,7 +62,7 @@ export function PinGate({
     const lockedMessage = isExpired
         ? 'The selection deadline has ended. Please contact the admin if you need more time.'
         : isRateLimited
-            ? 'Too many PIN attempts. Please contact the admin to unlock access.'
+            ? 'Too many password attempts. Please contact the admin to unlock access.'
             : 'This gallery is currently locked. Please contact the admin to unlock access.';
     
     const verifyMutation = useMutation({
@@ -58,15 +72,15 @@ export function PinGate({
             onUnlocked(data.token, data.gallery);
         },
         onError: (mutationError) => {
-            setError(mutationError instanceof Error ? mutationError.message : 'Unable to unlock gallery.');
             const galleryError = mutationError as Error & { code?: string; contactUrl?: string | null; status?: number };
+            setError(galleryError.status === 401 ? 'Incorrect password. Check it and try again.' : mutationError instanceof Error ? mutationError.message : 'Unable to unlock gallery.');
             if (galleryError.code === 'GALLERY_CLOSED' || galleryError.code === 'GALLERY_EXPIRED') {
                 setContactUrl(galleryError.contactUrl || null);
                 setLockCode(galleryError.code);
             }
             if (galleryError.status === 429) {
                 setIsRateLimited(true);
-                setError('PIN access is temporarily locked. Please contact the admin to unlock it.');
+                setError('Password access is temporarily locked. Please contact the admin to unlock it.');
                 fetch(`/api/public/galleries/${galleryId}/contact`).then((response) => response.ok ? response.json() : null).then((settings: { contactWhatsappUrl?: string; message?: string; requestMoreMessage?: string } | null) => {
                     if (settings?.contactWhatsappUrl) {
                         const text = (settings.message || 'Halo Kak Admin Orbit ✨\nSaya ingin meminta bantuan untuk membuka client gallery saya yaa.').replaceAll('{{gallery_url}}', window.location.href).replaceAll('{{gallery_title}}', galleryId);
@@ -79,76 +93,60 @@ export function PinGate({
     const verifyEdited = useMutation({
         mutationFn: () => verifyEditResultsPassword(galleryId, editResultsPassword),
         onSuccess: (data) => onEditResultsUnlocked(data.token),
-        onError: (mutationError) => setError(mutationError instanceof Error ? mutationError.message : 'Unable to unlock edited photos.'),
+        onError: (mutationError) => {
+            const accessError = mutationError as Error & { status?: number };
+            setError(accessError.status === 401 ? 'Incorrect password. Check it and try again.' : mutationError instanceof Error ? mutationError.message : 'Unable to unlock edited photos.');
+        },
     });
 
     return (
-        <main style={theme === 'black' ? BLACK_THEME : WHITE_THEME} className="min-h-screen bg-[var(--bg-deep)] font-sans text-[var(--text-primary)]">
-            <div className="absolute right-5 top-5"><ThemeToggle theme={theme} onToggle={onToggleTheme} /></div>
-            <section className="flex min-h-screen items-center justify-center px-5 py-12">
+        <main style={theme === 'black' ? BLACK_THEME : WHITE_THEME} className="flex min-h-dvh flex-col bg-[var(--bg-deep)] font-sans text-[var(--text-primary)]">
+            <AccessHeader theme={theme} onToggleTheme={onToggleTheme} title={title} section={mode === 'edited' ? 'Edited Photos' : 'Photo Selection'} />
+            <section className="flex flex-1 items-center justify-center px-4 py-8 sm:px-5 sm:py-12">
                 <form
+                    aria-busy={verifyMutation.isPending || verifyEdited.isPending}
                     onSubmit={(event) => {
                         event.preventDefault();
+                        if (verifyMutation.isPending || verifyEdited.isPending) return;
+                        if (mode === 'gallery' && pin.trim().length < 4) { setError('Enter at least 4 characters.'); return; }
+                        if (mode === 'edited' && editResultsPassword.trim().length < 6) { setError('Enter at least 6 characters.'); return; }
                         setError('');
                         setContactUrl(null);
                         setIsRateLimited(false);
                         if (mode === 'edited') verifyEdited.mutate();
                         else verifyMutation.mutate();
                     }}
-                    className="box-border min-h-[330px] w-full max-w-sm border border-[var(--border)] bg-[var(--bg-card)] px-6 py-10 text-center shadow-2xl"
+                    className="box-border w-full max-w-sm border border-[var(--border)] bg-[var(--bg-card)] px-5 py-7 text-center shadow-2xl sm:px-8 sm:py-9"
                 >
-                    <div className="mb-6 flex justify-center">
-                        <OrbitLogo theme={theme} />
-                    </div>
-
-                    <p className="label-xs text-[var(--accent)]">PRIVATE CLIENT GALLERY</p>
-                    <h1 className="mt-3 font-display text-2xl font-medium text-[var(--text-primary)]">{mode === 'edited' ? 'Edited Photos' : isExpired ? 'Selection Closed' : isClosed ? 'Gallery Locked' : isRateLimited ? 'Access Locked' : 'Enter PIN'}</h1>
+                    <div className="mb-7 flex justify-center"><OrbitLogo theme={theme} /></div>
+                    <h1 className="font-display text-[26px] font-medium leading-tight text-[var(--text-primary)] [text-wrap:balance]">{mode === 'gallery' && (isExpired || isClosed || isRateLimited) ? isExpired ? 'Selection Closed' : isClosed ? 'Gallery Locked' : 'Access Locked' : 'Enter Password'}</h1>
+                    {mode === 'edited' || (!isClosed && !isRateLimited) ? <p className="mt-2 text-xs text-[var(--text-muted)]">{mode === 'edited' ? 'Edited Photos' : 'Photo Selection'}</p> : null}
                     
                     {mode === 'gallery' && !isClosed && !isRateLimited && (
-                        <div className="relative mt-7">
-                            <input
-                                aria-label="Gallery PIN"
-                                value={pin}
-                                onChange={(event) => {
-                                    setPin(event.target.value.slice(0, 64));
-                                    if (error) setError('');
-                                }}
-                                placeholder="Gallery PIN"
-                                className="h-11 w-full rounded-lg border border-[var(--border)] bg-[var(--bg-deep)] px-4 text-center text-base tracking-[0.2em] text-[var(--text-primary)] outline-none transition-colors placeholder:tracking-[0.2em] placeholder:text-[var(--text-muted)] focus:border-[var(--accent)]"
-                            />
-                            <p aria-live="polite" className={clsx('absolute left-0 right-0 top-full mt-1 text-xs leading-5 text-rose-400 transition-opacity duration-200', error ? 'opacity-100' : 'opacity-0')}>
-                                {error || ' '}
-                            </p>
-                        </div>
+                        <div className="mt-7"><GalleryPasswordField key="selection" label="Photo Selection password" name="selectionPassword" value={pin} onChange={(value) => { setPin(value); if (error) setError(''); }} error={error} /></div>
                     )}
                     {mode === 'edited' && (
-                        <div className="relative mt-7">
-                            <div className="relative">
-                                <input type={showEditResultsPassword ? 'text' : 'password'} aria-label="Edited photos password" value={editResultsPassword} onChange={(event) => { setEditResultsPassword(event.currentTarget.value.slice(0, 64)); setError(''); }} autoCapitalize="none" autoComplete="current-password" spellCheck={false} placeholder="Edited photos password" className="h-11 w-full rounded-lg border border-[var(--border)] bg-[var(--bg-deep)] px-12 text-center text-sm font-semibold text-[var(--text-primary)] outline-none focus:border-[var(--accent)]" />
-                                <button type="button" onClick={() => setShowEditResultsPassword((current) => !current)} aria-label={showEditResultsPassword ? 'Hide edited photos password' : 'Show edited photos password'} aria-pressed={showEditResultsPassword} className="absolute right-0 top-0 flex h-11 w-11 items-center justify-center rounded-md text-[var(--text-muted)] hover:text-[var(--text-primary)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)]">{showEditResultsPassword ? <EyeOff size={16} aria-hidden="true" /> : <Eye size={16} aria-hidden="true" />}</button>
-                            </div>
-                            <p aria-live="polite" className={clsx('mt-1 min-h-5 text-xs leading-5 text-rose-400', error ? 'opacity-100' : 'opacity-0')}>{error || ' '}</p>
-                        </div>
+                        <div className="mt-7"><GalleryPasswordField key="edited" label="Edited photos password" name="editedPhotosPassword" value={editResultsPassword} onChange={(value) => { setEditResultsPassword(value); if (error) setError(''); }} error={error} /></div>
                     )}
                     {mode === 'gallery' && contactUrl && <a href={contactUrl} target="_blank" rel="noreferrer" className="mt-4 inline-flex h-10 w-full items-center justify-center rounded-lg border border-[var(--border)] bg-[var(--bg-card)] text-xs font-bold text-[var(--text-primary)] transition-colors hover:border-[var(--accent)]">Contact admin on WhatsApp</a>}
                     {mode === 'gallery' && (isClosed || isRateLimited) && (
                         <p className="mx-auto mt-6 max-w-xs text-xs leading-5 text-[var(--text-muted)]">{lockedMessage}</p>
                     )}
-                    {mode === 'gallery' && isRateLimited && !isClosed && <button type="button" onClick={() => { setIsRateLimited(false); setError(''); setContactUrl(null); setPin(''); }} className="mt-4 inline-flex h-11 items-center justify-center rounded-md border border-[var(--border)] px-4 text-xs font-semibold text-[var(--text-primary)]">Try PIN Again</button>}
+                    {mode === 'gallery' && isRateLimited && !isClosed && <button type="button" onClick={() => { setIsRateLimited(false); setError(''); setContactUrl(null); setPin(''); }} className="mt-4 inline-flex h-11 items-center justify-center rounded-md border border-[var(--border)] px-4 text-xs font-semibold text-[var(--text-primary)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)]">Try Password Again</button>}
                     
                     {mode === 'gallery' && !isClosed && !isRateLimited && (
-                        <button type="submit" disabled={verifyMutation.isPending || pin.length < 4} className="mt-6 flex h-10 w-full items-center justify-center gap-2 rounded-lg bg-[var(--accent)] text-[10px] font-black uppercase tracking-[0.14em] text-[var(--bg-deep)] transition-opacity disabled:opacity-45">
+                        <button type="submit" disabled={verifyMutation.isPending} aria-live="polite" className="mt-3 flex h-12 w-full items-center justify-center gap-2 rounded-md bg-[var(--accent)] text-xs font-bold text-[var(--bg-deep)] transition-opacity hover:opacity-85 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)] disabled:opacity-45">
                             {verifyMutation.isPending ? <Loader2 size={14} aria-hidden="true" className="animate-spin" /> : <Lock size={14} aria-hidden="true" />}
-                            Unlock gallery
+                            {verifyMutation.isPending ? 'Checking password…' : 'Unlock Photo Selection'}
                         </button>
                     )}
                     {mode === 'edited' && (
-                        <button type="submit" disabled={verifyEdited.isPending || editResultsPassword.trim().length < 6} className="mt-2 flex h-10 w-full items-center justify-center gap-2 rounded-lg bg-[var(--accent)] text-[10px] font-black uppercase tracking-[0.14em] text-[var(--bg-deep)] disabled:opacity-45">
-                            {verifyEdited.isPending ? <Loader2 size={14} aria-hidden="true" className="animate-spin" /> : <Download size={14} aria-hidden="true" />} Open Edited Photos
+                        <button type="submit" disabled={verifyEdited.isPending} aria-live="polite" className="mt-3 flex h-12 w-full items-center justify-center gap-2 rounded-md bg-[var(--accent)] text-xs font-bold text-[var(--bg-deep)] transition-opacity hover:opacity-85 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)] disabled:opacity-45">
+                            {verifyEdited.isPending ? <Loader2 size={14} aria-hidden="true" className="animate-spin" /> : <Lock size={14} aria-hidden="true" />} {verifyEdited.isPending ? 'Checking password…' : 'Unlock Edited Photos'}
                         </button>
                     )}
-                    {editResultsStatus.data?.available && !(mode === 'gallery' && editedSessionAvailable) && <button type="button" onClick={() => { setMode((current) => current === 'gallery' ? 'edited' : 'gallery'); setError(''); }} className="mt-4 text-xs font-semibold text-[var(--text-secondary)] underline underline-offset-4">
-                        {mode === 'gallery' ? 'Have an edited photos password?' : 'Back to gallery PIN'}
+                    {editResultsStatus.data?.available && !(mode === 'gallery' && editedSessionAvailable) && <button type="button" onClick={() => { setMode((current) => current === 'gallery' ? 'edited' : 'gallery'); setError(''); }} className="mt-3 inline-flex min-h-11 items-center justify-center text-xs font-semibold text-[var(--text-secondary)] underline underline-offset-4 hover:text-[var(--text-primary)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)]">
+                        {mode === 'gallery' ? 'Use Edited Photos password' : 'Use Photo Selection password'}
                     </button>}
                     {mode === 'gallery' && editedSessionAvailable && onBackToEdited && <button type="button" onClick={onBackToEdited} className="mt-4 block w-full text-xs font-semibold text-[var(--text-secondary)] underline underline-offset-4">Back to Edited Photos</button>}
                 </form>
@@ -158,6 +156,7 @@ export function PinGate({
 }
 
 export function GalleryLockedScreen({
+    title,
     expired,
     contactUrl,
     theme,
@@ -165,6 +164,7 @@ export function GalleryLockedScreen({
     hasEditResults = false,
     onAccessEditedPhotos,
 }: {
+    title?: string;
     expired: boolean;
     contactUrl: string | null;
     theme: GalleryTheme;
@@ -173,13 +173,11 @@ export function GalleryLockedScreen({
     onAccessEditedPhotos?: () => void;
 }) {
     return (
-        <main style={theme === 'black' ? BLACK_THEME : WHITE_THEME} className="min-h-screen bg-[var(--bg-deep)] font-sans text-[var(--text-primary)]">
-            <div className="absolute right-5 top-5"><ThemeToggle theme={theme} onToggle={onToggleTheme} /></div>
-            <section className="flex min-h-screen items-center justify-center px-5 py-12 text-center">
-                <div className="box-border min-h-[330px] w-full max-w-sm border border-[var(--border)] bg-[var(--bg-card)] px-6 py-8 shadow-2xl">
-                    <div className="mb-6 flex justify-center"><OrbitLogo theme={theme} /></div>
-                    <p className="label-xs text-[var(--accent)]">PRIVATE CLIENT GALLERY</p>
-                    <h1 className="mt-3 font-display text-2xl font-medium">{expired ? 'Selection Closed' : 'Gallery Locked'}</h1>
+        <main style={theme === 'black' ? BLACK_THEME : WHITE_THEME} className="flex min-h-dvh flex-col bg-[var(--bg-deep)] font-sans text-[var(--text-primary)]">
+            <AccessHeader theme={theme} onToggleTheme={onToggleTheme} title={title} />
+            <section className="flex flex-1 items-center justify-center px-5 py-12 text-center">
+                <div className="box-border w-full max-w-sm border border-[var(--border)] bg-[var(--bg-card)] px-6 py-8 shadow-2xl">
+                    <h1 className="font-display text-2xl font-medium">{expired ? 'Selection Closed' : 'Gallery Locked'}</h1>
                     {contactUrl && <a href={contactUrl} target="_blank" rel="noreferrer" className="mt-4 inline-flex h-10 w-full items-center justify-center gap-2 rounded-lg border border-[var(--border)] bg-[var(--bg-card)] text-xs font-bold text-[var(--text-primary)] transition-colors hover:border-[var(--accent)]"><MessageCircle size={14} /> Contact admin on WhatsApp</a>}
                     {hasEditResults && onAccessEditedPhotos && <button type="button" onClick={onAccessEditedPhotos} className="mt-4 inline-flex h-10 w-full items-center justify-center gap-2 rounded-lg border border-[var(--border)] bg-[var(--bg-card)] text-xs font-bold text-[var(--text-primary)] transition-colors hover:border-[var(--accent)]"><Download size={14} /> Access edited photos</button>}
                     <p className="mx-auto mt-6 max-w-xs text-xs leading-5 text-[var(--text-muted)]">{expired ? 'The selection deadline has ended. Please contact the admin if you need more time.' : 'This gallery is currently locked. Please contact the admin to unlock access.'}</p>

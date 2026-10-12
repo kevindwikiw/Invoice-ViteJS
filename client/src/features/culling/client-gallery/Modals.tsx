@@ -1,41 +1,18 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { AlertCircle, Check, CheckSquare, ChevronLeft, ChevronRight, Clock3, Images, Loader2, MessageCircle, QrCode, ScanFace, Send, X } from 'lucide-react';
 import clsx from 'clsx';
 import { GalleryModal } from '../../../components/GalleryModal';
 
-import { calculateAddonQuote, cullingTutorialImageUrl, createQrisPayment, type QrisPaymentResponse } from '../culling.public';
-import type { DiscountRule } from '../culling.types';
+import { calculateAddonQuote, cullingTutorialImageUrl, createQrisPayment, galleryThumbnailUrl, type QrisPaymentResponse } from '../culling.public';
+import type { DiscountRule, GalleryPhoto } from '../culling.types';
 
-import { idrFormat } from './constants';
+import { BLACK_THEME, WHITE_THEME, idrFormat } from './constants';
 import { QrisModal } from './QrisModal';
 import { BeforeAfterSlider as ComparisonSlider } from './BeforeAfterSlider';
 import type { GalleryTheme } from './types';
 
-const pendingTutorialImagePreloads = new Set<HTMLImageElement>();
-
-function preloadTutorialImage(url: string, priority: 'high' | 'low'): Promise<void> {
-    return new Promise<void>((resolve, reject) => {
-        const image = new Image();
-        pendingTutorialImagePreloads.add(image);
-        image.decoding = 'async';
-        image.fetchPriority = priority;
-        image.onload = () => {
-            pendingTutorialImagePreloads.delete(image);
-            if (typeof image.decode !== 'function') {
-                resolve();
-                return;
-            }
-            void image.decode().catch(() => undefined).finally(resolve);
-        };
-        image.onerror = () => {
-            pendingTutorialImagePreloads.delete(image);
-            reject(new Error('Unable to preload tutorial image.'));
-        };
-        image.src = url;
-    });
-}
-
 export function RequestMoreModal({
+    theme,
     galleryId,
     requestedCount,
     selectedCount,
@@ -47,6 +24,7 @@ export function RequestMoreModal({
     onClose,
     onPaymentSuccess,
 }: {
+    theme: GalleryTheme;
     galleryId?: string | number;
     requestedCount: number;
     selectedCount: number;
@@ -62,6 +40,9 @@ export function RequestMoreModal({
     const [qrisLoading, setQrisLoading] = useState(false);
     const [qrisError, setQrisError] = useState<string | null>(null);
     const [qrisPayment, setQrisPayment] = useState<QrisPaymentResponse | null>(null);
+    const [customAmountDraft, setCustomAmountDraft] = useState(String(requestedCount));
+
+    useEffect(() => setCustomAmountDraft(String(requestedCount)), [requestedCount]);
 
     const handlePayQris = async () => {
         if (!galleryId) return;
@@ -79,46 +60,44 @@ export function RequestMoreModal({
 
     return (
         <>
-            {!qrisPayment && <GalleryModal title="Request more edited photos" close={onClose} busy={qrisLoading} widthClass="max-w-sm" layerClass="z-[130]">
+            {!qrisPayment && <GalleryModal title="Request More Photos" close={onClose} busy={qrisLoading} style={theme === 'black' ? BLACK_THEME : WHITE_THEME} widthClass="max-w-sm" layerClass="z-[130]">
                 <div className="text-[var(--text-primary)]">
-                    <p className="text-[9px] font-bold uppercase tracking-[0.14em] text-[var(--text-muted)]">EDITING ADD-ON</p>
-                    <h3 className="mt-1 font-display text-xl">Keep More Favorites</h3>
-                    <p className="mt-2 text-xs leading-5 text-[var(--text-muted)]">Choose how many additional photos you want Orbit to edit.</p>
+                    <p className="text-sm leading-5 text-[var(--text-secondary)]">Add editing slots to this gallery. Choose a package or enter a custom amount.</p>
 
-                <div className="mt-5 grid grid-cols-3 gap-2">
+                <div role="group" aria-label="Additional photo packages" className="mt-5 grid grid-cols-3 gap-2">
                     {[5, 10, 20].map((count) => {
                         const packageQuote = calculateAddonQuote(count, unitPrice, discountRules);
                         const selected = requestedCount === count;
                         const hasDiscount = packageQuote.discountPercent > 0;
+                        const savingsTone = selected
+                            ? theme === 'black' ? 'text-[#086c61]' : 'text-[#9be4d6]'
+                            : theme === 'black' ? 'text-[#9be4d6]' : 'text-[#086c61]';
                         return (
-                            <button key={count} type="button" onClick={() => onChange(count)} className={clsx('relative flex min-h-[86px] flex-col items-center justify-center rounded-lg border px-1.5 py-2 text-center transition-[border-color,background-color,color,transform] hover:-translate-y-0.5', selected ? 'border-[var(--accent)] bg-[var(--accent)] text-[var(--bg-deep)]' : 'border-[var(--border)] text-[var(--text-secondary)] hover:border-[var(--accent)]')}>
-                                {count === 10 && <span className={clsx('mb-1 text-[8px] font-black uppercase tracking-[0.1em]', selected ? 'text-[var(--bg-deep)]/65' : 'text-[var(--text-primary)]')}>Popular</span>}
-                                {count === 20 && <span className={clsx('mb-1 text-[8px] font-black uppercase tracking-[0.1em]', selected ? 'text-[var(--bg-deep)]/65' : 'text-[var(--text-primary)]')}>Best value</span>}
-                                <strong className="text-xs">+{count} photos</strong>
-                                {hasDiscount && (
-                                    <span className={clsx('mt-1 rounded-full px-1.5 py-0.5 text-[8px] font-black uppercase tracking-[0.08em]', selected ? 'bg-[var(--bg-deep)]/10 text-[var(--bg-deep)]/70' : 'bg-emerald-500/10 text-emerald-400')}>
-                                        Save {packageQuote.discountPercent}%
-                                    </span>
-                                )}
-                                <span className="mt-1 flex min-h-[24px] flex-col items-center justify-center leading-tight">
-                                    {hasDiscount && <span className={clsx('text-[8px] tabular-nums line-through', selected ? 'text-[var(--bg-deep)]/45' : 'text-[var(--text-muted)]')}>{idrFormat.format(packageQuote.normalTotal)}</span>}
-                                    <span className="text-[9px] font-bold tabular-nums">{idrFormat.format(packageQuote.total)}</span>
-                                </span>
+                            <button key={count} type="button" disabled={qrisLoading} aria-pressed={selected} onClick={() => onChange(count)} className={clsx('relative flex h-24 min-w-0 flex-col items-center justify-center rounded-md border px-1.5 py-2 text-center transition-[border-color,background-color,color] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)] disabled:cursor-wait', selected ? 'border-[var(--accent)] bg-[var(--accent)] text-[var(--bg-deep)]' : 'border-[var(--border)] text-[var(--text-secondary)] hover:border-[var(--accent)] hover:bg-[var(--bg-hover)]')}>
+                                {hasDiscount && <span className={clsx('absolute right-1.5 top-1.5 text-[10px] font-semibold', savingsTone)}>Save {packageQuote.discountPercent}%</span>}
+                                <strong className="text-lg leading-5">+{count}</strong>
+                                <span className="text-[11px]">photos</span>
+                                <span className="mt-1 max-w-full text-xs font-bold tabular-nums">{idrFormat.format(packageQuote.total)}</span>
                             </button>
                         );
                     })}
                 </div>
 
                 <label className="mt-3 block">
-                    <span className="text-[9px] font-bold uppercase tracking-[0.12em] text-[var(--text-muted)]">Custom amount</span>
-                    <input type="number" name="additional-photo-count" autoComplete="off" inputMode="numeric" min="1" max="500" value={requestedCount} onChange={(event) => onChange(Math.min(500, Math.max(1, Number(event.currentTarget.value) || 1)))} className="mt-1.5 h-11 w-full rounded-lg border border-[var(--border)] bg-[var(--bg-deep)] px-3 text-sm outline-none focus:border-[var(--accent)]" />
+                    <span className="text-xs font-medium text-[var(--text-secondary)]">Custom amount</span>
+                    <input type="number" name="additional-photo-count" autoComplete="off" inputMode="numeric" min="1" max="500" step="1" disabled={qrisLoading} value={customAmountDraft} onChange={(event) => {
+                        const next = event.currentTarget.value;
+                        setCustomAmountDraft(next);
+                        const count = Number(next);
+                        if (next !== '' && Number.isFinite(count)) onChange(Math.min(500, Math.max(1, Math.trunc(count))));
+                    }} onBlur={() => setCustomAmountDraft(String(requestedCount))} className="mt-1.5 h-11 w-full rounded-md border border-[var(--border)] bg-[var(--bg-deep)] px-3 text-sm text-[var(--text-primary)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)] disabled:cursor-wait" />
                 </label>
 
                 <dl className="mt-5 divide-y divide-[var(--border)] border-y border-[var(--border)] text-xs">
-                    <div className="flex items-center justify-between py-3"><dt className="text-[var(--text-muted)]">Current selection</dt><dd className="font-semibold">{selectedCount} photos</dd></div>
+                    <div className="flex items-center justify-between py-3"><dt className="text-[var(--text-muted)]">Current selection</dt><dd className="font-semibold">{selectedCount} {selectedCount === 1 ? 'photo' : 'photos'}</dd></div>
                     <div className="flex items-center justify-between py-3"><dt className="text-[var(--text-muted)]">Price per photo</dt><dd className="font-semibold tabular-nums">{idrFormat.format(unitPrice)}</dd></div>
-                    {quote.discountPercent > 0 && <div className="flex items-center justify-between py-3"><dt className="text-[var(--text-primary)]">Bundle discount</dt><dd className="font-semibold text-[var(--text-primary)]">Save {quote.discountPercent}% ({idrFormat.format(quote.savings)})</dd></div>}
-                    <div className="flex items-center justify-between py-3"><dt className="text-[var(--text-muted)]">Estimated total</dt><dd className="flex items-center gap-2 font-bold tabular-nums">{quote.discountPercent > 0 && <span className="font-normal text-[var(--text-muted)] line-through">{idrFormat.format(quote.normalTotal)}</span>}{idrFormat.format(quote.total)}</dd></div>
+                    <div className="flex items-center justify-between gap-3 py-3"><dt className="text-[var(--text-secondary)]">Bundle discount</dt><dd className="flex items-center gap-1.5 text-right tabular-nums">{quote.discountPercent > 0 ? <><span className="text-[var(--text-muted)]">{quote.discountPercent}%</span><strong className={theme === 'black' ? 'text-[#9be4d6]' : 'text-[#086c61]'}>-{idrFormat.format(quote.savings)}</strong></> : <span className="text-[var(--text-muted)]">None</span>}</dd></div>
+                    <div className="flex items-center justify-between gap-3 py-3"><dt className="text-[var(--text-secondary)]">Estimated total</dt><dd className="flex flex-wrap items-baseline justify-end gap-x-2 text-right font-bold tabular-nums">{quote.discountPercent > 0 && <s className="text-[11px] font-medium text-[var(--text-muted)] decoration-2">{idrFormat.format(quote.normalTotal)}</s>}<span className="text-sm text-[var(--text-primary)]">{idrFormat.format(quote.total)}</span></dd></div>
                 </dl>
 
                 {galleryId && qrisEnabled ? (
@@ -126,15 +105,15 @@ export function RequestMoreModal({
                         type="button"
                         disabled={qrisLoading}
                         onClick={handlePayQris}
-                        className="mt-5 flex h-11 w-full items-center justify-center gap-2 rounded-xl bg-[var(--accent)] text-xs font-black uppercase tracking-wider text-[var(--bg-deep)] shadow-md transition-[opacity,transform] hover:opacity-90 active:scale-[0.99] disabled:opacity-50 motion-reduce:transition-none"
+                        className="mt-5 flex h-11 w-full items-center justify-center gap-2 rounded-md bg-[var(--accent)] text-sm font-semibold text-[var(--bg-deep)] transition-opacity hover:opacity-85 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)] disabled:opacity-50 motion-reduce:transition-none"
                     >
                         {qrisLoading ? <Loader2 size={15} aria-hidden="true" className="animate-spin motion-reduce:animate-none" /> : <QrCode size={16} aria-hidden="true" />}
-                        <span>Pay Instantly via QRIS</span>
+                        <span>{qrisLoading ? 'Preparing QRIS…' : 'Pay via QRIS'}</span>
                     </button>
                 ) : null}
 
                 {qrisError && (
-                    <p role="alert" className="mt-2 text-center text-xs text-rose-400">{qrisError}</p>
+                    <p role="alert" className="mt-2 text-xs leading-5 text-[var(--text-primary)]">{qrisError} You can retry or request via WhatsApp.</p>
                 )}
 
                 <a
@@ -142,18 +121,19 @@ export function RequestMoreModal({
                     target="_blank"
                     rel="noreferrer"
                     onClick={onClose}
-                    className="mt-2 flex h-11 w-full items-center justify-center gap-2 rounded-xl border border-[var(--border)] text-[10px] font-bold uppercase tracking-wider text-[var(--text-secondary)] transition-colors hover:border-[var(--accent)] hover:text-white"
+                    className="mt-2 flex h-11 w-full items-center justify-center gap-2 rounded-md border border-[var(--border)] text-sm font-medium text-[var(--text-primary)] transition-[background-color,border-color] hover:border-[var(--accent)] hover:bg-[var(--bg-hover)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)]"
                 >
-                    <MessageCircle size={13} aria-hidden="true" /> Request via WhatsApp
+                    <MessageCircle size={16} aria-hidden="true" /> Request via WhatsApp
                 </a>
-                <p className="mt-2.5 text-center text-[10px] leading-4 text-[var(--text-muted)]">
-                    {qrisEnabled ? 'QRIS payment opens the additional selection quota automatically.' : 'QRIS is unavailable for this gallery. Send the request through WhatsApp instead.'}
+                <p className="mt-2.5 text-center text-xs leading-5 text-[var(--text-secondary)]">
+                    {qrisEnabled ? 'Your photo limit updates automatically after payment.' : 'QRIS is unavailable for this gallery. Request more photos through WhatsApp.'}
                 </p>
                 </div>
             </GalleryModal>}
 
             {qrisPayment && (
                 <QrisModal
+                    theme={theme}
                     payment={qrisPayment}
                     onPaymentSuccess={() => {
                         onPaymentSuccess?.();
@@ -167,168 +147,147 @@ export function RequestMoreModal({
 }
 
 export function SubmitConfirmationModal({
+    theme,
     selectedCount,
+    photos,
+    galleryId,
+    token,
     pending,
     error,
     onConfirm,
     onClose,
 }: {
+    theme: GalleryTheme;
     selectedCount: number;
+    photos: GalleryPhoto[];
+    galleryId: string;
+    token: string;
     pending: boolean;
     error?: string;
     onConfirm: () => void;
     onClose: () => void;
 }) {
     const clearsSelection = selectedCount === 0;
+    const [reviewPage, setReviewPage] = useState(1);
+    const reviewPageSize = 10;
+    const reviewPageCount = Math.ceil(photos.length / reviewPageSize);
+    const visiblePhotos = photos.slice((reviewPage - 1) * reviewPageSize, reviewPage * reviewPageSize);
+    const reviewScrollRef = useRef<HTMLDivElement>(null);
+    const errorRef = useRef<HTMLDivElement>(null);
+    const changeReviewPage = (page: number) => {
+        setReviewPage(page);
+        reviewScrollRef.current?.scrollTo({ top: 0, behavior: 'instant' });
+    };
+
+    useEffect(() => {
+        if (error) errorRef.current?.focus();
+    }, [error]);
 
     return (
-        <GalleryModal title={clearsSelection ? 'Clear Submitted Selection' : 'Submit Selected Photos'} close={onClose} busy={pending} widthClass="max-w-sm" layerClass="z-[130]" footer={<>
-            <button type="button" disabled={pending} onClick={onClose} className="h-11 flex-1 rounded-lg border border-[var(--border)] text-[10px] font-bold uppercase tracking-[0.12em] text-[var(--text-secondary)] transition-colors hover:border-[var(--accent)] hover:text-[var(--text-primary)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)] disabled:opacity-40">Cancel</button>
-            <button type="button" disabled={pending} onClick={onConfirm} className="flex h-11 flex-1 items-center justify-center gap-2 rounded-lg bg-[var(--accent)] text-[10px] font-black uppercase tracking-[0.12em] text-[var(--bg-deep)] transition-opacity hover:opacity-85 focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)] disabled:opacity-45">
-                {pending ? <Loader2 size={13} aria-hidden="true" className="animate-spin motion-reduce:animate-none" /> : <Send size={13} aria-hidden="true" />}
-                {pending ? 'Submitting…' : clearsSelection ? 'Clear selection' : `Submit ${selectedCount}`}
-            </button>
-        </>}>
-                <div className="text-center text-[var(--text-primary)]">
-                    <p className="text-[9px] font-bold uppercase tracking-[0.14em] text-[var(--text-muted)]">FINAL CHECK</p>
-                    <p className="font-display text-5xl tabular-nums text-[var(--text-primary)]">{selectedCount}</p>
-                    <p className="mt-1 text-[10px] font-bold uppercase tracking-[0.14em] text-[var(--text-muted)]">{selectedCount === 1 ? 'Photo selected' : 'Photos selected'}</p>
-                    <p className="mx-auto mt-5 max-w-xs text-xs leading-5 text-[var(--text-secondary)]">
-                        {clearsSelection ? 'This removes all previously submitted photos. You can select and submit them again later.' : 'Are you sure these are the photos you want to submit? Orbit will receive the selected filenames.'}
-                    </p>
-                    {error && <div role="alert" className="mt-4 flex items-start gap-2 border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-left text-xs leading-5 text-rose-300"><AlertCircle size={14} aria-hidden="true" className="mt-0.5 shrink-0" />{error}</div>}
-                </div>
+        <GalleryModal title={clearsSelection ? 'Review Selection Changes' : 'Review Selection'} close={onClose} busy={pending} style={theme === 'black' ? BLACK_THEME : WHITE_THEME} scrollRef={reviewScrollRef} widthClass="max-w-2xl" layerClass="z-[130]" footer={<div className="w-full">
+            {reviewPageCount > 1 && <nav aria-label="Review pages" className="flex items-center justify-between gap-2 border-b border-[var(--border)] pb-2">
+                <button type="button" aria-label="Previous review page" title="Previous page" disabled={reviewPage === 1 || pending} onClick={() => changeReviewPage(reviewPage - 1)} className="flex h-11 w-11 shrink-0 items-center justify-center rounded-md text-[var(--text-secondary)] transition-colors hover:bg-[var(--bg-hover)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)] disabled:opacity-35"><ChevronLeft size={18} aria-hidden="true" /></button>
+                <span role="status" aria-live="polite" className="min-w-0 text-center text-xs tabular-nums text-[var(--text-secondary)]">{(reviewPage - 1) * reviewPageSize + 1}–{Math.min(reviewPage * reviewPageSize, photos.length)} of {photos.length}</span>
+                <button type="button" aria-label="Next review page" title="Next page" disabled={reviewPage === reviewPageCount || pending} onClick={() => changeReviewPage(reviewPage + 1)} className="flex h-11 w-11 shrink-0 items-center justify-center rounded-md text-[var(--text-secondary)] transition-colors hover:bg-[var(--bg-hover)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)] disabled:opacity-35"><ChevronRight size={18} aria-hidden="true" /></button>
+            </nav>}
+            <div className={clsx('flex items-center justify-end gap-2', reviewPageCount > 1 && 'pt-2')}>
+                <button type="button" disabled={pending} onClick={onClose} className="h-11 w-20 shrink-0 rounded-md border border-[var(--border)] text-sm font-medium text-[var(--text-secondary)] transition-colors hover:border-[var(--accent)] hover:text-[var(--text-primary)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)] disabled:opacity-40 sm:w-auto sm:px-6">Back</button>
+                <button type="button" disabled={pending} onClick={onConfirm} className="flex h-11 min-w-0 flex-1 items-center justify-center gap-2 whitespace-nowrap rounded-md bg-[var(--accent)] px-3 text-sm font-semibold text-[var(--bg-deep)] transition-opacity hover:opacity-85 focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)] disabled:opacity-45 sm:flex-none sm:px-6">
+                    {pending ? <Loader2 size={13} aria-hidden="true" className="animate-spin motion-reduce:animate-none" /> : <Send size={13} aria-hidden="true" />}
+                    {pending ? 'Submitting…' : clearsSelection ? 'Clear Selection' : 'Submit for Editing'}
+                </button>
+            </div>
+        </div>}>
+            <div className="text-[var(--text-primary)]">
+                <p className="text-lg font-semibold tabular-nums">{selectedCount} {selectedCount === 1 ? 'photo' : 'photos'} selected</p>
+                <p className="mt-1 text-sm leading-5 text-[var(--text-secondary)]">{clearsSelection ? 'This removes the previous submission. Go back to keep it.' : 'Check your selection before submitting it for editing.'}</p>
+                {!clearsSelection && <div className="mt-5 grid grid-cols-2 gap-x-2 gap-y-4 sm:grid-cols-3 sm:gap-x-3 md:grid-cols-4" aria-label="Selected photos">
+                    {visiblePhotos.map((photo, index) => <figure key={photo.driveFileId} className="min-w-0">
+                        <img src={galleryThumbnailUrl(galleryId, photo.driveFileId, token, photo.photoToken)} alt={photo.filename} width={240} height={240} loading={index < 4 ? 'eager' : 'lazy'} decoding="async" className="aspect-square w-full border border-[var(--border)] bg-[var(--bg-elevated)] object-cover" />
+                        <figcaption className="mt-1.5 flex min-w-0 items-baseline justify-between gap-2 text-[11px] text-[var(--text-secondary)]"><span className="min-w-0 truncate" title={photo.filename}>{photo.filename}</span><span className="shrink-0 tabular-nums text-[var(--text-muted)]">#{String((reviewPage - 1) * reviewPageSize + index + 1).padStart(2, '0')}</span></figcaption>
+                    </figure>)}
+                </div>}
+                {error && <div ref={errorRef} role="alert" tabIndex={-1} className="mt-4 flex items-start gap-2 border border-[var(--border)] bg-[var(--bg-elevated)] px-3 py-2 text-left text-sm leading-5 text-[var(--text-primary)] outline-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)]"><AlertCircle size={16} aria-hidden="true" className="mt-0.5 shrink-0" />{error}</div>}
+            </div>
         </GalleryModal>
     );
 }
 
-function BeforeAfterSlider({ galleryId, token, slot, version }: { galleryId: string; token: string; slot: number; version?: string | null }) {
-    return <ComparisonSlider key={`${galleryId}-${slot}`} beforeUrl={cullingTutorialImageUrl(galleryId, token, slot, 'before', version)} afterUrl={cullingTutorialImageUrl(galleryId, token, slot, 'after', version)} />;
-}
-
-type TutorialIntroPhase = 'loading' | 'handoff' | 'ready';
-
-function TutorialIntro({ theme, onHandoffStart, onComplete, onClose }: { theme: GalleryTheme; onHandoffStart: () => void; onComplete: () => void; onClose: () => void }) {
-    const [logoFailed, setLogoFailed] = useState(false);
-    const rootRef = useRef<HTMLDivElement>(null);
-    const logoRef = useRef<HTMLDivElement>(null);
-    const progressRef = useRef<HTMLDivElement>(null);
-    const progressFillRef = useRef<HTMLDivElement>(null);
-    const percentageRef = useRef<HTMLSpanElement>(null);
-
+function DelayedSampleLoading() {
+    const [visible, setVisible] = useState(false);
     useEffect(() => {
-        const root = rootRef.current;
-        const logo = logoRef.current;
-        if (!root || !logo || typeof root.animate !== 'function') return;
-        const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
-        const animations = [root.animate([{ opacity: 1 }, { opacity: 0 }], {
-            delay: 3800, duration: 200, easing: 'cubic-bezier(0.23, 1, 0.32, 1)', fill: 'forwards',
-        })];
-        if (!reducedMotion.matches) {
-            animations.push(logo.animate([
-                { opacity: 0, transform: 'scale(0.96)' },
-                { opacity: 1, transform: 'scale(1)' },
-            ], { duration: 350, easing: 'cubic-bezier(0.23, 1, 0.32, 1)' }));
-            animations.push(logo.animate([
-                { transform: 'scale(1)' },
-                { transform: 'scale(1.025)' },
-                { transform: 'scale(1)' },
-            ], { delay: 350, duration: 1725, iterations: 2, easing: 'cubic-bezier(0.77, 0, 0.175, 1)' }));
-        }
-        const cancelAnimations = () => animations.forEach((animation) => animation.cancel());
-        reducedMotion.addEventListener('change', cancelAnimations);
-        return () => {
-            cancelAnimations();
-            reducedMotion.removeEventListener('change', cancelAnimations);
-        };
+        const timer = window.setTimeout(() => setVisible(true), 200);
+        return () => window.clearTimeout(timer);
     }, []);
 
-    useEffect(() => {
-        const startedAt = performance.now();
-        const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
-        let previousPercent = -1;
-        let frame = 0;
-        const renderProgress = (percent: number, progress: number) => {
-            if (percent !== previousPercent) {
-                if (percentageRef.current) percentageRef.current.textContent = `${percent}%`;
-                progressRef.current?.setAttribute('aria-valuenow', String(percent));
-                previousPercent = percent;
-            }
-            if (progressFillRef.current) {
-                progressFillRef.current.style.transform = `scaleX(${reducedMotion.matches ? percent / 100 : progress})`;
-            }
-        };
-        const updateProgress = () => {
-            const progress = Math.min(1, (performance.now() - startedAt) / 3800);
-            const percent = Math.floor(progress * 100);
-            renderProgress(percent, progress);
-            if (progress < 1) frame = requestAnimationFrame(updateProgress);
-        };
-        frame = requestAnimationFrame(updateProgress);
-        const handoffTimeout = setTimeout(() => {
-            renderProgress(100, 1);
-            onHandoffStart();
-        }, 3_800);
-        const completeTimeout = setTimeout(onComplete, 4_000);
-        return () => {
-            cancelAnimationFrame(frame);
-            clearTimeout(handoffTimeout);
-            clearTimeout(completeTimeout);
-        };
-    }, [onComplete, onHandoffStart]);
-
-    return (
-        <div ref={rootRef} data-testid="tutorial-intro" className="absolute inset-0 z-10 flex items-center justify-center bg-[var(--bg-deep)] px-6 text-[var(--text-primary)]">
-            <button type="button" autoFocus onClick={onClose} aria-label="Close tutorial" className="absolute right-4 top-4 flex h-10 w-10 items-center justify-center rounded-md border border-[var(--border)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)]"><X size={15} /></button>
-            <div className="w-full max-w-sm text-center">
-                <div ref={logoRef} data-testid="tutorial-intro-logo" className="mx-auto mb-8 aspect-[791/296] w-60 max-w-full origin-center sm:w-80">
-                    <img src="/logo.png" alt="The Orbit Photo" width={791} height={296} fetchPriority="high" decoding="async" onError={() => setLogoFailed(true)} className={clsx('h-full w-full object-contain', logoFailed && 'invisible')} style={{ filter: theme === 'black' ? 'brightness(0) invert(1)' : 'brightness(0)' }} />
-                </div>
-                <h2 className="font-display text-2xl">Your Gallery Awaits</h2>
-                <div className="mx-auto mt-5 flex max-w-xs items-center justify-between text-xs text-[var(--text-muted)]">
-                    <span>Opening Your Guide</span>
-                    <span ref={percentageRef} aria-hidden="true" className="w-10 text-right tabular-nums">0%</span>
-                </div>
-                <div ref={progressRef} role="progressbar" aria-label="Opening your guide" aria-valuemin={0} aria-valuemax={100} aria-valuenow={0} className="mx-auto mt-3 h-1 max-w-xs overflow-hidden bg-[var(--border)]">
-                    <div ref={progressFillRef} className="h-full origin-left bg-[var(--accent)]" style={{ transform: 'scaleX(0)' }} />
-                </div>
-            </div>
+    if (!visible) return null;
+    return <div data-testid="tutorial-image-loading" role="status" aria-live="polite" className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center">
+        <div className="flex items-center gap-2 rounded-md bg-black/75 px-3 py-2 text-xs font-medium text-white shadow-sm">
+            <Loader2 size={17} strokeWidth={1.8} aria-hidden="true" className="animate-[spin_700ms_linear_infinite] motion-reduce:animate-none" />
+            <span>Loading sample photos…</span>
         </div>
-    );
+    </div>;
 }
 
-export function TutorialModal({ galleryId, token, tutorialSampleSlots, tutorialSampleVersion, theme, showIntro = false, onClose }: { galleryId: string; token: string; tutorialSampleSlots: number[]; tutorialSampleVersion?: string | null; theme: GalleryTheme; showIntro?: boolean; onClose: () => void }) {
-    const [introPhase, setIntroPhase] = useState<TutorialIntroPhase>(showIntro ? 'loading' : 'ready');
-    const startIntroHandoff = useCallback(() => setIntroPhase((current) => current === 'loading' ? 'handoff' : current), []);
-    const finishIntro = useCallback(() => setIntroPhase('ready'), []);
+function TutorialSamplePreview({ galleryId, token, slot, version }: { galleryId: string; token: string; slot: number; version?: string | null }) {
+    const [visibleSlot, setVisibleSlot] = useState(slot);
+    const [visibleSettled, setVisibleSettled] = useState(false);
+    const [settledSlot, setSettledSlot] = useState<number | null>(null);
+    const switching = slot !== visibleSlot;
+    const incomingSettled = switching && settledSlot === slot;
+
+    useEffect(() => {
+        if (switching) return;
+        setSettledSlot(null);
+    }, [switching]);
+
+    useEffect(() => {
+        if (!incomingSettled) return;
+        const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+        const timer = window.setTimeout(() => {
+            setVisibleSlot(slot);
+            setVisibleSettled(true);
+            setSettledSlot(null);
+        }, reducedMotion ? 0 : 180);
+        return () => window.clearTimeout(timer);
+    }, [incomingSettled, slot]);
+
+    return <div className="relative">
+        {[visibleSlot, ...(switching ? [slot] : [])].map((sampleSlot) => {
+            const incoming = switching && sampleSlot === slot;
+            return <div
+                key={sampleSlot}
+                aria-hidden={incoming ? !incomingSettled : switching}
+                inert={incoming ? !incomingSettled : switching}
+                className={clsx(incoming ? 'absolute inset-0 z-10' : 'relative', 'transition-opacity duration-[180ms] ease-out motion-reduce:transition-none', incoming && !incomingSettled ? 'opacity-0' : 'opacity-100')}
+            >
+                <ComparisonSlider
+                    beforeUrl={cullingTutorialImageUrl(galleryId, token, sampleSlot, 'before', version)}
+                    afterUrl={cullingTutorialImageUrl(galleryId, token, sampleSlot, 'after', version)}
+                    frameClass="max-sm:h-[min(56dvh,28rem)] sm:h-[min(52dvh,28rem)]"
+                    onLoading={incoming ? () => setSettledSlot(null) : () => setVisibleSettled(false)}
+                    onSettled={incoming ? () => setSettledSlot((current) => current === sampleSlot ? current : sampleSlot) : () => setVisibleSettled(true)}
+                />
+            </div>;
+        })}
+        {(switching ? !incomingSettled : !visibleSettled) && <DelayedSampleLoading key={switching ? `switch:${visibleSlot}:${slot}` : `initial:${visibleSlot}`} />}
+    </div>;
+}
+
+
+export function TutorialModal({ galleryId, token, tutorialSampleSlots, tutorialSampleVersion, onClose }: { galleryId: string; token: string; tutorialSampleSlots: number[]; tutorialSampleVersion?: string | null; onClose: () => void }) {
     const hasSamples = tutorialSampleSlots.length > 0;
     const [stepIndex, setStepIndex] = useState(0);
     const [sampleIndex, setSampleIndex] = useState(0);
     const scrollAreaRef = useRef<HTMLDivElement>(null);
-    const panelRef = useRef<HTMLElement>(null);
     const panelCloseButtonRef = useRef<HTMLButtonElement>(null);
     const readyContentRef = useRef<HTMLDivElement>(null);
 
-    useLayoutEffect(() => {
-        const panel = panelRef.current;
-        if (introPhase !== 'handoff' || !panel || typeof panel.animate !== 'function') return;
-        const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-        const animation = panel.animate(reducedMotion
-            ? [{ opacity: 0 }, { opacity: 1 }]
-            : [
-                { opacity: 0, transform: 'translateY(8px) scale(0.985)' },
-                { opacity: 1, transform: 'translateY(0) scale(1)' },
-            ], {
-            duration: 200,
-            easing: 'cubic-bezier(0.23, 1, 0.32, 1)',
-            fill: 'both',
-        });
-        return () => animation.cancel();
-    }, [introPhase]);
-
     useEffect(() => {
-        if (showIntro && introPhase === 'ready') panelCloseButtonRef.current?.focus();
-    }, [introPhase, showIntro]);
+        const previouslyFocused = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+        panelCloseButtonRef.current?.focus();
+        return () => previouslyFocused?.focus();
+    }, []);
 
     useEffect(() => {
         const body = document.body;
@@ -349,16 +308,6 @@ export function TutorialModal({ galleryId, token, tutorialSampleSlots, tutorialS
         };
     }, [onClose]);
 
-    useEffect(() => {
-        const urls = tutorialSampleSlots.flatMap((slot) => [
-            cullingTutorialImageUrl(galleryId, token, slot, 'after', tutorialSampleVersion),
-            cullingTutorialImageUrl(galleryId, token, slot, 'before', tutorialSampleVersion),
-        ]);
-        urls.forEach((url, index) => {
-            void preloadTutorialImage(url, index < 2 ? 'high' : 'low').catch(() => undefined);
-        });
-    }, [galleryId, token, tutorialSampleSlots, tutorialSampleVersion]);
-
     const wizardSteps = [
         ...(hasSamples ? [{ id: 'confidence', label: 'Choose' }] : []),
         { id: 'submit', label: 'Submit' },
@@ -367,7 +316,7 @@ export function TutorialModal({ galleryId, token, tutorialSampleSlots, tutorialS
     const safeStepIndex = Math.min(stepIndex, wizardSteps.length - 1);
     const activeStep = wizardSteps[safeStepIndex];
     const activeSampleSlot = tutorialSampleSlots[sampleIndex] || tutorialSampleSlots[0];
-    const stepTitle = activeStep.id === 'confidence' ? 'Choose With Confidence' : activeStep.id === 'submit' ? 'How to Submit' : 'Ready to Choose';
+    const stepTitle = activeStep.id === 'confidence' ? 'Choose with Confidence' : activeStep.id === 'submit' ? 'How to Submit' : 'Ready to Choose';
 
     useEffect(() => {
         scrollAreaRef.current?.scrollTo({ top: 0 });
@@ -388,13 +337,13 @@ export function TutorialModal({ galleryId, token, tutorialSampleSlots, tutorialS
 
     return (
         <div className="fixed inset-0 z-[130] flex items-center justify-center overscroll-contain bg-black/70 px-2 py-2 sm:px-4 sm:py-4" role="dialog" aria-modal="true" aria-label="How photo selection works" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
-            {introPhase !== 'loading' && <section ref={panelRef} data-testid="tutorial-panel" inert={introPhase === 'handoff'} aria-hidden={introPhase === 'handoff' ? true : undefined} className={clsx('flex h-[calc(100dvh-1rem)] max-h-[calc(100dvh-1rem)] w-[calc(100vw-1rem)] origin-center flex-col overflow-hidden border border-[var(--border)] bg-[var(--bg-card)] text-[var(--text-primary)] shadow-2xl sm:h-[min(56rem,calc(100dvh-2rem))] sm:max-h-[calc(100dvh-2rem)] sm:w-[67vw] sm:max-w-2xl', introPhase === 'handoff' && 'pointer-events-none')}>
-                <header className="flex shrink-0 items-start justify-between gap-4 border-b border-[var(--border)] px-4 py-3.5 sm:px-5 sm:py-4">
+            <section data-testid="tutorial-panel" className="flex h-[calc(100dvh-1rem)] max-h-[calc(100dvh-1rem)] w-[calc(100vw-1rem)] origin-center flex-col overflow-hidden border border-[var(--border)] bg-[var(--bg-card)] text-[var(--text-primary)] shadow-2xl sm:h-[min(56rem,calc(100dvh-2rem))] sm:max-h-[calc(100dvh-2rem)] sm:w-[67vw] sm:max-w-2xl">
+                <header className="flex shrink-0 items-start justify-between gap-2 border-b border-[var(--border)] px-3 py-2.5 sm:gap-4 sm:px-5 sm:py-4">
                     <div>
-                        <p className="text-[9px] font-bold uppercase tracking-[0.14em] text-[var(--text-muted)]">ORBIT GUIDE</p>
-                        <h2 className="mt-1 font-display text-xl">{stepTitle}</h2>
+                        <p className="text-xs font-medium text-[var(--text-muted)]">Photo selection guide</p>
+                        <h2 className="mt-1 font-sans text-lg font-semibold leading-tight text-balance sm:text-xl">{stepTitle}</h2>
                     </div>
-                    <button ref={panelCloseButtonRef} type="button" onClick={onClose} aria-label="Close tutorial" className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md border border-[var(--border)] transition-[transform,border-color] duration-150 ease-out hover:border-[var(--accent)] active:scale-[0.97] motion-reduce:transition-none"><X size={15} /></button>
+                    <button ref={panelCloseButtonRef} type="button" onClick={onClose} aria-label="Close tutorial" className="flex h-11 w-11 shrink-0 items-center justify-center rounded-md border border-[var(--border)] transition-[transform,border-color] duration-150 ease-out hover:border-[var(--accent)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)] active:scale-[0.97] motion-reduce:transition-none"><X size={16} aria-hidden="true" /></button>
                 </header>
 
                 <nav aria-label="Tutorial progress" className="grid shrink-0 border-b border-[var(--border)] px-3 py-2.5 sm:px-5 sm:py-3" style={{ gridTemplateColumns: `repeat(${wizardSteps.length}, minmax(0, 1fr))` }}>
@@ -404,7 +353,7 @@ export function TutorialModal({ galleryId, token, tutorialSampleSlots, tutorialS
                             type="button"
                             onClick={() => goToStep(index)}
                             aria-current={safeStepIndex === index ? 'step' : undefined}
-                            className={clsx('flex min-w-0 items-center justify-center gap-1.5 text-[8px] font-bold uppercase tracking-[0.08em] transition-[transform,color] duration-150 ease-out active:scale-[0.98] motion-reduce:transition-none sm:text-[9px] sm:tracking-[0.1em]', safeStepIndex === index ? 'text-[var(--text-primary)]' : index < safeStepIndex ? 'text-[var(--text-secondary)]' : 'text-[var(--text-muted)]')}
+                            className={clsx('flex min-h-11 min-w-0 items-center justify-center gap-1.5 text-[13px] font-medium transition-colors duration-150 hover:text-[var(--text-primary)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)]', safeStepIndex === index ? 'text-[var(--text-primary)]' : index < safeStepIndex ? 'text-[var(--text-secondary)]' : 'text-[var(--text-muted)]')}
                         >
                             <span className={clsx('flex h-5 w-5 items-center justify-center rounded-full border text-[9px]', safeStepIndex === index ? 'border-[var(--accent)] bg-[var(--accent)] text-[var(--bg-deep)]' : 'border-[var(--border)]')}>{index + 1}</span>
                             <span className="truncate">{step.label}</span>
@@ -416,17 +365,16 @@ export function TutorialModal({ galleryId, token, tutorialSampleSlots, tutorialS
                     {activeStep.id === 'confidence' && (
                         <div data-testid="tutorial-confidence-step">
                             <div className="flex items-center justify-between gap-3">
-                                <p className="text-[9px] font-black uppercase tracking-[0.14em] text-[var(--text-muted)]">Sample {String(sampleIndex + 1).padStart(2, '0')} / {String(tutorialSampleSlots.length).padStart(2, '0')}</p>
-                                <p className="text-[9px] font-bold uppercase tracking-[0.12em] text-[var(--text-muted)]">Before / Edited</p>
+                                <p className="text-[13px] font-medium text-[var(--text-secondary)]">Sample {sampleIndex + 1} of {tutorialSampleSlots.length}</p>
                             </div>
                             <div className="mt-2">
-                                <BeforeAfterSlider key={activeSampleSlot} galleryId={galleryId} token={token} slot={activeSampleSlot} version={tutorialSampleVersion} />
+                                <TutorialSamplePreview galleryId={galleryId} token={token} slot={activeSampleSlot} version={tutorialSampleVersion} />
                             </div>
-                            <p className="mx-auto mt-3 max-w-md text-center text-xs leading-5 text-[var(--text-muted)]">Pick the moments that mean the most. We’ll take care of making them into something lasting.</p>
+                            <p className="mx-auto mt-3 max-w-md text-center text-[13px] leading-5 text-[var(--text-secondary)]">The photos you submit become your edited gallery.</p>
                             {tutorialSampleSlots.length > 1 && (
-                                <div className="mt-4 flex items-center justify-center gap-2" aria-label="Tutorial samples">
+                                <div className="mt-2 flex items-center justify-center" aria-label="Tutorial samples">
                                     {tutorialSampleSlots.map((slot, index) => (
-                                        <button key={slot} type="button" onClick={() => setSampleIndex(index)} aria-label={`View sample ${index + 1}`} aria-current={sampleIndex === index ? 'true' : undefined} className={clsx('h-2 rounded-full transition-[width,background-color] motion-reduce:transition-none', sampleIndex === index ? 'w-6 bg-[var(--accent)]' : 'w-2 bg-[var(--border)] hover:bg-[var(--text-muted)]')} />
+                                        <button key={slot} type="button" onClick={() => setSampleIndex(index)} aria-label={`View sample ${index + 1}`} aria-current={sampleIndex === index ? 'true' : undefined} className="flex h-11 w-11 items-center justify-center rounded-md focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)]"><span aria-hidden="true" className={clsx('h-1.5 rounded-full transition-[width,background-color] motion-reduce:transition-none', sampleIndex === index ? 'w-5 bg-[var(--accent)]' : 'w-1.5 bg-[var(--border)] hover:bg-[var(--text-muted)]')} /></button>
                                     ))}
                                 </div>
                             )}
@@ -447,7 +395,7 @@ export function TutorialModal({ galleryId, token, tutorialSampleSlots, tutorialS
                                 ].map((item, index) => (
                                     <li key={item.title} className="flex items-center gap-3 py-2.5 sm:py-3">
                                         <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-[var(--border)] text-[var(--text-primary)]">{item.icon}</span>
-                                        <div className="min-w-0 pt-0.5"><p className="text-xs font-semibold"><span className="mr-1.5 text-[var(--text-muted)]">{index + 1}.</span>{item.title}</p><p className="mt-0.5 text-[11px] leading-4 text-[var(--text-muted)]">{item.text}</p></div>
+                                        <div className="min-w-0 pt-0.5"><p className="text-[13px] font-semibold"><span className="mr-1.5 text-[var(--text-muted)]">{index + 1}.</span>{item.title}</p><p className="mt-0.5 text-xs leading-5 text-[var(--text-muted)]">{item.text}</p></div>
                                     </li>
                                 ))}
                             </ol>
@@ -458,25 +406,24 @@ export function TutorialModal({ galleryId, token, tutorialSampleSlots, tutorialS
                         <div data-testid="tutorial-ready-step" className="flex min-h-full items-center justify-center py-6 text-center">
                             <div ref={readyContentRef} className="flex w-full flex-col items-center">
                                 <div className="flex h-20 w-20 items-center justify-center rounded-full border border-[var(--accent)] text-[var(--accent)]"><Check size={34} /></div>
-                                <p className="mt-7 font-display text-2xl sm:text-3xl">Ready When You Are</p>
-                                <p className="mx-auto mt-4 max-w-sm text-sm leading-6 text-[var(--text-secondary)] sm:text-base sm:leading-7">Choose the moments that matter, review them in Picked, then submit when you're ready.</p>
+                                <p className="mt-7 font-sans text-2xl font-semibold sm:text-[26px]">Choose Your Photos</p>
+                                <p className="mx-auto mt-4 max-w-sm text-sm leading-6 text-[var(--text-secondary)] sm:text-base sm:leading-7">Mark the photos you want edited, review them in Picked, then submit.</p>
                             </div>
                         </div>
                     )}
                 </div>
 
                 <footer data-testid="tutorial-footer" className="flex shrink-0 items-center justify-between gap-2 border-t border-[var(--border)] bg-[var(--bg-card)] p-3.5 sm:p-4">
-                    <button type="button" disabled={activeStep.id === 'confidence' ? sampleIndex === 0 : safeStepIndex === 0} onClick={() => activeStep.id === 'confidence' ? setSampleIndex((current) => Math.max(0, current - 1)) : goToStep(safeStepIndex - 1)} className="flex h-10 items-center gap-1 rounded-md border border-[var(--border)] px-3 text-[10px] font-bold uppercase tracking-[0.1em] text-[var(--text-secondary)] transition-transform duration-150 ease-out active:scale-[0.97] disabled:invisible motion-reduce:transition-none"><ChevronLeft size={14} /> {activeStep.id === 'confidence' ? 'Previous' : 'Back'}</button>
+                    <button type="button" disabled={activeStep.id === 'confidence' ? sampleIndex === 0 : safeStepIndex === 0} onClick={() => activeStep.id === 'confidence' ? setSampleIndex((current) => Math.max(0, current - 1)) : goToStep(safeStepIndex - 1)} className="flex h-11 items-center gap-1 rounded-md border border-[var(--border)] px-3 text-[13px] font-semibold text-[var(--text-secondary)] transition-transform duration-150 ease-out focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)] active:scale-[0.97] disabled:invisible motion-reduce:transition-none"><ChevronLeft size={15} aria-hidden="true" /> {activeStep.id === 'confidence' ? 'Previous' : 'Back'}</button>
                     {activeStep.id === 'confidence' ? (
-                        <button type="button" onClick={() => sampleIndex < tutorialSampleSlots.length - 1 ? setSampleIndex((current) => current + 1) : goToStep(safeStepIndex + 1)} className="flex h-10 items-center gap-1 rounded-md bg-[var(--accent)] px-3 text-[10px] font-black uppercase tracking-[0.1em] text-[var(--bg-deep)] transition-transform duration-150 ease-out active:scale-[0.97] motion-reduce:transition-none">{sampleIndex < tutorialSampleSlots.length - 1 ? 'Next sample' : 'How to Submit'} <ChevronRight size={14} /></button>
+                        <button type="button" onClick={() => sampleIndex < tutorialSampleSlots.length - 1 ? setSampleIndex((current) => current + 1) : goToStep(safeStepIndex + 1)} className="flex h-11 items-center gap-1 rounded-md bg-[var(--accent)] px-3 text-[13px] font-semibold text-[var(--bg-deep)] transition-transform duration-150 ease-out focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)] active:scale-[0.97] motion-reduce:transition-none">{sampleIndex < tutorialSampleSlots.length - 1 ? 'Next sample' : 'How to Submit'} <ChevronRight size={15} aria-hidden="true" /></button>
                     ) : activeStep.id === 'ready' ? (
-                        <button type="button" onClick={onClose} className="flex h-10 flex-1 items-center justify-center rounded-md bg-[var(--accent)] text-[10px] font-black uppercase tracking-[0.12em] text-[var(--bg-deep)] transition-[transform,opacity] duration-150 ease-out hover:opacity-85 active:scale-[0.98] motion-reduce:transition-none">Start selecting</button>
+                        <button type="button" onClick={onClose} className="flex h-11 flex-1 items-center justify-center rounded-md bg-[var(--accent)] text-[13px] font-semibold text-[var(--bg-deep)] transition-[transform,opacity] duration-150 ease-out hover:opacity-85 focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)] active:scale-[0.98] motion-reduce:transition-none">Start selecting</button>
                     ) : activeStep.id === 'submit' ? (
-                        <button type="button" onClick={() => goToStep(safeStepIndex + 1)} className="flex h-10 items-center gap-1 rounded-md bg-[var(--accent)] px-3 text-[10px] font-black uppercase tracking-[0.1em] text-[var(--bg-deep)] transition-transform duration-150 ease-out active:scale-[0.97] motion-reduce:transition-none">Ready To Choose <ChevronRight size={14} /></button>
+                        <button type="button" onClick={() => goToStep(safeStepIndex + 1)} className="flex h-11 items-center gap-1 rounded-md bg-[var(--accent)] px-3 text-[13px] font-semibold text-[var(--bg-deep)] transition-transform duration-150 ease-out focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)] active:scale-[0.97] motion-reduce:transition-none">Ready To Choose <ChevronRight size={15} aria-hidden="true" /></button>
                     ) : null}
                 </footer>
-            </section>}
-            {introPhase !== 'ready' && <TutorialIntro theme={theme} onHandoffStart={startIntroHandoff} onComplete={finishIntro} onClose={onClose} />}
+            </section>
         </div>
     );
 }

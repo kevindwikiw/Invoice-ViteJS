@@ -56,13 +56,16 @@ test(`edited photos reuse culling tiles and lightbox ${withArchive ? 'with' : 'w
     });
 
     await page.goto('/culling/edited-gallery');
-    await page.getByPlaceholder('Gallery PIN').fill('1234');
-    await page.getByRole('button', { name: 'Unlock gallery', exact: true }).click();
+    await page.getByLabel('Photo Selection password', { exact: true }).fill('1234');
+    await page.getByRole('button', { name: 'Unlock Photo Selection', exact: true }).click();
     await expect(page.getByRole('heading', { name: 'Selection Closed' })).toBeVisible();
-    await page.getByRole('button', { name: 'Have an edited photos password?' }).click();
+    await page.getByRole('button', { name: 'Use Edited Photos password' }).click();
+    await expect(page.getByTestId('gallery-header').getByText('Edited Photos')).toBeVisible();
     await expect(page.getByText('The selection deadline has ended. Please contact the admin if you need more time.')).toHaveCount(0);
-    await page.getByPlaceholder('Edited photos password').fill('orbit-delivery-key');
-    await page.getByRole('button', { name: 'Open Edited Photos' }).click();
+    const editedPassword = page.getByLabel('Edited photos password', { exact: true });
+    await expect(editedPassword).toHaveAttribute('type', 'password');
+    await editedPassword.fill('orbit-delivery-key');
+    await page.getByRole('button', { name: 'Unlock Edited Photos' }).click();
 
     await expect(page.getByRole('heading', { name: 'Edited Photos' })).toHaveCount(0);
     await expect(page.getByRole('navigation', { name: 'Gallery views' }).getByRole('button')).toHaveCount(3);

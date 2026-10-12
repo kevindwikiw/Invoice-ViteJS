@@ -1,26 +1,29 @@
 import { useEffect, useRef } from 'react';
-import { Check, Circle, Loader2, Send } from 'lucide-react';
+import { ArrowRight, Loader2 } from 'lucide-react';
 import clsx from 'clsx';
 
 export type SubmissionStatus = 'ready' | 'dirty' | 'pending' | 'submitted';
 
-const STATUS_CONTENT = {
-    ready: { label: 'Select photos', Icon: Circle },
-    dirty: { label: 'Not submitted', Icon: Circle },
-    pending: { label: 'Submitting…', Icon: Loader2 },
-    submitted: { label: 'Submitted', Icon: Check },
+const STATUS_LABELS = {
+    ready: 'Select photos',
+    dirty: 'Not submitted',
+    pending: 'Submitting…',
+    submitted: 'Submitted',
 } as const;
 
-export function SubmissionAction({ status, disabled, overLimit, onSubmit }: {
+export const submissionStatusLabel = (status: SubmissionStatus) => STATUS_LABELS[status];
+
+export function SubmissionAction({ status, disabled, opening, overLimit, clearsSelection, onReview }: {
     status: SubmissionStatus;
     disabled: boolean;
+    opening: boolean;
     overLimit: boolean;
-    onSubmit: () => void;
+    clearsSelection: boolean;
+    onReview: () => void;
 }) {
-    const { label, Icon } = STATUS_CONTENT[status];
     const pending = status === 'pending';
-    const actionRef = useRef<HTMLDivElement>(null);
-    const statusRef = useRef<HTMLSpanElement>(null);
+    const busy = pending || opening;
+    const actionRef = useRef<HTMLButtonElement>(null);
     const previousStatusRef = useRef(status);
 
     useEffect(() => {
@@ -32,48 +35,27 @@ export function SubmissionAction({ status, disabled, overLimit, onSubmit }: {
             { transform: 'translateY(2px) scale(0.99)' },
             { transform: 'translateY(0) scale(1)' },
         ], { duration: 220, easing: 'cubic-bezier(0.23, 1, 0.32, 1)' });
-        const statusAnimation = statusRef.current?.animate([
-            { opacity: 0.35, transform: 'translateY(3px)' },
-            { opacity: 1, transform: 'translateY(0)' },
-        ], { duration: 180, easing: 'cubic-bezier(0.23, 1, 0.32, 1)' });
-
         return () => {
             actionAnimation?.cancel();
-            statusAnimation?.cancel();
         };
     }, [status]);
 
     return (
-        <div
+        <button
             ref={actionRef}
             data-testid="submission-action"
-            className="flex h-11 w-[188px] shrink-0 items-stretch overflow-hidden rounded-md border border-[var(--border)] bg-[var(--bg-card)] sm:w-[228px]"
+            type="button"
+            disabled={disabled}
+            aria-busy={busy}
+            onClick={onReview}
+            className={clsx(
+                'flex min-h-11 w-[9.5rem] shrink-0 items-center justify-center gap-2 whitespace-nowrap rounded-md border border-[var(--border)] px-3 text-xs font-semibold transition-[color,background-color,opacity,transform] duration-150 active:scale-[0.97] disabled:opacity-45 disabled:active:scale-100 motion-reduce:transition-none sm:w-44 sm:px-4 sm:text-sm',
+                overLimit ? 'bg-rose-500/10 text-rose-400 hover:bg-rose-500/15' : 'bg-[var(--accent)] text-[var(--bg-deep)] hover:opacity-90',
+            )}
         >
-            <span
-                ref={statusRef}
-                data-testid="submission-status"
-                role="status"
-                className={clsx(
-                    'flex min-w-0 flex-1 items-center gap-1 whitespace-nowrap px-1 text-[9px] font-medium sm:gap-1.5 sm:px-3 sm:text-[11px]',
-                    status === 'dirty' ? 'text-[var(--accent)]' : status === 'submitted' ? 'text-[var(--text-primary)]' : 'text-[var(--text-muted)]',
-                )}
-            >
-                <Icon aria-hidden="true" size={status === 'dirty' ? 7 : 11} fill={status === 'dirty' ? 'currentColor' : 'none'} className={clsx('shrink-0', pending && 'animate-spin motion-reduce:animate-none')} />
-                <span className="truncate">{label}</span>
-            </span>
-
-            <button
-                type="button"
-                disabled={disabled}
-                onClick={onSubmit}
-                className={clsx(
-                    'flex w-[66px] shrink-0 items-center justify-center gap-1 whitespace-nowrap px-1 text-[11px] font-semibold transition-[color,background-color,opacity,transform] duration-150 active:scale-[0.97] disabled:opacity-45 disabled:active:scale-100 motion-reduce:transition-none sm:w-24 sm:gap-1.5 sm:px-2 sm:text-[13px]',
-                    overLimit ? 'bg-rose-500/10 text-rose-400 hover:bg-rose-500/15' : 'bg-[var(--accent)] text-[var(--bg-deep)] hover:opacity-90',
-                )}
-            >
-                {pending ? <Loader2 aria-hidden="true" size={13} className="animate-spin motion-reduce:animate-none" /> : <Send aria-hidden="true" size={13} />}
-                Submit
-            </button>
-        </div>
+            {busy ? <Loader2 aria-hidden="true" size={15} className="animate-spin motion-reduce:animate-none" /> : null}
+            {opening ? 'Opening review…' : clearsSelection ? 'Review Changes' : 'Review Selection'}
+            {!busy && <ArrowRight aria-hidden="true" size={15} />}
+        </button>
     );
 }

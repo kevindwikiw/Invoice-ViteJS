@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate, useSearch } from '@tanstack/react-router';
-import { AlertCircle, ArrowLeft, ChevronLeft, ChevronRight, Clock3, Download, Eye, EyeOff, FolderOpen, Instagram, Loader2, Lock, RotateCcw, X } from 'lucide-react';
+import { AlertCircle, ArrowLeft, ChevronLeft, ChevronRight, Clock3, Download, FolderOpen, Instagram, Loader2, Lock, RotateCcw, X } from 'lucide-react';
 import clsx from 'clsx';
 
 import { getEditResults, getEditResultsStatus, resolveEditResultDownload, verifyEditResultsPassword } from '../culling.public';
@@ -11,10 +11,10 @@ import { BLACK_THEME, GALLERY_PAGE_SIZE, WHITE_THEME } from './constants';
 import { GalleryViewTabs, OrbitLogo, ThemeToggle, type GalleryView } from './GalleryChrome';
 import { PhotoTile } from './PhotoTile';
 import { Lightbox } from './Lightbox';
+import { GalleryPasswordField } from './GalleryPasswordField';
 import { canPrefetchPreview, preloadPreviewImage } from './preview-cache';
 import type { GalleryTheme } from './types';
 
-const inputClass = 'h-11 w-full rounded-md border border-[var(--border)] bg-[var(--bg-deep)] px-3 text-center text-sm font-semibold tracking-[0.12em] text-[var(--text-primary)] outline-none placeholder:font-normal placeholder:tracking-normal placeholder:text-[var(--text-muted)] focus:border-[var(--accent)]';
 const previewUrlFor = (photo: EditResultPhoto) => photo.previewUrl;
 const thumbnailUrlFor = (photo: EditResultPhoto) => photo.thumbnailUrl;
 const downloadUrlFor = (photo: EditResultPhoto) => photo.downloadResolveUrl;
@@ -71,7 +71,6 @@ export function EditResultsGrid({
     const { folder: requestedFolder, editedPage } = useSearch({ from: '/culling/$galleryId' });
     const navigate = useNavigate({ from: '/culling/$galleryId' });
     const [password, setPassword] = useState('');
-    const [showPassword, setShowPassword] = useState(false);
     const [error, setError] = useState('');
     const [accessExpiresAt, setAccessExpiresAt] = useState<string | null>(null);
     const [navigation, setNavigation] = useState({ galleryId, token, folderId: requestedFolder ?? null, page: editedPage, photoId: null as string | null });
@@ -215,16 +214,12 @@ export function EditResultsGrid({
     ) : !token || expired ? (
         <section className="mx-auto flex min-h-[60vh] max-w-md flex-col items-center justify-center px-5 py-10 text-center">
             <Lock size={24} className="mb-5 text-[var(--accent)]" />
-            <h1 className="mt-2 font-display text-2xl text-[var(--text-primary)]">Edited Photos</h1>
-            <p className="mt-2 max-w-sm text-sm leading-6 text-[var(--text-muted)]">Enter your edited photos password.</p>
-            <form className="mt-6 flex w-full flex-col gap-2" onSubmit={(event) => { event.preventDefault(); setError(''); verify.mutate(); }}>
-                <div className="relative">
-                    <input type={showPassword ? 'text' : 'password'} aria-label="Edited photos password" autoComplete="current-password" autoCapitalize="none" spellCheck={false} value={password} onChange={(event) => setPassword(event.currentTarget.value.slice(0, 64))} placeholder="Edited photos password" className={`${inputClass} pr-12`} />
-                    <button type="button" onClick={() => setShowPassword((current) => !current)} aria-label={showPassword ? 'Hide edited photos password' : 'Show edited photos password'} aria-pressed={showPassword} className="absolute right-0 top-0 flex h-11 w-11 items-center justify-center rounded-md text-[var(--text-muted)] hover:text-[var(--text-primary)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)]">{showPassword ? <EyeOff size={16} aria-hidden="true" /> : <Eye size={16} aria-hidden="true" />}</button>
-                </div>
-                {error && <p role="alert" className="text-xs text-rose-400">{error}</p>}
-                <button disabled={verify.isPending || password.trim().length < 6} className="inline-flex h-11 items-center justify-center gap-2 rounded-md bg-[var(--accent)] px-4 text-xs font-bold uppercase tracking-[0.08em] text-[var(--bg-deep)] disabled:opacity-45">
-                    {verify.isPending ? <Loader2 size={15} className="animate-spin" /> : <Lock size={15} />} Unlock Edited Photos
+            <h1 className="mt-2 font-display text-[26px] font-medium leading-tight text-[var(--text-primary)]">Enter Password</h1>
+            <p className="mt-2 max-w-sm break-words text-xs text-[var(--text-muted)]">Edited Photos{accessStatus.data?.title ? ` / ${accessStatus.data.title}` : ''}</p>
+            <form aria-busy={verify.isPending} className="mt-7 flex w-full flex-col" onSubmit={(event) => { event.preventDefault(); if (verify.isPending) return; if (password.trim().length < 6) { setError('Enter at least 6 characters.'); return; } setError(''); verify.mutate(); }}>
+                <GalleryPasswordField label="Edited photos password" name="editedPhotosPassword" value={password} onChange={(value) => { setPassword(value); if (error) setError(''); }} error={error} />
+                <button disabled={verify.isPending} aria-live="polite" className="mt-3 inline-flex h-12 items-center justify-center gap-2 rounded-md bg-[var(--accent)] px-4 text-xs font-bold text-[var(--bg-deep)] transition-opacity hover:opacity-85 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)] disabled:opacity-45">
+                    {verify.isPending ? <Loader2 size={15} aria-hidden="true" className="animate-spin" /> : <Lock size={15} aria-hidden="true" />} {verify.isPending ? 'Checking password…' : 'Unlock Edited Photos'}
                 </button>
             </form>
             {expired && <button type="button" onClick={() => { setPassword(''); setError('Edited photos access has expired. Please contact the photographer.'); }} className="mt-3 text-xs text-[var(--text-muted)] underline">Enter password again</button>}

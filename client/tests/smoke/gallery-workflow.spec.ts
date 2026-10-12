@@ -34,7 +34,7 @@ for (const width of [320, 390, 1280]) {
         });
         await page.goto(`/culling/${id}?view=picked`);
         await expect(page.getByRole('status')).toContainText('Loading gallery');
-        await expect(page.getByLabel('Gallery PIN', { exact: true })).toHaveCount(0);
+        await expect(page.getByLabel('Photo Selection password', { exact: true })).toHaveCount(0);
         releaseMetadata();
         const password = page.getByLabel('Edited photos password', { exact: true });
         await expect(password).toBeVisible();
@@ -94,7 +94,10 @@ for (const width of [320, 390, 1280]) {
             const url = new URL(route.request().url());
             if (url.pathname === '/api/auth/me') return route.fulfill({ json: { user } });
             if (url.pathname.endsWith('/permissions')) return route.fulfill({ json: { featurePermissions: user.featurePermissions } });
-            if (url.pathname === '/api/galleries' && route.request().method() === 'GET') return route.fulfill({ json: { items: creates.length && url.searchParams.get('mode') === 'edited' ? [gallery] : [], total: creates.length ? 1 : 0, totalPages: 1 } });
+            if (url.pathname === '/api/galleries' && route.request().method() === 'GET') {
+                const items = creates.length && url.searchParams.get('mode') === 'wedding' ? [gallery] : [];
+                return route.fulfill({ json: { items, total: items.length, totalPages: 1 } });
+            }
             if (url.pathname === '/api/galleries') {
                 creates.push(route.request().postDataJSON());
                 return creates.length === 1 ? route.fulfill({ status: 400, json: { error: 'Check the edited folder URL.' } }) : route.fulfill({ json: gallery });
@@ -123,7 +126,7 @@ for (const width of [320, 390, 1280]) {
         const createDialog = page.getByRole('dialog', { name: 'Create gallery' });
         await createDialog.getByRole('button', { name: 'Wedding', exact: true }).click();
         await expect(createDialog.getByRole('button', { name: 'Wedding', exact: true })).toHaveAttribute('aria-pressed', 'true');
-        await expect(createDialog.getByLabel('Client PIN')).toHaveCount(0);
+        await expect(createDialog.getByLabel('Photo Selection password', { exact: true })).toHaveCount(0);
         await expect(createDialog.getByLabel('Selection window')).toHaveCount(0);
         await createDialog.getByLabel('Gallery name').fill(gallery.title);
         await createDialog.getByLabel('Edited photos Drive folder').fill(gallery.editResultsFolderId);
@@ -132,11 +135,14 @@ for (const width of [320, 390, 1280]) {
         await expect(createDialog.getByRole('alert')).toContainText('Check the edited folder URL');
         await expect(createDialog.getByLabel('Gallery name')).toHaveValue(gallery.title);
         await createDialog.getByRole('button', { name: 'Create gallery', exact: true }).click();
-        await expect(page).toHaveURL(/mode=edited/);
+        await expect(page).toHaveURL(/mode=wedding/);
+        await expect(page.locator('#gallery-list-wedding-tab')).toHaveAttribute('aria-selected', 'true');
+        await expect(page.locator('#gallery-list-selection-tab')).toBeVisible();
         const dialog = page.getByRole('dialog');
         await expect(dialog.getByRole('tab', { name: 'Edited Photos', exact: true })).toHaveAttribute('aria-selected', 'true');
         await expect(dialog.getByRole('tab', { name: 'Photo Selection', exact: true })).toHaveCount(0);
-        for (const label of ['Client PIN', 'Selection window', 'Master limit']) await expect(dialog.getByLabel(label)).toHaveCount(0);
+        await expect(dialog.getByRole('tab', { name: 'Preview Samples', exact: true })).toHaveCount(0);
+        for (const label of ['Photo Selection password', 'Selection window', 'Master limit']) await expect(dialog.getByLabel(label, { exact: true })).toHaveCount(0);
         await expect(dialog.getByRole('button', { name: 'Manage Pairs' })).toHaveCount(0);
         await expect(dialog.getByText('Additional Photos & Payment')).toHaveCount(0);
         expect(creates[1]).toEqual({ workflow: 'delivery_only', title: 'Alya & Rafi Wedding', editResultsFolderId: 'wedding-root' });
@@ -146,8 +152,7 @@ for (const width of [320, 390, 1280]) {
         await expect.poll(() => syncs).toBe(1);
         await dialog.getByRole('tab', { name: 'Edited Photos', exact: true }).focus();
         await page.keyboard.press('ArrowRight');
-        await expect(dialog.getByRole('tab', { name: 'Preview Samples', exact: true })).toBeFocused();
-        await page.keyboard.press('ArrowLeft');
+        await expect(dialog.getByRole('tab', { name: 'Edited Photos', exact: true })).toBeFocused();
         await dialog.getByLabel('Gallery title').fill('Alya & Rafi Wedding Updated');
         await dialog.getByLabel('Password for publication').fill('delivery-password');
         await dialog.getByRole('button', { name: 'open', exact: true }).click();
@@ -169,6 +174,78 @@ for (const width of [320, 390, 1280]) {
         await dialog.locator('.gallery-modal-scroll').evaluate((element) => element.scrollTo({ top: 0 }));
         await page.screenshot({ path: `test-results/wedding-detail-${width}.png` });
     });
+}
+
+for (const width of [320, 390, 1280]) {
+test(`Admin lists Selection Events once and keeps Wedding separate at ${width}px`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 844 });
+    const user = { id: 1, role: 'superadmin', email: 'admin@orbit.test', name: 'Admin', featurePermissions: { manage_client_galleries: true } };
+    await page.addInitScript((value) => localStorage.setItem('orbit_user', JSON.stringify(value)), user);
+    const prewed = { id: 1, publicKey: 'prewed', workflow: 'selection_delivery', title: 'Alya & Rafi Prewedding', driveFolderId: 'source-folder', editResultsFolderId: 'edited-folder', status: 'open', editResultsStatus: 'draft', hasEditResults: true, editResultsPhotoCount: 70, photoCount: 70, selectionCount: 70, createdAt: '2026-10-01', updatedAt: '2026-10-01' };
+    const wedding = { id: 2, publicKey: 'wedding', workflow: 'delivery_only', title: 'Alya & Rafi Wedding', editResultsStatus: 'draft', hasEditResults: false, editResultsPhotoCount: 0, createdAt: '2026-10-02', updatedAt: '2026-10-02' };
+    const patches: Record<string, unknown>[] = [];
+    let editedUnlocks = 0;
+    await page.route('**/api/**', (route) => {
+        const url = new URL(route.request().url());
+        if (url.pathname === '/api/auth/me') return route.fulfill({ json: { user } });
+        if (url.pathname.endsWith('/permissions')) return route.fulfill({ json: { featurePermissions: user.featurePermissions } });
+        if (url.pathname === '/api/galleries') {
+            const mode = url.searchParams.get('mode');
+            const status = url.searchParams.get('status');
+            const items = mode === 'wedding' ? status && status !== 'draft' ? [] : [wedding] : status && status !== prewed.status ? [] : [prewed];
+            return route.fulfill({ json: { items, total: items.length, totalPages: 1 } });
+        }
+        if (url.pathname === '/api/galleries/1' && route.request().method() === 'PATCH') {
+            const patch = route.request().postDataJSON();
+            patches.push(patch);
+            Object.assign(prewed, patch);
+            return route.fulfill({ json: { status: 'updated' } });
+        }
+        if (url.pathname === '/api/galleries/2/edit-results/reset-lock') {
+            editedUnlocks++;
+            return route.fulfill({ json: { status: 'reset' } });
+        }
+        return route.fulfill({ json: {} });
+    });
+    await page.goto('/galleries?mode=wedding');
+    const tabs = page.getByRole('tablist', { name: 'Gallery area' });
+    await expect(tabs.getByRole('tab', { name: 'Wedding' })).toHaveAttribute('aria-selected', 'true');
+    await expect(tabs.getByRole('tab', { name: 'Wedding' })).toBeInViewport();
+    await expect(page.getByRole('heading', { name: 'Wedding', exact: true })).toBeVisible();
+    await expect(page.getByText(wedding.title, { exact: true })).toBeVisible();
+    await expect(page.getByText(prewed.title, { exact: true })).toHaveCount(0);
+    const statusFilter = page.getByRole('group', { name: 'Edited Photos status filter' });
+    await expect(statusFilter.getByRole('button', { name: 'Filter All' })).toHaveAttribute('aria-pressed', 'true');
+    expect(await statusFilter.evaluate((element) => element.scrollWidth <= element.clientWidth + 1)).toBe(true);
+    await expect(statusFilter.getByRole('button', { name: 'Filter Closed' })).toBeInViewport();
+    await page.screenshot({ path: `test-results/admin-wedding-list-${width}.png` });
+    await page.getByRole('button', { name: `${wedding.title} Edited Photos maintenance actions` }).click();
+    await expect(page.getByRole('button', { name: 'Delete gallery' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Unlock Selection PIN' })).toHaveCount(0);
+    await page.getByRole('button', { name: 'Unlock Edited access' }).click();
+    await expect.poll(() => editedUnlocks).toBe(1);
+    await page.getByRole('button', { name: 'Filter Closed' }).click();
+    await expect(page.getByText(wedding.title, { exact: true })).toHaveCount(0);
+    await tabs.getByRole('tab', { name: 'Selection Events' }).click();
+    await expect(page).toHaveURL(/mode=selection/);
+    await expect(page.getByText(prewed.title, { exact: true })).toBeVisible();
+    await expect(page.getByText(wedding.title, { exact: true })).toHaveCount(0);
+    await expect(page.getByRole('columnheader', { name: 'Published' })).toBeVisible();
+    await page.screenshot({ path: `test-results/admin-selection-list-${width}.png` });
+    await page.getByRole('button', { name: `${prewed.title} Edited Photos status: Draft` }).click();
+    await page.getByRole('group', { name: `${prewed.title} Edited Photos status options` }).getByRole('button', { name: 'Open', exact: true }).click();
+    await expect.poll(() => patches).toEqual([{ editResultsStatus: 'open' }]);
+    expect(prewed.status).toBe('open');
+    await page.getByRole('button', { name: `${prewed.title} Photo Selection status: Open` }).click();
+    page.once('dialog', (dialog) => dialog.accept());
+    await page.getByRole('group', { name: `${prewed.title} Photo Selection status options` }).getByRole('button', { name: 'Draft', exact: true }).click();
+    await expect.poll(() => patches).toEqual([{ editResultsStatus: 'open' }, { status: 'draft' }]);
+    expect(prewed.editResultsStatus).toBe('open');
+    await page.goBack();
+    await expect(page).toHaveURL(/mode=wedding/);
+    await expect(page.getByText(wedding.title, { exact: true })).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+});
 }
 
 test('Wedding expired token restores the edited gate without opening a stored selection session', async ({ page }) => {
@@ -203,7 +280,7 @@ for (const state of ['draft', 'closed', 'expired'] as const) {
         await page.goto(`/culling/${id}`);
         await expect(page.getByRole('heading', { name: state === 'expired' ? 'Edited Photos access expired' : 'Edited Photos unavailable', exact: true })).toBeVisible();
         await expect(page.getByLabel('Edited photos password', { exact: true })).toHaveCount(0);
-        await expect(page.getByLabel('Gallery PIN', { exact: true })).toHaveCount(0);
+        await expect(page.getByLabel('Photo Selection password', { exact: true })).toHaveCount(0);
         await expect(page.getByRole('button', { name: 'All Photos', exact: true })).toHaveCount(0);
         await expect(page.getByRole('button', { name: 'Download All (.zip)' })).toHaveCount(0);
     });

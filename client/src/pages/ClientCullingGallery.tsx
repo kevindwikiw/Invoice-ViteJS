@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, useCallback } from 'react';
 import { useNavigate, useParams, useSearch } from '@tanstack/react-router';
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { AlertCircle, Check, CheckSquare, ChevronLeft, ChevronRight, HelpCircle, ImageIcon, Instagram, Loader2, Lock, Plus, ScanFace, Send, X } from 'lucide-react';
+import { AlertCircle, Check, CheckSquare, ChevronLeft, ChevronRight, HelpCircle, ImageIcon, ImagePlus, Images, Instagram, Loader2, Lock, Plus, ScanFace, Send, X } from 'lucide-react';
 import clsx from 'clsx';
 
 import {
@@ -49,7 +49,7 @@ import { RequestMoreModal, SubmitConfirmationModal, TutorialModal } from '../fea
 import { Lightbox } from '../features/culling/client-gallery/Lightbox';
 import { FaceSearchModal } from '../features/culling/client-gallery/FaceSearchModal';
 import { EditResultsGrid } from '../features/culling/client-gallery/EditResultsGrid';
-import { SubmissionAction, type SubmissionStatus } from '../features/culling/client-gallery/SubmissionAction';
+import { SubmissionAction, submissionStatusLabel, type SubmissionStatus } from '../features/culling/client-gallery/SubmissionAction';
 import { getFaceSearchStatus } from '../features/culling/client-gallery/face-search';
 import type {
     GalleryContactSettings,
@@ -72,7 +72,7 @@ export default function ClientCullingGallery() {
             <button type="button" onClick={() => void metadata.refetch()} className="min-h-11 rounded-md border border-[var(--border)] px-4 text-sm hover:bg-[var(--bg-elevated)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)]">Retry</button>
         </>}
     </main>;
-    return metadata.data.workflow === 'delivery_only' ? <WeddingGallery key={galleryId} galleryId={galleryId} title={metadata.data.title} /> : <SelectionCullingGallery key={galleryId} />;
+    return metadata.data.workflow === 'delivery_only' ? <WeddingGallery key={galleryId} galleryId={galleryId} title={metadata.data.title} /> : <SelectionCullingGallery key={galleryId} title={metadata.data.title} />;
 }
 
 function WeddingGallery({ galleryId, title }: { galleryId: string; title?: string }) {
@@ -102,7 +102,7 @@ function WeddingGallery({ galleryId, title }: { galleryId: string; title?: strin
     }} />;
 }
 
-function SelectionCullingGallery() {
+function SelectionCullingGallery({ title }: { title?: string }) {
     const { galleryId } = useParams({ from: '/culling/$galleryId' });
     const navigate = useNavigate({ from: '/culling/$galleryId' });
     const { view: urlView, filter: urlFilter, page: urlPage } = useSearch({ from: '/culling/$galleryId' });
@@ -131,6 +131,9 @@ function SelectionCullingGallery() {
     const [showRequestMore, setShowRequestMore] = useState(false);
     const [requestedCount, setRequestedCount] = useState(10);
     const [showSubmitConfirm, setShowSubmitConfirm] = useState(false);
+    const [reviewOpening, setReviewOpening] = useState(false);
+    const reviewOpenTimerRef = useRef<number | null>(null);
+    const reviewOpenerRef = useRef<HTMLElement | null>(null);
     const [knownPhotosById, setKnownPhotosById] = useState<Record<string, GalleryPhoto>>({});
     const [pendingLightboxPageMove, setPendingLightboxPageMove] = useState<'first' | 'last' | null>(null);
     const [showFaceSearch, setShowFaceSearch] = useState(false);
@@ -139,6 +142,7 @@ function SelectionCullingGallery() {
     const allPhotosButtonRef = useRef<HTMLButtonElement>(null);
     const allPhotosDropdownRef = useRef<HTMLDivElement>(null);
     const submitErrorRef = useRef<HTMLDivElement>(null);
+    const submitSuccessRef = useRef<HTMLDivElement>(null);
     const [refineMode, setRefineMode] = useState<GalleryRefineMode>(urlFilter as GalleryRefineMode);
     const [faceFilteredPhotos, setFaceFilteredPhotos] = useState<GalleryPhoto[] | null>(null);
     const [faceFilterTotal, setFaceFilterTotal] = useState(0);
@@ -146,6 +150,7 @@ function SelectionCullingGallery() {
     const selectedIds = selectionDraft.selectedIds;
     const submittedOnly = refineMode === 'submitted';
     const selectedPhotoMetaById = selectionDraft.photoMetaById;
+    const selectionViewActive = activeTab !== 'edit-results';
 
     useEffect(() => {
         setPage(urlPage);
@@ -173,7 +178,7 @@ function SelectionCullingGallery() {
     const photosQuery = useQuery({
         queryKey: ['public-gallery-photos', galleryId, token, page, GALLERY_PAGE_SIZE, false],
         queryFn: () => getPublicGalleryPhotos(galleryId, token, page, GALLERY_PAGE_SIZE, false, true),
-        enabled: !!token,
+        enabled: Boolean(token) && selectionViewActive,
         retry: false,
         placeholderData: keepPreviousData,
         staleTime: 5 * 60 * 1000,
@@ -182,7 +187,7 @@ function SelectionCullingGallery() {
     const submittedPhotosQuery = useQuery({
         queryKey: ['public-gallery-submitted-photos', galleryId, token],
         queryFn: () => getPublicGalleryPhotos(galleryId, token, 1, 1, true, true),
-        enabled: !!token && submittedOnly,
+        enabled: Boolean(token) && selectionViewActive && submittedOnly,
         retry: false,
         staleTime: 5 * 60 * 1000,
         refetchOnWindowFocus: 'always',
@@ -196,10 +201,10 @@ function SelectionCullingGallery() {
     const faceSearchStatusQuery = useQuery({
         queryKey: ['public-gallery-face-search-status', galleryId, token],
         queryFn: ({ signal }) => getFaceSearchStatus(galleryId, token, signal),
-        enabled: !!token,
+        enabled: Boolean(token) && selectionViewActive,
         retry: false,
         staleTime: 10_000,
-        refetchInterval: (query) => query.state.data?.available ? 30_000 : 5_000,
+        refetchInterval: (query) => query.state.error ? false : query.state.data?.available ? 30_000 : 5_000,
     });
     const photos = useMemo(() => photosQuery.data?.photos || [], [photosQuery.data?.photos]);
     const submittedPhotos = useMemo(() => submittedPhotosQuery.data?.selectedPhotos || photosQuery.data?.selectedPhotos || [], [photosQuery.data?.selectedPhotos, submittedPhotosQuery.data?.selectedPhotos]);
@@ -257,7 +262,9 @@ function SelectionCullingGallery() {
     const countdown = useSelectionCountdown(displayGallery?.selectionDeadlineAt, displayGallery?.serverTime);
     const galleryError = photosQuery.error as (Error & { code?: string; contactUrl?: string | null }) | null;
     const galleryLockCode = galleryError?.code === 'GALLERY_EXPIRED' || galleryError?.code === 'GALLERY_CLOSED' ? galleryError.code : null;
-    const galleryAvailable = Boolean(token && photosQuery.isSuccess && !countdown.isExpired && !displayGallery?.isExpired && !galleryLockCode);
+    const galleryAvailable = activeTab === 'edit-results'
+        ? Boolean(token)
+        : Boolean(token && photosQuery.isSuccess && !countdown.isExpired && !displayGallery?.isExpired && !galleryLockCode);
     const totalPages = photosQuery.data?.totalPages || 0;
     const totalPhotos = isFaceFilterActive ? visiblePhotos.length : photosQuery.data?.total || visiblePhotos.length;
     const hasPreviousGalleryPage = activeTab === 'gallery' && !submittedOnly && !isFaceFilterActive && totalPages > 0 && page > 1;
@@ -438,6 +445,12 @@ function SelectionCullingGallery() {
         }
         return false;
     }, [effectiveSelectedIds, selectedCount, selectedDriveFileIds, selectionTouched, submittedPhotos]);
+    const reviewCanOpenRef = useRef(false);
+    reviewCanOpenRef.current = galleryAvailable && hasUnsavedChanges && !isOverLimit && activeTab !== 'edit-results' && !showRequestMore && !showTutorial && !showFaceSearch;
+
+    useEffect(() => () => {
+        if (reviewOpenTimerRef.current !== null) window.clearTimeout(reviewOpenTimerRef.current);
+    }, []);
 
     useEffect(() => {
         if (!hasUnsavedChanges) return;
@@ -534,9 +547,14 @@ function SelectionCullingGallery() {
         },
     });
     useEffect(() => {
-        if (!submitMutation.isError) return;
+        if (!submitMutation.isError || showSubmitConfirm) return;
         requestAnimationFrame(() => submitErrorRef.current?.focus());
-    }, [submitMutation.isError]);
+    }, [showSubmitConfirm, submitMutation.isError]);
+
+    useEffect(() => {
+        if (submittedCount === null) return;
+        requestAnimationFrame(() => submitSuccessRef.current?.focus());
+    }, [submittedCount]);
 
     useEffect(() => {
         localStorage.setItem(draftKey(galleryId), JSON.stringify(selectionList));
@@ -600,14 +618,21 @@ function SelectionCullingGallery() {
         void preloadPreviewImage(previewUrl).catch(() => undefined);
     }, [galleryId, token]);
 
-    const handleSubmitSelections = () => {
+    const handleReviewSelection = () => {
+        if (!galleryAvailable || !hasUnsavedChanges || reviewOpenTimerRef.current !== null) return;
         if (isOverLimit) {
             setLimitMessage(`You selected ${selectedCount} photos, but this gallery allows ${selectionLimit}. Remove ${overLimitCount} photo${overLimitCount === 1 ? '' : 's'} before submitting.`);
             return;
         }
         setLimitMessage('');
         submitMutation.reset();
-        setShowSubmitConfirm(true);
+        reviewOpenerRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+        setReviewOpening(true);
+        reviewOpenTimerRef.current = window.setTimeout(() => {
+            reviewOpenTimerRef.current = null;
+            setReviewOpening(false);
+            if (reviewCanOpenRef.current) setShowSubmitConfirm(true);
+        }, 300);
     };
 
     const closeTutorial = useCallback(() => {
@@ -639,13 +664,43 @@ function SelectionCullingGallery() {
             : submittedCount !== null || Number(displayGallery?.selectionCount || 0) > 0
                 ? 'submitted'
                 : 'ready';
+    const showSelectionActionBar = activeTab !== 'edit-results' && galleryAvailable && hasUnsavedChanges;
+    const [actionBarMounted, setActionBarMounted] = useState(false);
+    const [actionBarVisible, setActionBarVisible] = useState(false);
+
+    useEffect(() => {
+        if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+            setActionBarMounted(showSelectionActionBar);
+            setActionBarVisible(showSelectionActionBar);
+            return;
+        }
+        if (showSelectionActionBar) {
+            setActionBarMounted(true);
+            let enterFrame = 0;
+            const paintFrame = window.requestAnimationFrame(() => {
+                enterFrame = window.requestAnimationFrame(() => setActionBarVisible(true));
+            });
+            return () => {
+                window.cancelAnimationFrame(paintFrame);
+                window.cancelAnimationFrame(enterFrame);
+            };
+        }
+        setActionBarVisible(false);
+        const exitTimer = window.setTimeout(() => setActionBarMounted(false), 220);
+        return () => window.clearTimeout(exitTimer);
+    }, [showSelectionActionBar]);
     const changeView = (view: GalleryView) => {
         if (view !== 'edit-results' && !galleryAvailable) return;
+        if (reviewOpenTimerRef.current !== null) {
+            window.clearTimeout(reviewOpenTimerRef.current);
+            reviewOpenTimerRef.current = null;
+            setReviewOpening(false);
+        }
         if (view === 'picked') {
             setRefineMode('none');
         } else if (view === 'selfie') {
             setRefineMode('none');
-            if (faceFilteredPhotos === null) setShowFaceSearch(true);
+            if (activeTab === 'selfie' || faceFilteredPhotos === null) setShowFaceSearch(true);
         }
         setActiveTab(view);
         syncGalleryUrl({ view, ...((view === 'picked' || view === 'selfie') ? { filter: 'none' as const } : {}) });
@@ -658,12 +713,12 @@ function SelectionCullingGallery() {
     }
 
     if (!token) {
-        return <PinGate galleryId={galleryId} theme={theme} onToggleTheme={toggleTheme} initialMode={urlView === 'edit-results' ? 'edited' : 'gallery'} editedSessionAvailable={Boolean(editResultsToken)} onBackToEdited={() => { setActiveTab('edit-results'); syncGalleryUrl({ view: 'edit-results' }); }} onEditResultsUnlocked={updateEditResultsToken} onUnlocked={(nextToken, nextGallery) => { setToken(nextToken); setUnlockedGallery(nextGallery); if (!localStorage.getItem(tutorialKey(galleryId))) setShowTutorial(true); }} />;
+        return <PinGate galleryId={galleryId} title={title} theme={theme} onToggleTheme={toggleTheme} initialMode={urlView === 'edit-results' ? 'edited' : 'gallery'} editedSessionAvailable={Boolean(editResultsToken)} onBackToEdited={() => { setActiveTab('edit-results'); syncGalleryUrl({ view: 'edit-results' }); }} onEditResultsUnlocked={updateEditResultsToken} onUnlocked={(nextToken, nextGallery) => { setToken(nextToken); setUnlockedGallery(nextGallery); if (!localStorage.getItem(tutorialKey(galleryId))) setShowTutorial(true); }} />;
     }
 
     if (countdown.isExpired || displayGallery?.isExpired || galleryLockCode) {
         if (activeTab === 'edit-results' && (editResultsToken || showEditResultsGate)) return <EditResultsGrid galleryId={galleryId} theme={theme} token={editResultsToken} onToken={updateEditResultsToken} onToggleTheme={toggleTheme} onViewChange={changeView} standalone />;
-        return <GalleryLockedScreen expired={countdown.isExpired || Boolean(displayGallery?.isExpired) || galleryLockCode === 'GALLERY_EXPIRED'} contactUrl={galleryError?.contactUrl || fallbackContactUrl} theme={theme} onToggleTheme={toggleTheme} hasEditResults={editResultsStatusQuery.data?.available || Boolean(displayGallery?.hasEditResults)} onAccessEditedPhotos={() => { setShowEditResultsGate(true); changeView('edit-results'); }} />;
+        return <GalleryLockedScreen title={title} expired={countdown.isExpired || Boolean(displayGallery?.isExpired) || galleryLockCode === 'GALLERY_EXPIRED'} contactUrl={galleryError?.contactUrl || fallbackContactUrl} theme={theme} onToggleTheme={toggleTheme} hasEditResults={editResultsStatusQuery.data?.available || Boolean(displayGallery?.hasEditResults)} onAccessEditedPhotos={() => { setShowEditResultsGate(true); changeView('edit-results'); }} />;
     }
 
     return (
@@ -672,124 +727,72 @@ function SelectionCullingGallery() {
                 Skip to gallery
             </a>
             
-            <header data-testid="gallery-header" className="sticky top-0 z-40 h-14 select-none border-b border-[var(--border)] bg-[var(--bg-deep)] px-2.5 sm:px-8">
-                <div className="mx-auto flex h-full max-w-[1600px] items-center justify-between gap-1.5 sm:gap-2">
-                    
-                    <div className="flex items-center gap-1">
-                        <OrbitLogo theme={theme} />
-                    </div>
-
-                    <div className="flex min-w-0 items-center gap-1 sm:gap-3">
-                    <div className="flex min-h-11 items-center">
-                        {activeTab !== 'edit-results' && <CountdownLabel countdown={countdown} />}
+            <header data-testid="gallery-header" className={clsx('sticky top-0 z-40 select-none border-b border-[var(--border)] bg-[var(--bg-deep)] px-2.5 sm:px-8', activeTab === 'edit-results' ? 'h-14' : 'h-20 lg:h-16')}>
+                <div className={clsx('mx-auto h-full max-w-[1600px] min-w-0 items-center gap-x-2', activeTab === 'edit-results' ? 'flex justify-between' : 'grid grid-cols-[auto_minmax(0,1fr)_auto] grid-rows-[2.75rem_1.5rem] py-1 lg:flex lg:py-0')}>
+                    <OrbitLogo theme={theme} />
+                    {activeTab !== 'edit-results' && <div className="col-span-3 row-start-2 flex min-w-0 items-baseline gap-2 lg:ml-5">
+                        <span className="shrink-0 text-[11px] font-medium uppercase text-[var(--text-muted)] sm:text-xs lg:text-[13px]">Photo Selection</span>
+                        <h1 className="min-w-0 truncate font-sans text-sm font-semibold leading-tight text-[var(--text-primary)] sm:text-[15px] lg:text-lg" title={displayGallery?.title || ''}>{displayGallery?.title || 'Photo Selection'}</h1>
+                    </div>}
+                    <div className={clsx('flex shrink-0 items-center gap-1 sm:ml-2 sm:gap-2', activeTab !== 'edit-results' && 'col-start-3 row-start-1 lg:ml-auto lg:gap-0')}>
                         {activeTab === 'edit-results' && <div ref={setExpiryTarget} className="flex min-w-0 items-center" />}
-                        <div className="flex h-11 shrink-0 items-center">
-                            <button
-                                    type="button"
-                                    onClick={() => setShowTutorial(true)}
-                                    title="How to Submit"
-                                    aria-label="How to Submit"
-                                    className="flex h-11 w-11 items-center justify-center px-2 text-[var(--text-secondary)] transition-[color,transform] duration-150 hover:text-[var(--text-primary)] active:scale-[0.97] motion-reduce:transition-none"
-                                >
-                                    <HelpCircle size={15} />
-                            </button>
+                        {activeTab !== 'edit-results' && <div className="lg:pr-2"><CountdownLabel countdown={countdown} compact /></div>}
+                        <div data-testid="header-utilities" className="flex items-center gap-2">
+                            <button type="button" onClick={() => setShowTutorial(true)} title="How to Submit" aria-label="How to Submit" className="flex h-11 w-11 shrink-0 items-center justify-center px-2 text-[var(--text-secondary)] transition-[color,transform] duration-150 hover:text-[var(--text-primary)] active:scale-[0.97] motion-reduce:transition-none"><HelpCircle size={16} aria-hidden="true" /></button>
                             <ThemeToggle theme={theme} onToggle={toggleTheme} />
                         </div>
                     </div>
                 </div>
-                </div>
             </header>
 
-            <div data-testid="gallery-toolbar" className="sticky top-14 z-30 select-none border-b border-[var(--border)] bg-[var(--bg-deep)] px-2.5 py-2 [touch-action:manipulation] sm:px-8 sm:py-2.5">
-                <div className="mx-auto flex max-w-[1600px] items-center gap-1 sm:gap-x-2">
-                    <div ref={allPhotosMenuRef} className="relative flex min-w-0 flex-1 items-center gap-1 sm:w-auto sm:flex-none sm:gap-2">
-                        <GalleryViewTabs value={activeTab === 'picked' ? 'gallery' : activeTab} galleryAvailable={galleryAvailable} galleryLabel={activeTab === 'picked' ? 'Picked' : submittedOnly ? 'Submitted' : 'All Photos'} editedAvailable={editResultsStatusQuery.data?.available ?? Boolean(displayGallery?.hasEditResults)} allPhotosMenuOpen={showRefine} allPhotosButtonRef={allPhotosButtonRef} onAllPhotos={activeTab === 'edit-results' ? () => changeView('gallery') : openAllPhotosMenu} onChange={changeView} />
+            <div data-testid="gallery-toolbar" className={clsx('sticky z-30 select-none border-b border-[var(--border)] bg-[var(--bg-deep)] px-2.5 py-2 [touch-action:manipulation] sm:px-8 sm:py-2.5', activeTab === 'edit-results' ? 'top-14' : 'top-20 lg:top-16')}>
+                <div data-testid="gallery-toolbar-inner" className={clsx('mx-auto flex max-w-[1600px] sm:items-center sm:gap-x-2', activeTab === 'edit-results' ? 'flex-col gap-2 sm:flex-row' : 'items-center gap-1')}>
+                    <div ref={allPhotosMenuRef} className={clsx('relative flex min-w-0 items-center gap-1 sm:w-auto sm:flex-none sm:gap-2', activeTab === 'edit-results' ? 'w-full' : 'w-[calc((100%-0.375rem)/2)] flex-none')}>
+                        <GalleryViewTabs value={activeTab === 'picked' ? 'gallery' : activeTab} galleryAvailable={galleryAvailable} galleryLabel={activeTab === 'picked' ? 'Picked' : submittedOnly ? 'Submitted' : 'All Photos'} editedAvailable={editResultsStatusQuery.data?.available ?? Boolean(displayGallery?.hasEditResults)} selfieAvailable={faceSearchControlVisible} allPhotosMenuOpen={showRefine} allPhotosButtonRef={allPhotosButtonRef} onAllPhotos={activeTab === 'edit-results' ? () => changeView('gallery') : openAllPhotosMenu} onChange={changeView} />
                         {showRefine && activeTab !== 'edit-results' && (
                             <div ref={allPhotosDropdownRef} className="absolute left-0 top-[calc(100%+8px)] z-[80] w-[min(204px,calc(100vw-16px))] rounded-lg border border-[var(--border)] bg-[var(--bg-deep)] p-1.5 shadow-xl transition-[opacity,transform] duration-150 motion-reduce:transition-none" role="menu" aria-label="All Photos views">
-                                <button type="button" role="menuitemradio" aria-checked={refineMode === 'none' && activeTab === 'gallery'} onClick={() => chooseRefineMode('none')} className={clsx('flex min-h-10 w-full items-center justify-between gap-2 rounded-md px-2.5 text-left text-xs font-medium', refineMode === 'none' && activeTab === 'gallery' ? 'bg-[var(--accent)] text-[var(--bg-deep)]' : 'text-[var(--text-secondary)] hover:bg-[var(--bg-card)]')}>
+                                <button type="button" role="menuitemradio" aria-checked={refineMode === 'none' && activeTab === 'gallery'} onClick={() => chooseRefineMode('none')} className={clsx('flex min-h-11 w-full items-center justify-between gap-2 rounded-md px-2.5 text-[13px] font-medium', refineMode === 'none' && activeTab === 'gallery' ? 'bg-[var(--accent)] text-[var(--bg-deep)]' : 'text-[var(--text-secondary)] hover:bg-[var(--bg-card)]')}>
                                     <span className="flex items-center gap-2"><ImageIcon size={15} aria-hidden="true" />All Photos</span>{refineMode === 'none' && activeTab === 'gallery' && <Check size={14} aria-hidden="true" />}
                                 </button>
-                                <button type="button" role="menuitem" onClick={() => { setShowRefine(false); changeView('picked'); }} className="flex min-h-10 w-full items-center justify-between gap-2 rounded-md px-2.5 text-left text-xs font-medium text-[var(--text-secondary)] hover:bg-[var(--bg-card)]">
-                                    <span className="flex items-center gap-2"><CheckSquare size={15} aria-hidden="true" />Picked</span><ChevronRight size={14} aria-hidden="true" />
+                                <button type="button" role="menuitemradio" aria-checked={activeTab === 'picked'} onClick={() => { setShowRefine(false); changeView('picked'); }} className={clsx('flex min-h-11 w-full items-center justify-between gap-2 rounded-md px-2.5 text-[13px] font-medium', activeTab === 'picked' ? 'bg-[var(--accent)] text-[var(--bg-deep)]' : 'text-[var(--text-secondary)] hover:bg-[var(--bg-card)]')}>
+                                    <span className="flex items-center gap-2"><CheckSquare size={15} aria-hidden="true" />Picked</span>{activeTab === 'picked' && <Check size={14} aria-hidden="true" />}
                                 </button>
-                                <button type="button" role="menuitemradio" aria-checked={refineMode === 'submitted'} disabled={!hasSubmittedPhotos} onClick={() => chooseRefineMode('submitted')} className={clsx('flex min-h-10 w-full items-center justify-between gap-2 rounded-md px-2.5 text-left text-xs font-medium disabled:opacity-40', refineMode === 'submitted' ? 'bg-[var(--accent)] text-[var(--bg-deep)]' : 'text-[var(--text-secondary)] hover:bg-[var(--bg-card)]')}>
+                                <button type="button" role="menuitemradio" aria-checked={refineMode === 'submitted'} disabled={!hasSubmittedPhotos} onClick={() => chooseRefineMode('submitted')} className={clsx('flex min-h-11 w-full items-center justify-between gap-2 rounded-md px-2.5 text-[13px] font-medium disabled:opacity-40', refineMode === 'submitted' ? 'bg-[var(--accent)] text-[var(--bg-deep)]' : 'text-[var(--text-secondary)] hover:bg-[var(--bg-card)]')}>
                                     <span className="flex items-center gap-2"><Send size={15} aria-hidden="true" />Submitted</span>{refineMode === 'submitted' && <Check size={14} aria-hidden="true" />}
                                 </button>
-                                {refineMode === 'submitted' && <button type="button" role="menuitem" onClick={() => chooseRefineMode('none')} className="mt-1 flex min-h-9 w-full items-center rounded-md px-2.5 text-left text-[11px] text-[var(--text-muted)] hover:bg-[var(--bg-card)]">Clear filters</button>}
+                                {refineMode === 'submitted' && <button type="button" role="menuitem" onClick={() => chooseRefineMode('none')} className="mt-1 flex min-h-11 w-full items-center rounded-md px-2.5 text-left text-xs text-[var(--text-muted)] hover:bg-[var(--bg-card)]">Clear filters</button>}
                             </div>
                         )}
                     </div>
 
-                    {activeTab !== 'edit-results' && displayGallery?.title && <>
-                        <h1 className="sr-only lg:hidden">{displayGallery.title}</h1>
-                        <div className="hidden min-w-0 items-center gap-3 border-l border-[var(--border)] pl-3 lg:flex">
-                            <span className="shrink-0 text-[10px] font-semibold uppercase tracking-[0.14em] text-[var(--text-muted)]">Photo Selection</span>
-                            <h1 className="max-w-[min(30vw,30rem)] truncate font-serif text-sm font-semibold text-[var(--text-primary)]" title={displayGallery.title}>{displayGallery.title}</h1>
-                        </div>
-                    </>}
-
-                    <div className="ml-auto flex min-w-0 shrink-0 items-center gap-2">
-                        {requestMoreUrl && shouldShowRequestMore && (
-                            <button
-                                type="button"
-                                onClick={() => {
-                                    setShowRequestMore(true);
-                                    void photosQuery.refetch();
-                                }}
-                                title="Request more edited photos"
-                                className="inline-flex h-10 shrink-0 items-center justify-center gap-1.5 rounded-md border border-[var(--border)] px-2.5 text-[10px] font-semibold text-[var(--text-secondary)] transition-[color,background-color,transform] duration-150 hover:bg-[var(--bg-card)] hover:text-[var(--text-primary)] active:scale-[0.97] motion-reduce:transition-none sm:h-11 sm:gap-2 sm:px-3 sm:text-xs"
-                            >
-                                <Plus size={13} aria-hidden="true" />
-                                <span className="hidden sm:inline">Request More</span>
-                                <span className="sm:hidden">More</span>
-                            </button>
-                        )}
-
-                    {activeTab !== 'edit-results' && <div className="flex min-w-0 shrink-0 items-center gap-1 sm:w-auto sm:flex-1 sm:justify-between sm:gap-2">
-                        <span
-                            className={clsx(
-                                'hidden min-h-9 min-w-0 items-center whitespace-nowrap text-[10px] font-normal text-[var(--text-muted)] sm:flex sm:min-h-11 sm:px-1 sm:text-[11px]',
-                                isOverLimit ? 'border-rose-500/45 text-rose-400' : 'border-[var(--border)] text-[var(--text-secondary)]'
-                            )}
-                        >
-                            <span className="truncate sm:hidden"><strong className="font-semibold text-[var(--text-primary)]">{selectedCount}{selectionLimit ? `/${selectionLimit}` : ''}</strong> picked</span>
-                            <strong className="hidden font-semibold text-[var(--text-primary)] sm:inline">{selectedCount}</strong>
-                            <span className="ml-1 hidden sm:inline">picked{selectionLimit ? ` of ${selectionLimit}` : ''}</span>
-                            {selectionLimit ? (
-                                <span className={clsx('ml-1 hidden border-l border-[var(--border)] pl-1 font-normal sm:ml-1.5 sm:inline sm:pl-1.5', isOverLimit ? 'text-rose-400' : 'text-[var(--text-muted)]')}>
-                                    {isOverLimit ? `${overLimitCount} over` : `${remainingSelections} remaining`}
-                                </span>
-                            ) : (
-                                <span className="ml-1 hidden border-l border-[var(--border)] pl-1 font-normal text-[var(--text-muted)] sm:ml-1.5 sm:inline sm:pl-1.5">
-                                    Unlimited
-                                </span>
-                            )}
-                        </span>
-                        <SubmissionAction
-                            status={submissionStatus}
-                            disabled={submitMutation.isPending || photosQuery.isLoading || !hasUnsavedChanges}
-                            overLimit={isOverLimit}
-                            onSubmit={handleSubmitSelections}
-                        />
+                    <div className={clsx('ml-auto flex min-w-0 shrink-0 items-center gap-1 sm:gap-2 lg:gap-0', activeTab === 'edit-results' && 'w-full justify-end sm:w-auto')}>
+                    {activeTab !== 'edit-results' && <div data-testid="selection-summary" className={clsx('inline-flex min-w-0 items-center gap-1 whitespace-nowrap text-xs text-[var(--text-secondary)] transition-transform duration-[320ms] ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none sm:gap-2 sm:text-sm lg:pr-2', requestMoreUrl && !shouldShowRequestMore && 'translate-x-[4rem] min-[390px]:translate-x-[4.75rem] sm:translate-x-20 md:translate-x-[10.5rem] lg:translate-x-44')}>
+                        <span className="inline-flex items-center gap-1"><Images size={14} aria-hidden="true" className="shrink-0" /><strong className="tabular-nums text-[var(--text-primary)]">{selectedCount}{selectionLimit ? `/${selectionLimit}` : ''}</strong>{' '}<span className="hidden md:inline">selected</span></span>
+                        <span className={clsx('hidden items-center gap-1 sm:inline-flex', isOverLimit && 'text-rose-400')}><ImagePlus size={14} aria-hidden="true" />{selectionLimit ? `${isOverLimit ? overLimitCount : remainingSelections} ${isOverLimit ? 'over' : 'left'}` : 'Unlimited'}</span>
+                        <span data-testid="selection-count-announcement" aria-live="polite" className="sr-only">{selectedCount} selected{selectionLimit ? ` of ${selectionLimit}; ${isOverLimit ? `${overLimitCount} over limit` : `${remainingSelections} remaining`}` : ''}</span>
+                        <span role="status" className="sr-only">{submissionStatusLabel(submissionStatus)}</span>
+                    </div>}
+                    {activeTab !== 'edit-results' && requestMoreUrl && <div data-testid="request-more-group" aria-hidden={!shouldShowRequestMore} inert={!shouldShowRequestMore} className={clsx('w-[3.75rem] shrink-0 transition-[opacity,transform] duration-[280ms] ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none min-[390px]:w-[4.5rem] md:w-40 lg:w-44', shouldShowRequestMore ? 'translate-y-0 opacity-100' : 'pointer-events-none translate-y-1 opacity-0')}>
+                        <button type="button" aria-label="Request more editing slots" title="Request more editing slots" onClick={() => { setShowRequestMore(true); void photosQuery.refetch(); }} className="inline-flex h-11 w-full shrink-0 items-center justify-center gap-0.5 whitespace-nowrap rounded-md border border-[var(--border)] px-0.5 text-[11px] font-semibold text-[var(--text-secondary)] transition-colors hover:bg-[var(--bg-card)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)] min-[390px]:gap-1 min-[390px]:px-2 md:gap-2 md:px-3 md:text-sm lg:px-4 lg:text-[15px]"><Plus size={14} aria-hidden="true" /><span className="md:hidden">More</span><span className="hidden md:inline">Request More</span></button>
                     </div>}
                         <div ref={setDownloadTarget} className={activeTab === 'edit-results' ? 'flex min-w-0 shrink-0 items-center justify-end' : 'hidden'} />
                     </div>
                 </div>
             </div>
 
-            <section id="gallery-content" tabIndex={-1} className="scroll-mt-28 mx-auto max-w-[1664px] px-2.5 pt-3 pb-10 outline-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)] sm:px-8 sm:pt-5 sm:pb-12 md:pt-6">
+            <section id="gallery-content" tabIndex={-1} className={clsx('mx-auto max-w-[1664px] px-2.5 pt-3 pb-10 outline-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)] sm:px-8 sm:pt-5 sm:pb-12 md:pt-6', activeTab === 'edit-results' ? 'scroll-mt-44 sm:scroll-mt-28' : 'scroll-mt-44 lg:scroll-mt-36')}>
                 {activeTab !== 'edit-results' && limitMessage && (
                     <div role="alert" className="mb-4 text-xs text-[var(--text-muted)] border border-[var(--border)] p-3 rounded-lg bg-[var(--bg-card)]">
                         {limitMessage} {requestMoreUrl && <button type="button" onClick={() => setShowRequestMore(true)} className="ml-1 font-semibold underline text-[var(--text-primary)]">Request more</button>}
                     </div>
                 )}
                 {activeTab !== 'edit-results' && submittedCount !== null && (
-                    <div role="status" aria-live="polite" className="mb-5 flex items-center gap-3 border border-[var(--border)] bg-[var(--bg-card)] px-4 py-3 text-sm text-[var(--text-primary)]">
+                    <div ref={submitSuccessRef} role="status" tabIndex={-1} aria-live="polite" className="mb-5 flex items-center gap-3 border border-[var(--border)] bg-[var(--bg-card)] px-4 py-3 text-sm text-[var(--text-primary)] outline-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)]">
                         <Check size={16} aria-hidden="true" />
                         Selection saved. {submittedCount} filenames submitted.
                     </div>
                 )}
-                {activeTab !== 'edit-results' && submitMutation.isError && (
+                {activeTab !== 'edit-results' && submitMutation.isError && !showSubmitConfirm && (
                     <div ref={submitErrorRef} role="alert" tabIndex={-1} aria-live="assertive" className="mb-5 flex items-center gap-3 border border-[var(--border)] bg-[var(--bg-card)] px-4 py-3 text-sm text-[var(--text-primary)] outline-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)]">
                         <AlertCircle size={16} aria-hidden="true" />
                         {submitMutation.error instanceof Error ? submitMutation.error.message : 'Unable to submit selections.'}
@@ -807,8 +810,8 @@ function SelectionCullingGallery() {
                     <div className="flex min-h-[60vh] flex-col items-center justify-center text-center">
                         <AlertCircle size={30} className="mb-4 text-[var(--text-muted)]" />
                         <p className="font-display text-2xl text-[var(--text-primary)]">Gallery Session Expired</p>
-                        <p className="mt-2 max-w-sm text-sm leading-6 text-[var(--text-muted)]">The gallery was reopened or your session expired. Enter the PIN again to continue.</p>
-                        <button type="button" onClick={() => { localStorage.removeItem(tokenKey(galleryId)); setToken(''); }} className="mt-6 flex h-10 items-center justify-center gap-2 rounded-lg bg-[var(--accent)] px-5 text-[10px] font-black uppercase tracking-[0.14em] text-[var(--bg-deep)] transition-opacity hover:opacity-85"><Lock size={14} /> Enter PIN again</button>
+                        <p className="mt-2 max-w-sm text-sm leading-6 text-[var(--text-muted)]">The gallery was reopened or your session expired. Enter the password again to continue.</p>
+                        <button type="button" onClick={() => { localStorage.removeItem(tokenKey(galleryId)); setToken(''); }} className="mt-6 flex h-10 items-center justify-center gap-2 rounded-lg bg-[var(--accent)] px-5 text-[10px] font-black uppercase tracking-[0.14em] text-[var(--bg-deep)] transition-opacity hover:opacity-85"><Lock size={14} /> Enter password again</button>
                     </div>
                 ) : !visiblePhotos.length ? (
                     <div className="flex min-h-[60vh] flex-col items-center justify-center text-center">
@@ -855,7 +858,18 @@ function SelectionCullingGallery() {
                 )}
             </section>
 
-            <footer className="border-t border-[var(--border)] px-4 py-5 text-[10px] text-[var(--text-muted)] md:px-8">
+            {actionBarMounted && <div data-testid="selection-action-bar" role="region" aria-label="Selection actions" aria-hidden={!actionBarVisible} inert={!actionBarVisible} data-visible={actionBarVisible} className={clsx('selection-action-bar-motion fixed inset-x-0 bottom-0 z-40 border-t border-[var(--border)] bg-[var(--bg-deep)] px-2.5 pt-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] shadow-[0_-8px_24px_rgba(0,0,0,0.12)] sm:px-8', actionBarVisible ? 'translate-y-0 opacity-100' : 'pointer-events-none translate-y-full opacity-0')}>
+                <div className="mx-auto flex max-w-[1600px] items-center justify-between gap-3">
+                    <div className="min-w-0 text-xs text-[var(--text-secondary)] sm:text-sm">
+                        <p className="flex items-center gap-1.5 whitespace-nowrap"><Check size={15} aria-hidden="true" className="shrink-0" /><strong className="tabular-nums text-[var(--text-primary)]">{selectedCount}{selectionLimit ? `/${selectionLimit}` : ''}</strong><span className="hidden min-[360px]:inline">photos</span> selected</p>
+                        <p className={clsx('mt-0.5 hidden text-xs sm:block', isOverLimit && 'text-rose-400')}>{isOverLimit ? `Remove ${overLimitCount} ${overLimitCount === 1 ? 'photo' : 'photos'} to continue` : selectedCount === 0 ? 'Review removal of the previous submission' : selectionLimit && selectedCount === selectionLimit ? 'Ready to review' : 'Review before submitting'}</p>
+                    </div>
+                    <SubmissionAction status={submissionStatus} disabled={reviewOpening || submitMutation.isPending || photosQuery.isLoading || isOverLimit} opening={reviewOpening} overLimit={isOverLimit} clearsSelection={selectedCount === 0} onReview={handleReviewSelection} />
+                    <span role="status" aria-live="polite" className="sr-only">{reviewOpening ? 'Opening selection review' : ''}</span>
+                </div>
+            </div>}
+
+            <footer className={clsx('border-t border-[var(--border)] px-4 py-5 text-[10px] text-[var(--text-muted)] md:px-8', showSelectionActionBar && 'pb-[calc(5rem+env(safe-area-inset-bottom))] sm:pb-24')}>
                 <div className="mx-auto flex max-w-[1600px] flex-col items-center justify-between gap-3 sm:flex-row">
                     <p>&copy; {currentYear ?? ''} The Orbit Photo. All rights reserved.</p>
                     <a href="https://www.instagram.com/theorbitphoto/" target="_blank" rel="noreferrer" aria-label="@theorbitphoto on Instagram" className="inline-flex items-center gap-1.5 text-[var(--text-secondary)] transition-colors hover:text-[var(--text-primary)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)]">
@@ -883,6 +897,7 @@ function SelectionCullingGallery() {
 
             {showRequestMore && requestMoreUrl && (
                 <RequestMoreModal
+                    theme={theme}
                     galleryId={galleryId}
                     requestedCount={requestedCount}
                     selectedCount={selectedCount}
@@ -900,11 +915,21 @@ function SelectionCullingGallery() {
 
             {showSubmitConfirm && (
                 <SubmitConfirmationModal
+                    theme={theme}
                     selectedCount={selectedCount}
+                    photos={pickedPhotos}
+                    galleryId={galleryId}
+                    token={token}
                     pending={submitMutation.isPending}
                     error={submitMutation.isError ? (submitMutation.error instanceof Error ? submitMutation.error.message : 'Unable to submit selections.') : undefined}
                     onConfirm={() => submitMutation.mutate()}
-                    onClose={() => { submitMutation.reset(); setShowSubmitConfirm(false); }}
+                    onClose={() => {
+                        submitMutation.reset();
+                        setShowSubmitConfirm(false);
+                        requestAnimationFrame(() => {
+                            if (reviewOpenerRef.current?.isConnected) reviewOpenerRef.current.focus({ preventScroll: true });
+                        });
+                    }}
                 />
             )}
 
@@ -931,8 +956,8 @@ function SelectionCullingGallery() {
                             <button type="button" onClick={() => chooseRefineMode('submitted')} disabled={!hasSubmittedPhotos} className={clsx('flex min-h-11 items-center justify-between rounded-md border px-3 text-left text-sm disabled:opacity-40', refineMode === 'submitted' ? 'border-[var(--accent)] bg-[var(--accent)] text-[var(--bg-deep)]' : 'border-[var(--border)] text-[var(--text-secondary)]')}>
                                 <span className="flex items-center gap-2"><Send size={16} />Submitted</span><span aria-hidden="true">{refineMode === 'submitted' && <Check size={15} />}</span>
                             </button>
-                            <button type="button" onClick={() => { setShowRefine(false); changeView('picked'); }} className="flex min-h-11 items-center justify-between rounded-md border border-[var(--border)] px-3 text-left text-sm text-[var(--text-secondary)]">
-                                <span className="flex items-center gap-2"><CheckSquare size={16} />Picked</span><span aria-hidden="true">→</span>
+                            <button type="button" onClick={() => { setShowRefine(false); changeView('picked'); }} className="flex min-h-11 items-center gap-2 rounded-md border border-[var(--border)] px-3 text-left text-sm text-[var(--text-secondary)]">
+                                <CheckSquare size={16} aria-hidden="true" />Picked
                             </button>
                         </div>
                         {refineMode !== 'none' && <button type="button" onClick={() => chooseRefineMode('none')} className="mt-3 h-10 w-full rounded-md text-sm font-medium text-[var(--text-secondary)] hover:bg-[var(--bg-card)]">Clear filters</button>}
@@ -953,14 +978,13 @@ function SelectionCullingGallery() {
                         setRefineMode('none');
                         setActiveTab('selfie');
                         setLightboxPhotoId(null);
-                        setShowFaceSearch(false);
                     }}
                     onReset={resetFaceFilter}
                     onClose={() => setShowFaceSearch(false)}
                 />
             )}
             
-            {showTutorial && <TutorialModal galleryId={galleryId} token={token} tutorialSampleSlots={displayGallery?.tutorialSampleSlots || []} tutorialSampleVersion={displayGallery?.tutorialSampleVersion} theme={theme} showIntro={!localStorage.getItem(tutorialKey(galleryId))} onClose={closeTutorial} />}
+            {showTutorial && <TutorialModal galleryId={galleryId} token={token} tutorialSampleSlots={displayGallery?.tutorialSampleSlots || []} tutorialSampleVersion={displayGallery?.tutorialSampleVersion} onClose={closeTutorial} />}
         </main>
     );
 }

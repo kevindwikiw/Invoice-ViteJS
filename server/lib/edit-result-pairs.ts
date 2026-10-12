@@ -36,7 +36,21 @@ export function validComparisonPairs(pairs: EditResultPair[], editedIds: Set<str
 export function readBeforePhoto(value: unknown): BeforePhoto | null {
     if (typeof value !== "string") return null;
     try {
-        const photo = JSON.parse(value) as BeforePhoto;
-        return photo && typeof photo.driveFileId === "string" && typeof photo.mimeType === "string" ? photo : null;
+        const photo = JSON.parse(value) as Record<string, unknown> | null;
+        if (!photo || Array.isArray(photo)
+            || typeof photo.driveFileId !== "string"
+            || typeof photo.filename !== "string"
+            || typeof photo.mimeType !== "string"
+            || (photo.thumbnailUrl !== null && typeof photo.thumbnailUrl !== "string")
+            || (photo.width !== null && (typeof photo.width !== "number" || !Number.isFinite(photo.width)))
+            || (photo.height !== null && (typeof photo.height !== "number" || !Number.isFinite(photo.height)))) return null;
+        return {
+            driveFileId: photo.driveFileId,
+            filename: photo.filename,
+            mimeType: photo.mimeType,
+            thumbnailUrl: photo.thumbnailUrl,
+            width: photo.width,
+            height: photo.height,
+        } as BeforePhoto;
     } catch { return null; }
 }
