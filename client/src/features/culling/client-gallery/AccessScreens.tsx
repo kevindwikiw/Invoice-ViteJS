@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { Download, Loader2, Lock, MessageCircle } from 'lucide-react';
 
@@ -34,17 +34,28 @@ export function PinGate({
     initialMode = 'gallery',
     editedSessionAvailable = false,
     onBackToEdited,
+    opening = false,
+    leaving = false,
+    preparationError,
+    onRetry,
 }: {
     galleryId: string;
     title?: string;
-    onUnlocked: (token: string, gallery: PublicGallery) => void;
+    onUnlocked: (token: string, gallery: PublicGallery, submittedAt: number) => void;
     onEditResultsUnlocked: (token: string) => void;
     theme: GalleryTheme;
     onToggleTheme: () => void;
     initialMode?: 'gallery' | 'edited';
     editedSessionAvailable?: boolean;
     onBackToEdited?: () => void;
+    opening?: boolean;
+    leaving?: boolean;
+    preparationError?: string;
+    onRetry?: () => void;
 }) {
+    const submittedAtRef = useRef(0);
+    const cardRef = useRef<HTMLFormElement>(null);
+    const [cardHeight, setCardHeight] = useState<number | null>(null);
     const [pin, setPin] = useState('');
     const [editResultsPassword, setEditResultsPassword] = useState('');
     const [mode, setMode] = useState<'gallery' | 'edited'>(initialMode);
@@ -69,7 +80,7 @@ export function PinGate({
         mutationFn: () => verifyGalleryPin(galleryId, pin),
         onSuccess: (data) => {
             localStorage.setItem(tokenKey(galleryId), data.token);
-            onUnlocked(data.token, data.gallery);
+            onUnlocked(data.token, data.gallery, submittedAtRef.current);
         },
         onError: (mutationError) => {
             const galleryError = mutationError as Error & { code?: string; contactUrl?: string | null; status?: number };
@@ -98,27 +109,33 @@ export function PinGate({
             setError(accessError.status === 401 ? 'Incorrect password. Check it and try again.' : mutationError instanceof Error ? mutationError.message : 'Unable to unlock edited photos.');
         },
     });
+    const pinLoading = mode === 'gallery' && verifyMutation.isPending;
+    const showPinLoading = opening || pinLoading;
 
     return (
         <main style={theme === 'black' ? BLACK_THEME : WHITE_THEME} className="flex min-h-dvh flex-col bg-[var(--bg-deep)] font-sans text-[var(--text-primary)]">
             <AccessHeader theme={theme} onToggleTheme={onToggleTheme} title={title} section={mode === 'edited' ? 'Edited Photos' : 'Photo Selection'} />
             <section className="flex flex-1 items-center justify-center px-4 py-8 sm:px-5 sm:py-12">
+                <div className="w-full max-w-sm" style={cardHeight ? { minHeight: cardHeight } : undefined}>
                 <form
-                    aria-busy={verifyMutation.isPending || verifyEdited.isPending}
+                    ref={cardRef}
                     onSubmit={(event) => {
                         event.preventDefault();
-                        if (verifyMutation.isPending || verifyEdited.isPending) return;
+                        if (opening || verifyMutation.isPending || verifyEdited.isPending) return;
                         if (mode === 'gallery' && pin.trim().length < 4) { setError('Enter at least 4 characters.'); return; }
                         if (mode === 'edited' && editResultsPassword.trim().length < 6) { setError('Enter at least 6 characters.'); return; }
                         setError('');
                         setContactUrl(null);
                         setIsRateLimited(false);
                         if (mode === 'edited') verifyEdited.mutate();
-                        else verifyMutation.mutate();
+                        else { setCardHeight(cardRef.current?.offsetHeight || null); submittedAtRef.current = Date.now(); verifyMutation.mutate(); }
                     }}
-                    className="box-border w-full max-w-sm border border-[var(--border)] bg-[var(--bg-card)] px-5 py-7 text-center shadow-2xl sm:px-8 sm:py-9"
+                    data-phase={leaving ? 'leaving' : showPinLoading ? 'waiting' : 'idle'}
+                    className="gallery-unlock-card box-border w-full max-w-sm border border-[var(--border)] bg-[var(--bg-card)] px-5 py-7 text-center shadow-2xl sm:px-8 sm:py-9"
                 >
                     <div className="mb-7 flex justify-center"><OrbitLogo theme={theme} /></div>
+                    <div className="gallery-unlock-content">
+                    <div inert={showPinLoading} aria-busy={showPinLoading || verifyEdited.isPending} className="gallery-unlock-fields"><div>
                     <h1 className="font-display text-[26px] font-medium leading-tight text-[var(--text-primary)] [text-wrap:balance]">{mode === 'gallery' && (isExpired || isClosed || isRateLimited) ? isExpired ? 'Selection Closed' : isClosed ? 'Gallery Locked' : 'Access Locked' : 'Enter Password'}</h1>
                     {mode === 'edited' || (!isClosed && !isRateLimited) ? <p className="mt-2 text-xs text-[var(--text-muted)]">{mode === 'edited' ? 'Edited Photos' : 'Photo Selection'}</p> : null}
                     
@@ -133,23 +150,35 @@ export function PinGate({
                         <p className="mx-auto mt-6 max-w-xs text-xs leading-5 text-[var(--text-muted)]">{lockedMessage}</p>
                     )}
                     {mode === 'gallery' && isRateLimited && !isClosed && <button type="button" onClick={() => { setIsRateLimited(false); setError(''); setContactUrl(null); setPin(''); }} className="mt-4 inline-flex h-11 items-center justify-center rounded-md border border-[var(--border)] px-4 text-xs font-semibold text-[var(--text-primary)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)]">Try Password Again</button>}
-                    
+                    </div></div>
+                    {showPinLoading && <div className="gallery-unlock-loading" role={preparationError ? undefined : 'status'}>
+                        {preparationError ? <>
+                            <p role="alert" className="text-sm leading-6">{preparationError}</p>
+                            <button type="button" onClick={onRetry} className="mt-4 min-h-11 rounded-md border border-[var(--border)] px-5 text-sm font-semibold hover:bg-[var(--bg-elevated)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)]">Retry</button>
+                        </> : <h1 className="font-display text-[26px] font-medium leading-tight text-[var(--text-primary)] [text-wrap:balance]">Preparing your gallery…</h1>}
+                    </div>}
                     {mode === 'gallery' && !isClosed && !isRateLimited && (
-                        <button type="submit" disabled={verifyMutation.isPending} aria-live="polite" className="mt-3 flex h-12 w-full items-center justify-center gap-2 rounded-md bg-[var(--accent)] text-xs font-bold text-[var(--bg-deep)] transition-opacity hover:opacity-85 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)] disabled:opacity-45">
-                            {verifyMutation.isPending ? <Loader2 size={14} aria-hidden="true" className="animate-spin" /> : <Lock size={14} aria-hidden="true" />}
-                            {verifyMutation.isPending ? 'Checking password…' : 'Unlock Photo Selection'}
+                        <div className="gallery-unlock-action relative mt-3 h-12">
+                        <button type="submit" disabled={showPinLoading} className="gallery-unlock-button relative flex h-12 w-full items-center justify-center rounded-md text-xs font-bold text-[var(--bg-deep)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)]">
+                            <span className="relative flex items-center gap-2"><Lock size={14} aria-hidden="true" />Unlock Photo Selection</span>
                         </button>
+                        {showPinLoading && !preparationError && <span className="gallery-unlock-progress absolute inset-x-0 top-1/2 -translate-y-1/2" aria-hidden="true"><span /></span>}
+                        </div>
                     )}
                     {mode === 'edited' && (
                         <button type="submit" disabled={verifyEdited.isPending} aria-live="polite" className="mt-3 flex h-12 w-full items-center justify-center gap-2 rounded-md bg-[var(--accent)] text-xs font-bold text-[var(--bg-deep)] transition-opacity hover:opacity-85 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)] disabled:opacity-45">
                             {verifyEdited.isPending ? <Loader2 size={14} aria-hidden="true" className="animate-spin" /> : <Lock size={14} aria-hidden="true" />} {verifyEdited.isPending ? 'Checking password…' : 'Unlock Edited Photos'}
                         </button>
                     )}
+                    <div inert={showPinLoading} className="gallery-unlock-secondary"><div>
                     {editResultsStatus.data?.available && !(mode === 'gallery' && editedSessionAvailable) && <button type="button" onClick={() => { setMode((current) => current === 'gallery' ? 'edited' : 'gallery'); setError(''); }} className="mt-3 inline-flex min-h-11 items-center justify-center text-xs font-semibold text-[var(--text-secondary)] underline underline-offset-4 hover:text-[var(--text-primary)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)]">
                         {mode === 'gallery' ? 'Use Edited Photos password' : 'Use Photo Selection password'}
                     </button>}
                     {mode === 'gallery' && editedSessionAvailable && onBackToEdited && <button type="button" onClick={onBackToEdited} className="mt-4 block w-full text-xs font-semibold text-[var(--text-secondary)] underline underline-offset-4">Back to Edited Photos</button>}
+                    </div></div>
+                    </div>
                 </form>
+                </div>
             </section>
         </main>
     );

@@ -223,13 +223,13 @@ function DelayedSampleLoading() {
     if (!visible) return null;
     return <div data-testid="tutorial-image-loading" role="status" aria-live="polite" className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center">
         <div className="flex items-center gap-2 rounded-md bg-black/75 px-3 py-2 text-xs font-medium text-white shadow-sm">
-            <Loader2 size={17} strokeWidth={1.8} aria-hidden="true" className="animate-[spin_700ms_linear_infinite] motion-reduce:animate-none" />
+            <Loader2 size={17} strokeWidth={1.8} aria-hidden="true" className="animate-[spin_700ms_linear_infinite] motion-reduce:[animation-duration:1.6s]" />
             <span>Loading sample photos…</span>
         </div>
     </div>;
 }
 
-function TutorialSamplePreview({ galleryId, token, slot, version }: { galleryId: string; token: string; slot: number; version?: string | null }) {
+function TutorialSamplePreview({ galleryId, token, slot, version, onSettled }: { galleryId: string; token: string; slot: number; version?: string | null; onSettled?: (result: 'ready' | 'failed') => void }) {
     const [visibleSlot, setVisibleSlot] = useState(slot);
     const [visibleSettled, setVisibleSettled] = useState(false);
     const [settledSlot, setSettledSlot] = useState<number | null>(null);
@@ -266,7 +266,7 @@ function TutorialSamplePreview({ galleryId, token, slot, version }: { galleryId:
                     afterUrl={cullingTutorialImageUrl(galleryId, token, sampleSlot, 'after', version)}
                     frameClass="max-sm:h-[min(56dvh,28rem)] sm:h-[min(52dvh,28rem)]"
                     onLoading={incoming ? () => setSettledSlot(null) : () => setVisibleSettled(false)}
-                    onSettled={incoming ? () => setSettledSlot((current) => current === sampleSlot ? current : sampleSlot) : () => setVisibleSettled(true)}
+                    onSettled={incoming ? () => setSettledSlot((current) => current === sampleSlot ? current : sampleSlot) : (result) => { setVisibleSettled(true); onSettled?.(result); }}
                 />
             </div>;
         })}
@@ -275,21 +275,23 @@ function TutorialSamplePreview({ galleryId, token, slot, version }: { galleryId:
 }
 
 
-export function TutorialModal({ galleryId, token, tutorialSampleSlots, tutorialSampleVersion, onClose }: { galleryId: string; token: string; tutorialSampleSlots: number[]; tutorialSampleVersion?: string | null; onClose: () => void }) {
+export function TutorialModal({ galleryId, token, tutorialSampleSlots, tutorialSampleVersion, onClose, active = true, textOnly = false, onInitialMediaSettled }: { galleryId: string; token: string; tutorialSampleSlots: number[]; tutorialSampleVersion?: string | null; onClose: () => void; active?: boolean; textOnly?: boolean; onInitialMediaSettled?: (result: 'ready' | 'failed') => void }) {
     const hasSamples = tutorialSampleSlots.length > 0;
-    const [stepIndex, setStepIndex] = useState(0);
+    const [stepIndex, setStepIndex] = useState<number | null>(null);
     const [sampleIndex, setSampleIndex] = useState(0);
     const scrollAreaRef = useRef<HTMLDivElement>(null);
     const panelCloseButtonRef = useRef<HTMLButtonElement>(null);
     const readyContentRef = useRef<HTMLDivElement>(null);
 
     useEffect(() => {
+        if (!active) return;
         const previouslyFocused = document.activeElement instanceof HTMLElement ? document.activeElement : null;
         panelCloseButtonRef.current?.focus();
         return () => previouslyFocused?.focus();
-    }, []);
+    }, [active]);
 
     useEffect(() => {
+        if (!active) return;
         const body = document.body;
         const scrollY = window.scrollY;
         const previous = { position: body.style.position, top: body.style.top, width: body.style.width, overflow: body.style.overflow };
@@ -306,14 +308,14 @@ export function TutorialModal({ galleryId, token, tutorialSampleSlots, tutorialS
             window.scrollTo(0, scrollY);
             document.removeEventListener('keydown', handleKeyDown);
         };
-    }, [onClose]);
+    }, [onClose, active]);
 
     const wizardSteps = [
         ...(hasSamples ? [{ id: 'confidence', label: 'Choose' }] : []),
         { id: 'submit', label: 'Submit' },
         { id: 'ready', label: 'Ready' },
     ] as const;
-    const safeStepIndex = Math.min(stepIndex, wizardSteps.length - 1);
+    const safeStepIndex = Math.min(stepIndex ?? (textOnly && hasSamples ? 1 : 0), wizardSteps.length - 1);
     const activeStep = wizardSteps[safeStepIndex];
     const activeSampleSlot = tutorialSampleSlots[sampleIndex] || tutorialSampleSlots[0];
     const stepTitle = activeStep.id === 'confidence' ? 'Choose with Confidence' : activeStep.id === 'submit' ? 'How to Submit' : 'Ready to Choose';
@@ -336,7 +338,7 @@ export function TutorialModal({ galleryId, token, tutorialSampleSlots, tutorialS
     };
 
     return (
-        <div className="fixed inset-0 z-[130] flex items-center justify-center overscroll-contain bg-black/70 px-2 py-2 sm:px-4 sm:py-4" role="dialog" aria-modal="true" aria-label="How photo selection works" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
+        <div inert={!active} aria-hidden={!active} style={{ visibility: active ? 'visible' : 'hidden' }} className="fixed inset-0 z-[130] flex items-center justify-center overscroll-contain bg-black/70 px-2 py-2 sm:px-4 sm:py-4" role="dialog" aria-modal={active ? true : undefined} aria-label="How photo selection works" onMouseDown={(event) => { if (active && event.target === event.currentTarget) onClose(); }}>
             <section data-testid="tutorial-panel" className="flex h-[calc(100dvh-1rem)] max-h-[calc(100dvh-1rem)] w-[calc(100vw-1rem)] origin-center flex-col overflow-hidden border border-[var(--border)] bg-[var(--bg-card)] text-[var(--text-primary)] shadow-2xl sm:h-[min(56rem,calc(100dvh-2rem))] sm:max-h-[calc(100dvh-2rem)] sm:w-[67vw] sm:max-w-2xl">
                 <header className="flex shrink-0 items-start justify-between gap-2 border-b border-[var(--border)] px-3 py-2.5 sm:gap-4 sm:px-5 sm:py-4">
                     <div>
@@ -368,7 +370,7 @@ export function TutorialModal({ galleryId, token, tutorialSampleSlots, tutorialS
                                 <p className="text-[13px] font-medium text-[var(--text-secondary)]">Sample {sampleIndex + 1} of {tutorialSampleSlots.length}</p>
                             </div>
                             <div className="mt-2">
-                                <TutorialSamplePreview galleryId={galleryId} token={token} slot={activeSampleSlot} version={tutorialSampleVersion} />
+                                <TutorialSamplePreview galleryId={galleryId} token={token} slot={activeSampleSlot} version={tutorialSampleVersion} onSettled={onInitialMediaSettled} />
                             </div>
                             <p className="mx-auto mt-3 max-w-md text-center text-[13px] leading-5 text-[var(--text-secondary)]">The photos you submit become your edited gallery.</p>
                             {tutorialSampleSlots.length > 1 && (

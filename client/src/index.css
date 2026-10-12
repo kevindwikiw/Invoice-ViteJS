@@ -389,3 +389,78 @@ textarea::placeholder {
         transition: none;
     }
 }
+
+.gallery-unlock-overlay { transition: opacity 200ms ease; }
+.gallery-unlock-overlay[data-leaving="true"] { opacity: 0; pointer-events: none; }
+
+.gallery-unlock-button > span { transition: opacity 200ms ease; }
+
+.gallery-unlock-card:not([data-phase="idle"]) .gallery-unlock-button > span { opacity: 0; }
+
+.gallery-unlock-fields,
+.gallery-unlock-secondary {
+    display: grid;
+    grid-template-rows: 1fr;
+    opacity: 1;
+    transition: grid-template-rows 400ms cubic-bezier(0.22, 1, 0.36, 1), opacity 180ms ease;
+}
+
+.gallery-unlock-fields > div,
+.gallery-unlock-secondary > div { min-height: 0; overflow: hidden; }
+
+.gallery-unlock-card:not([data-phase="idle"]) .gallery-unlock-fields,
+.gallery-unlock-card:not([data-phase="idle"]) .gallery-unlock-secondary {
+    grid-template-rows: 0fr;
+    opacity: 0;
+}
+
+.gallery-unlock-button::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: 6px;
+    background: var(--accent);
+    transition: transform 400ms cubic-bezier(0.22, 1, 0.36, 1), opacity 400ms ease;
+}
+.gallery-unlock-card:not([data-phase="idle"]) .gallery-unlock-button::before {
+    transform: scaleY(0.0625);
+    opacity: 0.2;
+}
+
+@keyframes gallery-unlock-enter { from { opacity: 0; } to { opacity: 1; } }
+
+@keyframes gallery-unlock-sweep {
+    from { transform: translateX(-100%); }
+    to { transform: translateX(260%); }
+}
+
+.gallery-unlock-loading {
+    padding-top: 1px;
+    animation: gallery-unlock-enter 200ms 150ms ease both;
+}
+
+.gallery-unlock-progress {
+    display: block;
+    height: 3px;
+    overflow: hidden;
+    animation: gallery-unlock-enter 150ms 400ms ease both;
+}
+
+.gallery-unlock-progress > span {
+    display: block;
+    width: 38%;
+    height: 100%;
+    background: var(--accent);
+    animation: gallery-unlock-sweep 1.2s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .gallery-unlock-overlay,
+    .gallery-unlock-fields,
+    .gallery-unlock-secondary,
+    .gallery-unlock-button::before,
+    .gallery-unlock-button > span { transition: none; }
+    .gallery-unlock-loading,
+    .gallery-unlock-progress { animation: none; }
+    .gallery-unlock-progress > span { animation: gallery-unlock-sweep 2.4s linear infinite; }
+}

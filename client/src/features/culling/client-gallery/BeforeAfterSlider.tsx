@@ -3,7 +3,7 @@ import { ImageOff, MoveHorizontal } from 'lucide-react';
 import clsx from 'clsx';
 
 export function BeforeAfterSlider({ beforeUrl, beforePlaceholderUrl, afterUrl, testId = 'tutorial', frameClass = 'h-[clamp(20rem,58dvh,31rem)] md:h-[min(60dvh,34rem)]', aspectRatio, fallbackUrl, onLoading, onSettled }: {
-    beforeUrl: string; beforePlaceholderUrl?: string; afterUrl: string; testId?: 'tutorial' | 'delivery'; frameClass?: string; aspectRatio?: number; fallbackUrl?: string; onLoading?: () => void; onSettled?: () => void;
+    beforeUrl: string; beforePlaceholderUrl?: string; afterUrl: string; testId?: 'tutorial' | 'delivery'; frameClass?: string; aspectRatio?: number; fallbackUrl?: string; onLoading?: () => void; onSettled?: (result: 'ready' | 'failed') => void;
 }) {
     const mediaSlotRef = useRef<HTMLDivElement>(null);
     const stageRef = useRef<HTMLDivElement>(null);
@@ -33,7 +33,7 @@ export function BeforeAfterSlider({ beforeUrl, beforePlaceholderUrl, afterUrl, t
     };
 
     useEffect(() => {
-        if (pairReady || pairUnavailable) onSettled?.();
+        if (pairReady || pairUnavailable) onSettled?.(pairUnavailable ? 'failed' : 'ready');
     }, [onSettled, pairReady, pairUnavailable]);
 
     useLayoutEffect(() => {

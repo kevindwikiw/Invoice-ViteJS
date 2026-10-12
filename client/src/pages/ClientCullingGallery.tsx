@@ -9,6 +9,7 @@ import {
     getEditResultsStatus,
     galleryPreviewUrl,
     getPublicGalleryPhotos,
+    galleryThumbnailUrl,
     submitGallerySelections,
 } from '../features/culling/culling.public';
 
@@ -42,6 +43,7 @@ import { photoDisplayIndex } from '../features/culling/client-gallery/photo-labe
 import { canPrefetchPreview, preloadPreviewImage } from '../features/culling/client-gallery/preview-cache';
 import { CountdownLabel } from '../features/culling/client-gallery/countdown';
 import { useSelectionCountdown } from '../features/culling/client-gallery/useSelectionCountdown';
+import { useGalleryStartup } from '../features/culling/client-gallery/useGalleryStartup';
 import { GalleryViewTabs, OrbitLogo, ThemeToggle, type GalleryView } from '../features/culling/client-gallery/GalleryChrome';
 import { PhotoTile } from '../features/culling/client-gallery/PhotoTile';
 import { GalleryLockedScreen, PinGate } from '../features/culling/client-gallery/AccessScreens';
@@ -182,15 +184,25 @@ function SelectionCullingGallery({ title }: { title?: string }) {
         retry: false,
         placeholderData: keepPreviousData,
         staleTime: 5 * 60 * 1000,
-        refetchOnWindowFocus: 'always',
+        refetchOnWindowFocus: true,
     });
+    const startupGallery = photosQuery.isPlaceholderData ? unlockedGallery : photosQuery.data?.gallery ?? unlockedGallery;
+    const startupThumbnails = useMemo(() => (photosQuery.data?.photos.slice(0, 8) ?? []).map((photo) => galleryThumbnailUrl(galleryId, photo.driveFileId, token, photo.photoToken)), [photosQuery.data, galleryId, token]);
+    const startup = useGalleryStartup({
+        initialSession: Boolean(token) && showTutorial && selectionViewActive,
+        dataReady: photosQuery.isSuccess && !photosQuery.isPlaceholderData,
+        hasSamples: startupGallery ? Boolean(startupGallery.tutorialSampleSlots?.length) : undefined,
+        needsTutorial: showTutorial,
+        thumbnailUrls: startupThumbnails,
+    });
+    useEffect(() => { if (!token) startup.cancel(); }, [token, startup.cancel]);
     const submittedPhotosQuery = useQuery({
         queryKey: ['public-gallery-submitted-photos', galleryId, token],
         queryFn: () => getPublicGalleryPhotos(galleryId, token, 1, 1, true, true),
         enabled: Boolean(token) && selectionViewActive && submittedOnly,
         retry: false,
         staleTime: 5 * 60 * 1000,
-        refetchOnWindowFocus: 'always',
+        refetchOnWindowFocus: true,
     });
     const editResultsStatusQuery = useQuery({
         queryKey: ['public-edit-results-status', galleryId],
@@ -204,7 +216,7 @@ function SelectionCullingGallery({ title }: { title?: string }) {
         enabled: Boolean(token) && selectionViewActive,
         retry: false,
         staleTime: 10_000,
-        refetchInterval: (query) => query.state.error ? false : query.state.data?.available ? 30_000 : 5_000,
+        refetchInterval: (query) => query.state.error ? false : 30_000,
     });
     const photos = useMemo(() => photosQuery.data?.photos || [], [photosQuery.data?.photos]);
     const submittedPhotos = useMemo(() => submittedPhotosQuery.data?.selectedPhotos || photosQuery.data?.selectedPhotos || [], [photosQuery.data?.selectedPhotos, submittedPhotosQuery.data?.selectedPhotos]);
@@ -563,18 +575,18 @@ function SelectionCullingGallery({ title }: { title?: string }) {
 
     useEffect(() => {
         const totalPages = photosQuery.data?.totalPages || 0;
-        if (showSelected || !token || !photosQuery.data || page >= totalPages) return;
+        if (showSelected || showTutorial || startup.preparing || !token || !photosQuery.data || page >= totalPages) return;
 
         const idle = window.setTimeout(() => {
             void queryClient.prefetchQuery({
                 queryKey: ['public-gallery-photos', galleryId, token, page + 1, GALLERY_PAGE_SIZE, false],
-                queryFn: () => getPublicGalleryPhotos(galleryId, token, page + 1, GALLERY_PAGE_SIZE, false, false),
+                queryFn: () => getPublicGalleryPhotos(galleryId, token, page + 1, GALLERY_PAGE_SIZE, false, true),
                 staleTime: 5 * 60 * 1000,
             });
         }, 800);
 
         return () => window.clearTimeout(idle);
-    }, [galleryId, page, photosQuery.data, queryClient, showSelected, token]);
+    }, [galleryId, page, photosQuery.data, queryClient, showSelected, showTutorial, startup.preparing, token]);
 
     const handleToggleSelection = useCallback((photo: GalleryPhoto) => {
         const driveFileId = photo.driveFileId;
@@ -712,17 +724,17 @@ function SelectionCullingGallery({ title }: { title?: string }) {
         return <EditResultsGrid galleryId={galleryId} theme={theme} token={editResultsToken} onToken={updateEditResultsToken} onToggleTheme={toggleTheme} onViewChange={changeView} onRequestSelectionAccess={() => { setActiveTab('gallery'); syncGalleryUrl({ view: 'gallery' }); }} standalone />;
     }
 
-    if (!token) {
-        return <PinGate galleryId={galleryId} title={title} theme={theme} onToggleTheme={toggleTheme} initialMode={urlView === 'edit-results' ? 'edited' : 'gallery'} editedSessionAvailable={Boolean(editResultsToken)} onBackToEdited={() => { setActiveTab('edit-results'); syncGalleryUrl({ view: 'edit-results' }); }} onEditResultsUnlocked={updateEditResultsToken} onUnlocked={(nextToken, nextGallery) => { setToken(nextToken); setUnlockedGallery(nextGallery); if (!localStorage.getItem(tutorialKey(galleryId))) setShowTutorial(true); }} />;
-    }
-
-    if (countdown.isExpired || displayGallery?.isExpired || galleryLockCode) {
+    if (token && (countdown.isExpired || displayGallery?.isExpired || galleryLockCode)) {
         if (activeTab === 'edit-results' && (editResultsToken || showEditResultsGate)) return <EditResultsGrid galleryId={galleryId} theme={theme} token={editResultsToken} onToken={updateEditResultsToken} onToggleTheme={toggleTheme} onViewChange={changeView} standalone />;
         return <GalleryLockedScreen title={title} expired={countdown.isExpired || Boolean(displayGallery?.isExpired) || galleryLockCode === 'GALLERY_EXPIRED'} contactUrl={galleryError?.contactUrl || fallbackContactUrl} theme={theme} onToggleTheme={toggleTheme} hasEditResults={editResultsStatusQuery.data?.available || Boolean(displayGallery?.hasEditResults)} onAccessEditedPhotos={() => { setShowEditResultsGate(true); changeView('edit-results'); }} />;
     }
 
     return (
-        <main style={theme === 'black' ? BLACK_THEME : WHITE_THEME} className="min-h-screen bg-[var(--bg-deep)] font-sans text-[var(--text-primary)]">
+        <div style={theme === 'black' ? BLACK_THEME : WHITE_THEME} className="font-sans">
+        {(!token || startup.preparing) && <div inert={startup.leaving} aria-hidden={startup.leaving} className="gallery-unlock-overlay fixed inset-0 z-[140] overflow-y-auto" data-leaving={startup.leaving}>
+            <PinGate galleryId={galleryId} title={title} theme={theme} onToggleTheme={toggleTheme} initialMode={urlView === 'edit-results' ? 'edited' : 'gallery'} editedSessionAvailable={Boolean(editResultsToken)} onBackToEdited={() => { setActiveTab('edit-results'); syncGalleryUrl({ view: 'edit-results' }); }} onEditResultsUnlocked={updateEditResultsToken} onUnlocked={(nextToken, nextGallery, submittedAt) => { startup.start(submittedAt); setActiveTab('gallery'); if (urlView === 'edit-results') syncGalleryUrl({ view: 'gallery' }); setToken(nextToken); setUnlockedGallery(nextGallery); setShowTutorial(!localStorage.getItem(tutorialKey(galleryId))); }} opening={startup.preparing} leaving={startup.leaving} preparationError={startup.preparing && photosQuery.isError ? 'Unable to load your gallery. Please try again.' : undefined} onRetry={() => void photosQuery.refetch()} />
+        </div>}
+        {token && (!startup.preparing || startup.leaving) && <main inert={startup.preparing || showTutorial} aria-hidden={startup.preparing || showTutorial} className="min-h-screen bg-[var(--bg-deep)] font-sans text-[var(--text-primary)]">
             <a href="#gallery-content" className="sr-only focus:not-sr-only focus:fixed focus:left-3 focus:top-3 focus:z-[100] focus:rounded-md focus:bg-[var(--accent)] focus:px-3 focus:py-2 focus:text-xs focus:font-semibold focus:text-[var(--bg-deep)]">
                 Skip to gallery
             </a>
@@ -984,7 +996,8 @@ function SelectionCullingGallery({ title }: { title?: string }) {
                 />
             )}
             
-            {showTutorial && <TutorialModal galleryId={galleryId} token={token} tutorialSampleSlots={displayGallery?.tutorialSampleSlots || []} tutorialSampleVersion={displayGallery?.tutorialSampleVersion} onClose={closeTutorial} />}
-        </main>
+        </main>}
+        {token && showTutorial && startupGallery && <TutorialModal key={token} galleryId={galleryId} token={token} tutorialSampleSlots={startupGallery.tutorialSampleSlots || []} tutorialSampleVersion={startupGallery.tutorialSampleVersion} onClose={closeTutorial} active={!startup.preparing || startup.leaving} textOnly={startup.textOnly} onInitialMediaSettled={startup.preparing ? startup.onMediaSettled : undefined} />}
+        </div>
     );
 }

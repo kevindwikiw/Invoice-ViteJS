@@ -1029,7 +1029,7 @@ test('keeps PIN header branding and theme toggle in place after unlock', async (
         await expect(page.getByRole('heading', { name: 'Enter Password' })).toBeVisible();
         if (width === 320) await page.getByRole('button', { name: 'Switch to white mode' }).click();
         if (width === 390) await page.getByRole('button', { name: 'Switch to black mode' }).click();
-        const gateHeader = page.getByTestId('gallery-header');
+        const gateHeader = page.locator('.gallery-unlock-overlay').getByTestId('gallery-header');
         await expect(gateHeader.getByText('Full Frame Test Gallery')).toBeVisible();
         await expect(gateHeader.getByText('Photo Selection')).toBeVisible();
         await expect(page.locator('form').getByRole('img', { name: 'Orbit Logo' })).toBeVisible();
@@ -1046,11 +1046,36 @@ test('keeps PIN header branding and theme toggle in place after unlock', async (
             await expect(selectionPassword).toHaveAttribute('type', 'password');
         }
         const gateLogo = await gateHeader.getByRole('img', { name: 'Orbit Logo' }).boundingBox();
+        const passwordCardLogo = await page.locator('form').getByRole('img', { name: 'Orbit Logo' }).boundingBox();
+        const passwordCard = await page.locator('form').boundingBox();
         const gateToggle = await gateHeader.getByRole('button', { name: /Switch to (white|black) mode/ }).boundingBox();
         if (width === 320 || width === 1440) await page.screenshot({ path: `test-results/pin-gate-${width}.png`, animations: 'disabled' });
         await selectionPassword.fill('1234');
+        const unlockStartedAt = Date.now();
         await page.getByRole('button', { name: 'Unlock Photo Selection' }).click();
+        await expect(page.getByRole('status').filter({ hasText: 'Preparing your gallery' })).toBeVisible();
+        await expect(page.locator('.gallery-unlock-spinner')).toHaveCount(0);
+        await expect(page.locator('.gallery-unlock-progress > span')).toHaveCSS('animation-name', 'gallery-unlock-sweep');
+        await expect(page.locator('.gallery-unlock-loading')).toHaveCSS('opacity', '1');
+        const loadingCard = await page.locator('form').boundingBox();
+        const loadingTitle = await page.getByRole('status').filter({ hasText: 'Preparing your gallery' }).boundingBox();
+        const loadingLine = await page.locator('.gallery-unlock-progress').boundingBox();
+        expect(loadingCard!.height).toBeLessThan(passwordCard!.height - 30);
+        expect(loadingLine!.y - (loadingTitle!.y + loadingTitle!.height)).toBeGreaterThan(0);
+        expect(loadingLine!.y - (loadingTitle!.y + loadingTitle!.height)).toBeLessThan(60);
+        const motion = await page.evaluate(async () => {
+            const bar = document.querySelector<HTMLElement>('.gallery-unlock-progress > span')!;
+            const before = { bar: bar.getBoundingClientRect().x };
+            await new Promise((resolve) => setTimeout(resolve, 180));
+            return { reducedMotion: matchMedia('(prefers-reduced-motion: reduce)').matches, barMoved: Math.abs(before.bar - bar.getBoundingClientRect().x) > 2 };
+        });
+        expect(motion).toEqual({ reducedMotion: false, barMoved: true });
+        const loadingCardLogo = await page.locator('form').getByRole('img', { name: 'Orbit Logo' }).boundingBox();
+        expect(loadingCardLogo?.x).toBeCloseTo(passwordCardLogo!.x, 0);
+        expect(loadingCardLogo?.y).toBeCloseTo(passwordCardLogo!.y, 0);
+        if (width === 320 || width === 1440) await page.screenshot({ path: `test-results/gallery-waiting-${width}.png` });
         await expect(page.getByTestId('gallery-grid')).toBeVisible();
+        expect(Date.now() - unlockStartedAt).toBeGreaterThanOrEqual(1700);
         const cullingHeader = page.getByTestId('gallery-header');
         const cullingLogo = await cullingHeader.getByRole('img', { name: 'Orbit Logo' }).boundingBox();
         const cullingToggle = await cullingHeader.getByRole('button', { name: /Switch to (white|black) mode/ }).boundingBox();
@@ -1065,6 +1090,142 @@ test('keeps PIN header branding and theme toggle in place after unlock', async (
         await page.evaluate((galleryKey) => localStorage.removeItem(`orbit_culling_token_${galleryKey}`), id);
     }
 });
+
+test('starts the loading motion as soon as a PIN is submitted', async ({ page }) => {
+    const id = 'pin-loading-during-verification';
+    await page.addInitScript((galleryKey) => localStorage.setItem(`orbit_culling_tutorial_${galleryKey}`, '1'), id);
+    await page.route(`**/api/public/galleries/${id}/edit-results/status`, (route) => route.fulfill({ json: {
+        workflow: 'selection_delivery', title: 'PIN Loading Test', available: false, photoCount: 0, status: 'draft',
+    } }));
+    await page.route(`**/api/public/galleries/${id}/verify`, async (route) => {
+        await new Promise((resolve) => setTimeout(resolve, 700));
+        await route.fulfill({ json: { token, expiresIn: 3600, gallery: gallery('2026-12-09T03:00:00.000Z', '2026-10-09T03:00:00.000Z') } });
+    });
+    await page.route(`**/api/public/galleries/${id}/photos?*`, (route) => route.fulfill({ json: {
+        gallery: gallery('2026-12-09T03:00:00.000Z', '2026-10-09T03:00:00.000Z'), photos: [photo(1)],
+        page: 1, pageSize: 54, total: 1, totalPages: 1, selectedDriveFileIds: [], selectedPhotos: [],
+    } }));
+    await page.route(`**/api/public/galleries/${id}/photos/*/thumbnail?*`, (route) => fulfillImage(route, 320, 320));
+    await page.goto(`/culling/${id}`);
+    await page.getByLabel('Photo Selection password', { exact: true }).fill('1234');
+    await page.getByRole('button', { name: 'Unlock Photo Selection' }).click();
+    await expect(page.getByRole('status').filter({ hasText: 'Preparing your gallery' })).toBeVisible();
+    await expect(page.locator('.gallery-unlock-card')).toHaveAttribute('data-phase', 'waiting');
+    await expect(page.locator('.gallery-unlock-progress > span')).toHaveCSS('animation-name', 'gallery-unlock-sweep');
+    await expect(page.getByRole('status').filter({ hasText: 'Preparing your gallery' })).toBeVisible();
+    await expect(page.getByTestId('gallery-grid')).toBeVisible();
+});
+
+test('returns from PIN loading to the password form when verification fails', async ({ page }) => {
+    const id = 'invalid-pin-loading';
+    await page.route(`**/api/public/galleries/${id}/edit-results/status`, (route) => route.fulfill({ json: {
+        workflow: 'selection_delivery', title: 'Invalid PIN Test', available: false, photoCount: 0, status: 'draft',
+    } }));
+    await page.route(`**/api/public/galleries/${id}/verify`, async (route) => {
+        await new Promise((resolve) => setTimeout(resolve, 400));
+        await route.fulfill({ status: 401, json: { error: 'Incorrect password.' } });
+    });
+    await page.goto(`/culling/${id}`);
+    await page.getByLabel('Photo Selection password', { exact: true }).fill('wrong');
+    await page.getByRole('button', { name: 'Unlock Photo Selection' }).click();
+    await expect(page.getByRole('status').filter({ hasText: 'Preparing your gallery' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Enter Password' })).toBeVisible();
+    await expect(page.getByRole('alert')).toContainText('Incorrect password');
+    await expect(page.locator('.gallery-unlock-spinner')).toHaveCount(0);
+});
+
+for (const scenario of ['ready', 'slow', 'failed', 'no-samples', 'data-error', 'saved-session', 'reduced-motion', 'thumbnail-slow'] as const) {
+    test(`prepares the first visit behind PIN: ${scenario}`, async ({ page }) => {
+        const id = `pin-startup-${scenario}`;
+        await page.setViewportSize({ width: 390, height: 844 });
+        if (scenario === 'reduced-motion') await page.emulateMedia({ reducedMotion: 'reduce' });
+        if (scenario === 'saved-session') await page.addInitScript(({ id, token }) => localStorage.setItem(`orbit_culling_token_${id}`, token), { id, token });
+        const data = { ...gallery('2026-12-09T03:00:00.000Z', '2026-10-09T03:00:00.000Z'), tutorialSampleSlots: scenario === 'no-samples' ? [] : [1], tutorialSampleVersion: 'startup-v2' };
+        let attempts = 0;
+        const requests: string[] = [];
+        let releaseSample!: () => void;
+        const sampleGate = new Promise<void>((resolve) => { releaseSample = resolve; });
+        let releaseThumbnail!: () => void;
+        const thumbnailGate = new Promise<void>((resolve) => { releaseThumbnail = resolve; });
+        await page.route(`**/api/public/galleries/${id}/edit-results/status`, (route) => route.fulfill({ json: { workflow: 'selection_delivery', title: data.title, available: false } }));
+        await page.route(`**/api/public/galleries/${id}/verify`, (route) => route.fulfill({ json: { token, gallery: data } }));
+        await page.route(`**/api/public/galleries/${id}/photos?*`, (route) => {
+            attempts += 1;
+            if (scenario === 'data-error' && attempts === 1) return route.fulfill({ status: 500, json: { error: 'Temporary failure' } });
+            return route.fulfill({ json: { gallery: data, photos: [photo(1)], page: 1, pageSize: 54, total: 1, totalPages: 1, selectedDriveFileIds: [], selectedPhotos: [] } });
+        });
+        await page.route(`**/api/public/galleries/${id}/contact`, (route) => route.fulfill({ json: {} }));
+        await page.route(`**/api/public/galleries/${id}/photos/*/thumbnail?*`, async (route) => {
+            if (scenario === 'thumbnail-slow') await thumbnailGate;
+            return fulfillImage(route, 320, 320);
+        });
+        await page.route(`**/api/public/galleries/${id}/tutorial/**`, async (route) => {
+            requests.push(route.request().url());
+            if (scenario === 'slow') await sampleGate;
+            if (scenario === 'failed') return route.fulfill({ status: 404 });
+            return fulfillImage(route, 1067, 1600);
+        });
+        await page.goto(`/culling/${id}`);
+        let started = Date.now();
+        if (scenario !== 'saved-session') {
+            await page.getByLabel('Photo Selection password', { exact: true }).fill('1234');
+            started = Date.now();
+            await page.getByRole('button', { name: 'Unlock Photo Selection' }).click();
+            await expect(page.locator('.gallery-unlock-card')).toHaveAttribute('data-phase', 'waiting');
+            if (scenario === 'ready') {
+                const transforms = await page.locator('.gallery-unlock-button').evaluate(async (button) => {
+                    const before = getComputedStyle(button, '::before').transform;
+                    await new Promise((resolve) => setTimeout(resolve, 200));
+                    return [before, getComputedStyle(button, '::before').transform];
+                });
+                expect(transforms[0]).not.toBe(transforms[1]);
+            }
+            if (scenario === 'reduced-motion') {
+                const progress = page.locator('.gallery-unlock-progress > span');
+                await expect(progress).toHaveCSS('animation-duration', '2.4s');
+                const moved = await progress.evaluate(async (line) => {
+                    const start = line.getBoundingClientRect().x;
+                    await new Promise((resolve) => setTimeout(resolve, 180));
+                    return Math.abs(start - line.getBoundingClientRect().x) > 2;
+                });
+                expect(moved).toBe(true);
+            }
+        }
+        if (scenario === 'data-error') {
+            await expect(page.getByRole('alert')).toContainText('Unable to load your gallery');
+            await expect(page.getByRole('dialog')).toHaveCount(0);
+            await page.getByRole('button', { name: 'Retry', exact: true }).click();
+        }
+        if (scenario === 'slow') {
+            await expect(page.getByTestId('tutorial-panel')).toBeHidden();
+            expect(await page.evaluate(() => document.body.style.position)).not.toBe('fixed');
+            await expect(page.getByTestId('gallery-grid')).toHaveCount(0);
+        }
+        const textFallback = ['slow', 'failed', 'no-samples'].includes(scenario);
+        await expect(page.getByRole('dialog', { name: 'How photo selection works' })).toBeVisible();
+        if (scenario === 'thumbnail-slow') {
+            expect(Date.now() - started).toBeLessThan(4500);
+            releaseThumbnail();
+        }
+        if (scenario !== 'saved-session') expect(Date.now() - started).toBeGreaterThanOrEqual(1900);
+        await expect(page.getByTestId(textFallback ? 'tutorial-submit-step' : 'tutorial-confidence-step')).toBeVisible();
+        await expect(page.getByTestId('tutorial-image-loading')).toHaveCount(0);
+        await expect(page.getByRole('button', { name: 'Close tutorial' })).toBeFocused();
+        if (!textFallback) await expect(page.getByTestId('tutorial-before-after-slider')).toHaveAttribute('aria-busy', 'false');
+        if (scenario === 'slow') {
+            releaseSample();
+            await page.waitForTimeout(400);
+            await expect(page.getByTestId('tutorial-submit-step')).toBeVisible();
+        }
+        if (scenario !== 'no-samples') {
+            expect(requests).toHaveLength(2);
+            expect(requests.every((url) => url.includes('startup-v2'))).toBe(true);
+        }
+        await page.screenshot({ path: `test-results/pin-startup-${scenario}.png` });
+        await page.getByRole('button', { name: 'Close tutorial' }).click();
+        await expect(page.getByTestId('gallery-grid')).toBeVisible();
+    });
+}
 
 test('returns to the PIN gate when an admin save invalidates the public token', async ({ page }) => {
     const id = 'stale-token-gallery';
@@ -1140,7 +1301,11 @@ test('shows the before and edited tutorial slider with pointer and keyboard cont
     await page.waitForTimeout(250);
     await expect.poll(() => loadingSpinner.evaluate((element) => getComputedStyle(element).transform)).not.toBe(initialSpinnerTransform);
     await page.emulateMedia({ reducedMotion: 'reduce' });
-    await expect(loadingSpinner).toHaveCSS('animation-name', 'none');
+    await expect(loadingSpinner).toHaveCSS('animation-name', 'spin');
+    await expect(loadingSpinner).toHaveCSS('animation-duration', '1.6s');
+    const reducedSpinnerTransform = await loadingSpinner.evaluate((element) => getComputedStyle(element).transform);
+    await page.waitForTimeout(250);
+    await expect.poll(() => loadingSpinner.evaluate((element) => getComputedStyle(element).transform)).not.toBe(reducedSpinnerTransform);
     await page.emulateMedia({ reducedMotion: 'no-preference' });
     await expect(beforeImage).toHaveCSS('opacity', '0');
     await expect(page.getByTestId('tutorial-slider-handle')).toHaveCount(0);
