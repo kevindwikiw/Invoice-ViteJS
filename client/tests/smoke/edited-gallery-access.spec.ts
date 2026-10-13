@@ -22,6 +22,7 @@ for (const access of ['edited-only', 'expired', 'closed', 'invalid', 'open'] as 
         const id = 'edited-access';
         await page.addInitScript(({ id, access }) => {
             localStorage.setItem(`orbit:edit-results-token:${id}`, 'edited-token');
+            localStorage.setItem(`orbit:edit-results-guide:${id}`, 'seen');
             localStorage.setItem(`orbit_culling_tutorial_${id}`, '1');
             if (access !== 'edited-only') localStorage.setItem(`orbit_culling_token_${id}`, 'selection-token');
         }, { id, access });
@@ -74,6 +75,7 @@ for (const theme of ['black', 'white']) {
         await page.setViewportSize({ width, height: 844 });
         await page.addInitScript(({ galleryId, theme }) => {
             localStorage.setItem(`orbit:edit-results-token:${galleryId}`, 'edited-token');
+            localStorage.setItem(`orbit:edit-results-guide:${galleryId}`, 'seen');
             localStorage.setItem(`orbit_culling_theme_${galleryId}`, theme);
         }, { galleryId: id, theme });
         await page.route(`**/api/public/galleries/${id}/**`, (route) => {

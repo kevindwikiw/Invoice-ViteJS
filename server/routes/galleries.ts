@@ -13,6 +13,7 @@ import {
     selectionDeadlineFromNow,
 } from "../lib/gallery-deadline";
 import { getFreshGallerySettings, getGallerySettings, invalidateGallerySettingsCache } from "../lib/gallery-settings-cache";
+import { fetchSelectionImage } from "../lib/selection-image";
 import { resetGalleryEditResultsAttempts, resetGalleryPinAttempts } from "../middleware/rate-limit";
 import { hasFeaturePermission } from "../permissions";
 import { faceSearchBodyLimit, handlePublicFaceSearch, handlePublicFaceSearchStatus, prepareGalleryFaceIndex } from "./face-index";
@@ -157,13 +158,14 @@ function photoShape(row: PhotoRow & Record<string, unknown>) {
 
 function publicPhotoShape(row: PhotoRow & Record<string, unknown>, accessVersion: number, expiresAt?: number) {
     const photo = photoShape(row);
+    const { thumbnailUrl, webViewUrl: _webViewUrl, ...publicPhoto } = photo;
     return {
-        ...photo,
+        ...publicPhoto,
         photoToken: createPhotoTokenSync({
             gid: photo.galleryId,
             av: accessVersion,
             fid: photo.driveFileId,
-            thumb: typeof photo.thumbnailUrl === "string" ? photo.thumbnailUrl : "",
+            thumb: typeof thumbnailUrl === "string" ? thumbnailUrl : "",
             mime: photo.mimeType,
             exp: expiresAt ?? Math.floor(Date.now() / 1000) + PHOTO_TOKEN_TTL_SECONDS,
         }),
@@ -411,15 +413,13 @@ function selectionUnavailable(c: Context<Env>): Response {
     return c.json({ error: "This gallery only offers edited photos. Open Edited Photos to access your gallery.", code: "SELECTION_NOT_AVAILABLE" }, 403);
 }
 
-// Gate selection routes before PIN/token checks, including standalone image tokens.
-for (const path of ["verify", "photos", "photos/*", "photo-manifest", "face-search", "face-search/*", "selections", "tutorial/*"]) {
-    publicGalleriesRouter.use(`/:id/${path}`, async (c, next) => {
-        const lookup = galleryLookup(c.req.param("id"));
-        const gallery = await galleryOne<{ workflow: GalleryWorkflow }>(`SELECT gallery_workflow as workflow FROM galleries WHERE ${lookup.sql}`, lookup.params);
-        if (gallery?.workflow === "delivery_only") return selectionUnavailable(c);
-        await next();
-    });
-}
+// Image tokens bypass requirePublicGallery, so their routes need a separate workflow gate.
+publicGalleriesRouter.use("/:id/photos/:fileId/*", async (c, next) => {
+    const lookup = galleryLookup(c.req.param("id"));
+    const gallery = await galleryOne<{ workflow: GalleryWorkflow }>(`SELECT gallery_workflow as workflow FROM galleries WHERE ${lookup.sql}`, lookup.params);
+    if (gallery?.workflow === "delivery_only") return selectionUnavailable(c);
+    await next();
+});
 
 for (const path of ["sync", "reset-pin-lock", "addon", "addon/*", "export.csv", "export.xlsx", "export-copy.ps1", "edit-results/pairing", "edit-results/pairing/*"]) {
     adminGalleriesRouter.use(`/:id/${path}`, async (c, next) => {
@@ -620,6 +620,7 @@ async function requirePublicGallery(c: Context<Env>): Promise<{ gallery: Gallery
         FROM galleries WHERE ${lookup.sql}
     `, lookup.params);
     if (!gallery) return c.json({ error: "Gallery Not Found" }, 404);
+    if (gallery.workflow === "delivery_only") return selectionUnavailable(c);
     if (!token || !await verifyGalleryToken(token, gallery.id, gallery.accessVersion)) return c.json({ error: "Gallery access expired. Enter the password again." }, 401);
     if (isSelectionDeadlineExpired(gallery.selectionDeadlineAt) || gallery.status !== "open") {
         const expired = isSelectionDeadlineExpired(gallery.selectionDeadlineAt);
@@ -1976,6 +1977,7 @@ publicGalleriesRouter.post("/:id/verify", async (c) => {
         FROM galleries WHERE ${lookup.sql}
     `, lookup.params);
     if (!gallery) return c.json({ error: "Gallery not found" }, 404);
+    if (gallery.workflow === "delivery_only") return selectionUnavailable(c);
     const galleryExpired = isSelectionDeadlineExpired(gallery.selectionDeadlineAt);
     if (galleryExpired || gallery.status !== "open") {
         const settings = await getGallerySettings();
@@ -2064,13 +2066,14 @@ publicGalleriesRouter.get("/:id/photos", async (c) => {
         INNER JOIN gallery_selections s ON s.gallery_id = p.gallery_id AND s.selected_drive_file_id = p.drive_file_id
         WHERE p.gallery_id = ? ORDER BY p.display_order, p.filename
     `, [result.gallery.id]) : Promise.resolve<Array<PhotoRow & { note?: string | null }>>([]);
-    const [photos, selections, selectedPhotos] = await Promise.all([
+    const [photos, selections, selectedPhotos, settings] = await Promise.all([
         photosPromise,
         selectionsPromise,
         selectedPhotosPromise,
+        getFreshGallerySettings(),
     ]);
     return c.json({
-        gallery: galleryPublicShape(result.gallery, await getFreshGallerySettings()),
+        gallery: galleryPublicShape(result.gallery, settings),
         photos: photos.map((photo) => publicPhotoShape(photo as PhotoRow & Record<string, unknown>, result.gallery.accessVersion, photoTokenExpiresAt)),
         page,
         pageSize,
@@ -2085,22 +2088,17 @@ publicGalleriesRouter.get("/:id/photos/:fileId/thumbnail", async (c) => {
     const fileId = c.req.param("fileId");
     const tokenPhoto = photoFromImageToken(c, fileId);
     let photo = tokenPhoto;
-    let galleryId = tokenPhoto?.galleryId ?? 0;
     if (!photo) {
         const result = await requirePublicGallery(c);
         if (result instanceof Response) return result;
-        galleryId = result.gallery.id;
         photo = await photoForImageRequest(c, result.gallery, fileId);
     }
     if (!photo) return c.json({ error: "Photo not found" }, 404);
     let driveResponse: Response;
     try {
-        driveResponse = await fetchDriveFile(photo.driveFileId, photo.thumbnailUrl || undefined, 320);
+        driveResponse = await fetchSelectionImage(photo, 320);
     } catch {
-        const refreshed = await getDrivePhotoMetadata(photo.driveFileId);
-        if (!refreshed.thumbnailLink) throw new Error("Google Drive did not return a thumbnail for this photo.");
-        if (!tokenPhoto) await galleryRun("UPDATE gallery_photos SET thumbnail_url = ?, web_view_url = ? WHERE gallery_id = ? AND drive_file_id = ?", [refreshed.thumbnailLink, refreshed.webViewLink || null, galleryId, photo.driveFileId]);
-        driveResponse = await fetchDriveFile(photo.driveFileId, refreshed.thumbnailLink, 320);
+        return c.json({ error: "Unable to load photo thumbnail." }, 502);
     }
     return new Response(driveResponse.body, {
         headers: {
@@ -2117,32 +2115,18 @@ publicGalleriesRouter.get("/:id/photos/:fileId/preview", async (c) => {
     const fileId = c.req.param("fileId");
     const tokenPhoto = photoFromImageToken(c, fileId);
     let photo = tokenPhoto;
-    let galleryId = tokenPhoto?.galleryId ?? 0;
     if (!photo) {
         const result = await requirePublicGallery(c);
         if (result instanceof Response) return result;
-        galleryId = result.gallery.id;
         photo = await photoForImageRequest(c, result.gallery, fileId);
     }
     if (!photo) return c.json({ error: "Photo not found" }, 404);
 
     let driveResponse: Response;
     try {
-        driveResponse = await fetchDriveFile(photo.driveFileId, photo.thumbnailUrl || undefined, 1600, true);
+        driveResponse = await fetchSelectionImage(photo, 1600);
     } catch {
-        let refreshedThumbnail: string | undefined;
-        try {
-            const refreshed = await getDrivePhotoMetadata(photo.driveFileId);
-            if (!tokenPhoto) await galleryRun("UPDATE gallery_photos SET thumbnail_url = ?, web_view_url = ? WHERE gallery_id = ? AND drive_file_id = ?", [refreshed.thumbnailLink || null, refreshed.webViewLink || null, galleryId, photo.driveFileId]);
-            refreshedThumbnail = refreshed.thumbnailLink || undefined;
-        } catch {
-            refreshedThumbnail = undefined;
-        }
-        try {
-            driveResponse = await fetchDriveFile(photo.driveFileId, refreshedThumbnail, 1600, true);
-        } catch {
-            driveResponse = await fetchDriveFile(photo.driveFileId);
-        }
+        driveResponse = await fetchDriveFile(photo.driveFileId);
     }
     return new Response(driveResponse.body, {
         headers: {

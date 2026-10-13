@@ -20,6 +20,7 @@ async function setup(page: Page, theme = 'black', connection?: { saveData: boole
         localStorage.setItem(`orbit_culling_tutorial_${id}`, '1');
         localStorage.setItem(`orbit_culling_theme_${id}`, theme);
         localStorage.setItem(`orbit:edit-results-token:${id}`, 'edited-token');
+        localStorage.setItem(`orbit:edit-results-guide:${id}`, 'seen');
         if (connection) Object.defineProperty(navigator, 'connection', { configurable: true, value: connection });
     }, { id, theme, connection });
     await page.route(`**/api/public/galleries/${id}/**`, async (route) => {

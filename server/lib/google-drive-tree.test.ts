@@ -20,6 +20,7 @@ test('Drive tree follows pagination and folders, ignores shortcuts, and rejects 
         }
         if (url.hostname === 'lh3.googleusercontent.com') {
             thumbnailAttempts += 1;
+            if (mode === 'expired-thumbnail') return new Response('expired link', { status: 404 });
             if (mode === 'retry-thumbnail' && thumbnailAttempts === 1) return new Response('busy', { status: 503, headers: { 'Retry-After': '0' } });
             const authorization = new Headers(init?.headers).get('Authorization');
             if (mode === 'refresh-token' && authorization === 'Bearer test') return new Response('expired', { status: 401 });
@@ -63,6 +64,10 @@ test('Drive tree follows pagination and folders, ignores shortcuts, and rejects 
         expect((await fetchDriveFile('photo', 'https://lh3.googleusercontent.com/photo=s320', 320, true)).ok).toBe(true);
         expect(thumbnailAttempts).toBe(2);
         expect(tokenIssues).toBe(2);
+        mode = 'expired-thumbnail';
+        thumbnailAttempts = 0;
+        await expect(fetchDriveFile('photo', 'https://lh3.googleusercontent.com/photo=s320', 320)).rejects.toThrow('expired link');
+        expect(thumbnailAttempts).toBe(1);
     } finally {
         fetchMock.mockRestore();
         if (originalConfig === undefined) delete process.env.GOOGLE_SERVICE_ACCOUNT_JSON;

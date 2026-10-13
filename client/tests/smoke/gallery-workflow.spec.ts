@@ -6,7 +6,7 @@ const image = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQ
 const photos = Array.from({ length: 55 }, (_, index) => ({ driveFileId: `wedding-${index}`, filename: `Wedding-${index}.jpg`, folderId: 'ceremony', width: 1200, height: 900, displayOrder: index, downloadUrl: 'https://drive.google.com/file' }));
 
 for (const width of [320, 390, 1280]) {
-    test(`Wedding client opens only Edited and restores folder state at ${width}px`, async ({ page }) => {
+    test(`Wedding client opens only Edited and restores folder state at ${width}px`, async ({ page }, testInfo) => {
         await page.setViewportSize({ width, height: 844 });
         const selectionRequests: string[] = [];
         let passwordAttempts = 0;
@@ -48,7 +48,18 @@ for (const width of [320, 390, 1280]) {
         await page.getByRole('button', { name: 'Unlock Edited Photos' }).click();
         const galleryHeading = page.getByRole('heading', { level: 1, name: weddingClientTitle });
         await expect(galleryHeading).toHaveCount(1);
-        await expect(galleryHeading.locator('..').getByText('Edited Photos', { exact: true })).toBeVisible();
+        await expect(page.getByTestId('gallery-header').getByText('Edited Photos', { exact: true })).toBeVisible();
+        await page.getByRole('button', { name: 'Close Edited Photos guide' }).click();
+        const titleButton = page.getByRole('button', { name: weddingClientTitle });
+        await titleButton.click();
+        await expect(page.getByRole('region', { name: 'Full event title' })).toHaveText(weddingClientTitle);
+        if (width === 320) {
+            await page.screenshot({ path: testInfo.outputPath('wedding-full-title-mobile.png') });
+            expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+        }
+        await page.keyboard.press('Escape');
+        await expect(titleButton).toBeFocused();
+        await expect(page.getByRole('region', { name: 'Full event title' })).toHaveCount(0);
         await page.getByRole('link', { name: 'Open folder Ceremony' }).click();
         await expect(page.getByRole('heading', { level: 1, name: weddingClientTitle })).toBeVisible();
         const grid = page.getByTestId('edited-gallery-grid');

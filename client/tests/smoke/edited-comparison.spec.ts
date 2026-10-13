@@ -6,6 +6,7 @@ for (const theme of ['black', 'white']) {
             await page.setViewportSize(viewport);
             await page.addInitScript((theme) => {
                 localStorage.setItem('orbit:edit-results-token:comparison', 'delivery-token');
+                localStorage.setItem('orbit:edit-results-guide:comparison', 'seen');
                 localStorage.setItem('orbit_culling_theme_comparison', theme);
             }, theme);
             const photos = Array.from({ length: 3 }, (_, index) => ({

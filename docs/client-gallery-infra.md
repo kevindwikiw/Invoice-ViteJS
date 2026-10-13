@@ -122,7 +122,9 @@ sequenceDiagram
 
 Frontend behavior:
 
-- Page size is fixed at 50.
+- Page size is fixed at 54.
+- Public photo lists read gallery access once, then load photos, selections, and current settings in parallel. They do not contact Drive.
+- Public photo metadata includes the signed photo token without duplicating its Drive thumbnail URL or unused web-view URL.
 - Grid thumbnail uses backend thumbnail URL.
 - Lightbox opens by `driveFileId`, not by fragile page index.
 - Picked filter uses local selection state before submit, so client can review choices first.
@@ -156,6 +158,10 @@ Notes:
 - Preview keeps the original frame using width-only Drive resize.
 - Browser image cache is private and long-lived while token remains valid.
 - Frontend also keeps a small in-memory preview cache for smoother lightbox navigation.
+- A missing grid thumbnail refreshes Drive metadata; the thumbnail endpoint never falls back to downloading the original image.
+- Expired thumbnail URLs are refreshed once for overlapping thumbnail/preview requests and repaired in the database, including requests using signed photo tokens.
+- Repaired URLs are cached per gallery, file, and original thumbnail URL for 10 minutes, up to 512 entries. This cache contains URLs only, not image bytes or authentication decisions.
+- A refresh does not overwrite a different thumbnail URL written by a concurrent gallery sync. Failed refreshes can be retried.
 
 ## Submit Selection Flow
 

@@ -1,27 +1,23 @@
 import { useCallback, useEffect, useState } from 'react';
-import { preloadPreviewImage } from './preview-cache';
 
 type StartupSession = { submittedAt: number | null; authenticatedAt: number };
 
-export function useGalleryStartup({ initialSession, dataReady, hasSamples, needsTutorial, thumbnailUrls }: {
+export function useGalleryStartup({ initialSession, dataReady, hasSamples, needsTutorial }: {
     initialSession: boolean;
     dataReady: boolean;
     hasSamples: boolean | undefined;
     needsTutorial: boolean;
-    thumbnailUrls: string[];
 }) {
     const [session, setSession] = useState<StartupSession | null>(() => initialSession ? { submittedAt: null, authenticatedAt: Date.now() } : null);
     const [media, setMedia] = useState<'pending' | 'ready' | 'failed'>('pending');
     const [expired, setExpired] = useState(false);
     const [minimumElapsed, setMinimumElapsed] = useState(initialSession);
-    const [thumbnailsReady, setThumbnailsReady] = useState(false);
     const [leaving, setLeaving] = useState(false);
     const [textOnly, setTextOnly] = useState(false);
     const start = useCallback((submittedAt: number) => {
         setMedia('pending');
         setExpired(false);
         setMinimumElapsed(false);
-        setThumbnailsReady(false);
         setLeaving(false);
         setTextOnly(false);
         setSession({ submittedAt, authenticatedAt: Date.now() });
@@ -36,20 +32,11 @@ export function useGalleryStartup({ initialSession, dataReady, hasSamples, needs
         return () => { window.clearTimeout(minimum); window.clearTimeout(deadline); };
     }, [session]);
 
-    useEffect(() => {
-        if (!session || !dataReady || (needsTutorial && media === 'pending')) return;
-        let active = true;
-        void Promise.allSettled(thumbnailUrls.map((url) => preloadPreviewImage(url))).then(() => {
-            if (active) setThumbnailsReady(true);
-        });
-        return () => { active = false; };
-    }, [session, dataReady, thumbnailUrls, needsTutorial, media]);
-
     // Freeze the destination before the exit begins, including late media results.
     if (session && !leaving) {
         if (!textOnly && needsTutorial && ((expired && media !== 'ready') || media === 'failed' || hasSamples === false)) setTextOnly(true);
         const tutorialReady = !needsTutorial || hasSamples === false || media !== 'pending' || expired;
-        if (dataReady && minimumElapsed && tutorialReady && (needsTutorial || thumbnailsReady || expired)) setLeaving(true);
+        if (dataReady && minimumElapsed && tutorialReady) setLeaving(true);
     }
 
     useEffect(() => {

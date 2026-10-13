@@ -14,13 +14,22 @@ change publication, password, token, expiry, or download APIs.
 - Bar 2 shows gallery view controls where other views exist. Wedding has only an
   Edited Photos label, not a tab for a view that cannot change. Download All is
   aligned to the right when an archive is available.
-- When folders exist, a fixed bottom bar shows root and subfolder links directly
-  in a horizontally scrollable row. Each link has a folder icon, and the active
-  folder has a clear underline; opening a menu is not required to switch folders.
+- When folders exist, a fixed bottom bar shows the active folder in one button.
+  It opens a vertically scrollable panel above the bar with root and subfolder
+  links, full folder names, and a clear active state. No horizontal scrolling or
+  photo counts are needed.
+- At each level, show direct child folders as icon-and-name tiles before photos
+  that belong directly to that level. Folder tiles do not request cover images.
+  A folder view has a link to its parent; folder and photo sections are labeled
+  separately only when both exist. Empty folders remain navigable.
+- After Edited Photos data is ready, show a per-gallery guide once, including
+  when access came from a saved token. Help reopens it. The guide explains
+  folders, the bottom picker, and viewing or downloading photos, adapting when
+  folders or a ZIP are absent.
 - Pagination and the footer remain reachable above the bottom bar.
 - Keep the same responsive alignment, type scale, and 44px control targets as
   the Photo Selection header. Long event names truncate without pushing actions
-  out of view.
+  out of view; tapping the title reveals its full name.
 
 ## Access States
 
@@ -48,6 +57,9 @@ change publication, password, token, expiry, or download APIs.
   unchanged while access is open.
 - Folder links preserve URL state, reset the edited page to 1, and remain usable
   at 320px and larger viewport widths.
+- A root containing only folders does not show a no-photos message. The guide
+  requires no extra media request or loading state and supports Escape, focus,
+  and reduced-motion preferences.
 
 ## Sync After Publication
 

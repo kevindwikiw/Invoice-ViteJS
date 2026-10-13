@@ -167,7 +167,7 @@ export function PinGate({
                     )}
                     {mode === 'edited' && (
                         <button type="submit" disabled={verifyEdited.isPending} aria-live="polite" className="mt-3 flex h-12 w-full items-center justify-center gap-2 rounded-md bg-[var(--accent)] text-xs font-bold text-[var(--bg-deep)] transition-opacity hover:opacity-85 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)] disabled:opacity-45">
-                            {verifyEdited.isPending ? <Loader2 size={14} aria-hidden="true" className="animate-spin" /> : <Lock size={14} aria-hidden="true" />} {verifyEdited.isPending ? 'Checking password…' : 'Unlock Edited Photos'}
+                            {verifyEdited.isPending ? <Loader2 size={14} aria-hidden="true" className="animate-spin motion-reduce:animate-none" /> : <Lock size={14} aria-hidden="true" />} {verifyEdited.isPending ? 'Checking password…' : 'Unlock Edited Photos'}
                         </button>
                     )}
                     <div inert={showPinLoading} className="gallery-unlock-secondary"><div>

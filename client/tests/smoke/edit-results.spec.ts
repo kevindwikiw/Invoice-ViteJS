@@ -4,6 +4,7 @@ test.use({ baseURL: process.env.PLAYWRIGHT_BASE_URL || 'http://127.0.0.1:5174' }
 
 for (const withArchive of [true, false]) {
 test(`edited photos reuse culling tiles and lightbox ${withArchive ? 'with' : 'without'} a ZIP`, async ({ page, context }) => {
+    await page.addInitScript(() => localStorage.setItem('orbit:edit-results-guide:edited-gallery', 'seen'));
     const archive = withArchive ? {
         filename: 'edited-photos.zip',
         downloadUrl: 'https://drive.google.com/uc?export=download&id=edited-archive&resourcekey=archive-key',
@@ -110,7 +111,7 @@ test(`edited photos reuse culling tiles and lightbox ${withArchive ? 'with' : 'w
 
 test('download resolver failure announces a retryable error without opening a blank tab', async ({ page, context }) => {
     const galleryId = 'download-error';
-    await page.addInitScript((id) => localStorage.setItem(`orbit:edit-results-token:${id}`, 'edited-token'), galleryId);
+    await page.addInitScript((id) => { localStorage.setItem(`orbit:edit-results-token:${id}`, 'edited-token'); localStorage.setItem(`orbit:edit-results-guide:${id}`, 'seen'); }, galleryId);
     await page.route('**/edit-results/status', (route) => route.fulfill({ json: { available: true, photoCount: 0 } }));
     await page.route('**/edit-results?token=edited-token', (route) => route.fulfill({ json: {
         photos: [],

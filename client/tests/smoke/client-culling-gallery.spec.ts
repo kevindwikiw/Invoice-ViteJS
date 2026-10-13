@@ -1227,6 +1227,30 @@ for (const scenario of ['ready', 'slow', 'failed', 'no-samples', 'data-error', '
     });
 }
 
+test('opens Photo Selection after PIN without waiting for slow thumbnails', async ({ page }) => {
+    const id = 'pin-slow-thumbnails-returning';
+    const data = gallery('2026-12-09T03:00:00.000Z', '2026-10-09T03:00:00.000Z');
+    await page.addInitScript((galleryKey) => localStorage.setItem(`orbit_culling_tutorial_${galleryKey}`, '1'), id);
+    await page.route(`**/api/public/galleries/${id}/edit-results/status`, (route) => route.fulfill({ json: { workflow: 'selection_delivery', title: data.title, available: false } }));
+    await page.route(`**/api/public/galleries/${id}/verify`, (route) => route.fulfill({ json: { token, gallery: data } }));
+    await page.route(`**/api/public/galleries/${id}/photos?*`, (route) => route.fulfill({ json: { gallery: data, photos: [photo(1)], page: 1, pageSize: 54, total: 1, totalPages: 1, selectedDriveFileIds: [], selectedPhotos: [] } }));
+    await page.route(`**/api/public/galleries/${id}/face-search/status`, (route) => route.fulfill({ json: { available: false, status: 'unavailable' } }));
+    let releaseThumbnail!: () => void;
+    const thumbnailGate = new Promise<void>((resolve) => { releaseThumbnail = resolve; });
+    await page.route(`**/api/public/galleries/${id}/photos/*/thumbnail?*`, async (route) => {
+        await thumbnailGate;
+        return fulfillImage(route, 320, 320);
+    });
+
+    await page.goto(`/culling/${id}`);
+    await page.getByLabel('Photo Selection password', { exact: true }).fill('1234');
+    await page.getByRole('button', { name: 'Unlock Photo Selection' }).click();
+    await expect(page.getByTestId('gallery-grid')).toBeVisible({ timeout: 4500 });
+    await expect(page.getByRole('dialog', { name: 'How photo selection works' })).toHaveCount(0);
+    releaseThumbnail();
+    await expect(page.getByTestId('gallery-grid').locator('img').first()).toBeVisible();
+});
+
 test('returns to the PIN gate when an admin save invalidates the public token', async ({ page }) => {
     const id = 'stale-token-gallery';
     await installSession(page, id);

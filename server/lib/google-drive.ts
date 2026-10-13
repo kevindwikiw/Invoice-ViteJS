@@ -318,7 +318,7 @@ export async function fetchDriveFile(fileId: string, thumbnailLink?: string, wid
         : `${DRIVE_API_BASE}/files/${encodeURIComponent(fileId)}?alt=media&supportsAllDrives=true`;
     let response = await fetchDriveGet(url, { accept: "image/webp,image/*;q=0.8,*/*;q=0.5", timeoutMs: 10_000 });
 
-    if (!response.ok && thumbnailLink) {
+    if (!response.ok && thumbnailLink && response.status !== 404 && response.status !== 410) {
         await discardResponse(response);
         response = await fetchDriveGet(resizedThumbnailUrl(thumbnailLink, width || 320, false, preserveAspectRatio), { accept: "image/*;q=0.8,*/*;q=0.5", timeoutMs: 10_000 });
     }

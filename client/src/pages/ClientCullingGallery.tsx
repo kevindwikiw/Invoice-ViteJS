@@ -9,7 +9,6 @@ import {
     getEditResultsStatus,
     galleryPreviewUrl,
     getPublicGalleryPhotos,
-    galleryThumbnailUrl,
     submitGallerySelections,
 } from '../features/culling/culling.public';
 
@@ -68,8 +67,8 @@ export default function ClientCullingGallery() {
         staleTime: 60_000,
         retry: false,
     });
-    if (!metadata.data) return <main style={readGalleryTheme(galleryId) === 'black' ? BLACK_THEME : WHITE_THEME} className="flex min-h-dvh flex-col items-center justify-center gap-4 bg-[var(--bg-deep)] px-5 text-center text-[var(--text-primary)]">
-        {metadata.isPending ? <p role="status" className="inline-flex items-center gap-2 text-sm"><Loader2 size={18} aria-hidden="true" className="animate-spin" /> Loading gallery...</p> : <>
+    if (!metadata.data) return <main style={readGalleryTheme(galleryId) === 'black' ? BLACK_THEME : WHITE_THEME} className="flex min-h-dvh flex-col items-center justify-center gap-4 bg-[var(--bg-deep)] px-5 font-sans text-center text-[var(--text-primary)]">
+        {metadata.isPending ? <p role="status" className="inline-flex items-center gap-2 text-sm font-medium text-[var(--text-secondary)]"><Loader2 size={18} aria-hidden="true" className="animate-spin motion-reduce:animate-none" /> Loading gallery...</p> : <>
             <p role="alert" className="text-sm">{metadata.error?.message || 'Unable to load gallery details.'}</p>
             <button type="button" onClick={() => void metadata.refetch()} className="min-h-11 rounded-md border border-[var(--border)] px-4 text-sm hover:bg-[var(--bg-elevated)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)]">Retry</button>
         </>}
@@ -123,6 +122,7 @@ function SelectionCullingGallery({ title }: { title?: string }) {
     const [activeTab, setActiveTab] = useState<GalleryView>(() => urlView as GalleryView);
     const [downloadTarget, setDownloadTarget] = useState<HTMLDivElement | null>(null);
     const [expiryTarget, setExpiryTarget] = useState<HTMLDivElement | null>(null);
+    const [editedHelpTarget, setEditedHelpTarget] = useState<HTMLDivElement | null>(null);
     const showSelected = activeTab === 'picked';
     const [selectionTouched, setSelectionTouched] = useState(() => readSelectionDraft(galleryId).length > 0);
     const [lightboxPhotoId, setLightboxPhotoId] = useState<string | null>(null);
@@ -187,13 +187,11 @@ function SelectionCullingGallery({ title }: { title?: string }) {
         refetchOnWindowFocus: true,
     });
     const startupGallery = photosQuery.isPlaceholderData ? unlockedGallery : photosQuery.data?.gallery ?? unlockedGallery;
-    const startupThumbnails = useMemo(() => (photosQuery.data?.photos.slice(0, 8) ?? []).map((photo) => galleryThumbnailUrl(galleryId, photo.driveFileId, token, photo.photoToken)), [photosQuery.data, galleryId, token]);
     const startup = useGalleryStartup({
         initialSession: Boolean(token) && showTutorial && selectionViewActive,
         dataReady: photosQuery.isSuccess && !photosQuery.isPlaceholderData,
         hasSamples: startupGallery ? Boolean(startupGallery.tutorialSampleSlots?.length) : undefined,
         needsTutorial: showTutorial,
-        thumbnailUrls: startupThumbnails,
     });
     useEffect(() => { if (!token) startup.cancel(); }, [token, startup.cancel]);
     const submittedPhotosQuery = useQuery({
@@ -748,6 +746,7 @@ function SelectionCullingGallery({ title }: { title?: string }) {
                         {activeTab !== 'edit-results' && <div className="lg:pr-2"><CountdownLabel countdown={countdown} compact /></div>}
                         <div data-testid="header-utilities" className="flex items-center gap-2">
                             {activeTab !== 'edit-results' && <button type="button" onClick={() => setShowTutorial(true)} title="How to Submit" aria-label="How to Submit" className="flex h-11 w-11 shrink-0 items-center justify-center px-2 text-[var(--text-secondary)] transition-[color,transform] duration-150 hover:text-[var(--text-primary)] active:scale-[0.97] motion-reduce:transition-none"><HelpCircle size={16} aria-hidden="true" /></button>}
+                            {activeTab === 'edit-results' && <div ref={setEditedHelpTarget} />}
                             <ThemeToggle theme={theme} onToggle={toggleTheme} />
                         </div>
                     </div>
@@ -809,7 +808,7 @@ function SelectionCullingGallery({ title }: { title?: string }) {
                 )}
 
                 {activeTab === 'edit-results' ? (
-                    <EditResultsGrid galleryId={galleryId} theme={theme} token={editResultsToken} onToken={updateEditResultsToken} downloadTarget={downloadTarget} expiryTarget={expiryTarget} />
+                    <EditResultsGrid galleryId={galleryId} theme={theme} token={editResultsToken} onToken={updateEditResultsToken} downloadTarget={downloadTarget} expiryTarget={expiryTarget} helpTarget={editedHelpTarget} />
                 ) : (submittedOnly ? submittedPhotosQuery.isLoading : photosQuery.isLoading) ? (
                     <div role="status" aria-live="polite" className="flex min-h-[60vh] items-center justify-center gap-3 text-sm text-[var(--text-muted)]">
                         <Loader2 size={24} aria-hidden="true" className="animate-spin text-[var(--accent)]" />
@@ -848,7 +847,7 @@ function SelectionCullingGallery({ title }: { title?: string }) {
                                     galleryId={galleryId}
                                     displayIndex={photoDisplayIndex(photo, fallbackIndex)}
                                     thumbnailPriority={index === 0}
-                                    thumbnailEager={index < 10}
+                                    thumbnailEager={index < 25}
                                     onOpen={handleOpenLightbox}
                                     onPrefetch={handlePrefetchLightbox}
                                     onToggle={handleToggleSelection}
@@ -878,11 +877,11 @@ function SelectionCullingGallery({ title }: { title?: string }) {
                 </div>
             </div>}
 
-            <footer className={clsx('border-t border-[var(--border)] px-4 py-5 text-[10px] text-[var(--text-muted)] md:px-8', (showSelectionActionBar || activeTab === 'edit-results') && 'pb-[calc(5rem+env(safe-area-inset-bottom))] sm:pb-24')}>
-                <div className="mx-auto flex max-w-[1600px] flex-col items-center justify-between gap-3 sm:flex-row">
-                    <p>&copy; {currentYear ?? ''} The Orbit Photo. All rights reserved.</p>
-                    <a href="https://www.instagram.com/theorbitphoto/" target="_blank" rel="noreferrer" aria-label="@theorbitphoto on Instagram" className="inline-flex items-center gap-1.5 text-[var(--text-secondary)] transition-colors hover:text-[var(--text-primary)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)]">
-                        <Instagram size={13} /> @theorbitphoto
+            <footer className={clsx('border-t border-[var(--border)] px-4 py-4 font-sans text-xs leading-5 text-[var(--text-muted)] md:px-8', (showSelectionActionBar || activeTab === 'edit-results') && 'pb-[calc(5rem+env(safe-area-inset-bottom))] sm:pb-24')}>
+                <div className="mx-auto flex max-w-[1600px] items-center justify-between gap-2 sm:gap-3">
+                    <p className="min-w-0 whitespace-nowrap"><span className="sm:hidden">&copy; {currentYear ?? ''} The Orbit Photo</span><span className="hidden sm:inline">&copy; {currentYear ?? ''} The Orbit Photo. All rights reserved.</span></p>
+                    <a href="https://www.instagram.com/theorbitphoto/" target="_blank" rel="noreferrer" aria-label="@theorbitphoto on Instagram" className="inline-flex min-h-11 items-center gap-2 font-medium text-[var(--text-secondary)] transition-colors hover:text-[var(--text-primary)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)]">
+                        <Instagram size={16} aria-hidden="true" /> @theorbitphoto
                     </a>
                 </div>
             </footer>
