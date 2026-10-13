@@ -314,6 +314,37 @@ test.beforeEach(async ({ page }) => {
     });
 });
 
+test('saving a new edited folder requires Sync before client photos are marked updated', async ({ page }) => {
+    let gallery = { ...exampleGallery, status: 'open', editResultsStatus: 'open', editResultsFolderId: 'old-folder', hasEditResults: true, editResultsPhotoCount: 3 };
+    let syncs = 0;
+    await page.route('**/api/galleries?*', (route) => route.fulfill({ json: { items: [gallery], total: 1, totalPages: 1 } }));
+    await page.route('**/api/galleries/7', (route) => {
+        if (route.request().method() === 'PATCH') {
+            gallery = { ...gallery, ...route.request().postDataJSON() };
+            return route.fulfill({ json: { status: 'updated', editedSourceChanged: true } });
+        }
+        return route.fulfill({ json: { gallery, photos: [], selections: [] } });
+    });
+    await page.route('**/api/galleries/7/edit-results/sync', (route) => {
+        syncs++;
+        gallery = { ...gallery, editResultsPhotoCount: 5 };
+        return route.fulfill({ json: { status: 'synced', published: true, photoCount: 5, folderCount: 0 } });
+    });
+    await page.goto('/galleries?mode=selection');
+    await page.getByText(gallery.title, { exact: true }).click();
+    const dialog = page.getByRole('dialog');
+    await dialog.getByRole('tab', { name: 'Edited Photos', exact: true }).click();
+    await dialog.getByLabel('Edited photos Drive folder').fill('new-folder');
+    await dialog.getByRole('button', { name: 'Save Edited Photos', exact: true }).click();
+    await expect(dialog.getByText('Saved · Sync to update client photos')).toBeVisible();
+    await expect(dialog.getByText('Folder saved. Sync to replace the photos clients see.')).toBeVisible();
+    await expect(dialog.getByLabel('Password for publication')).toHaveValue('');
+    await dialog.getByRole('button', { name: 'Sync', exact: true }).click();
+    await expect.poll(() => syncs).toBe(1);
+    await expect(dialog.getByText('Folder saved. Sync to replace the photos clients see.')).toHaveCount(0);
+    await expect(page.getByText('Published snapshot updated with 5 edited photos. Access settings unchanged.')).toBeVisible();
+});
+
 test('Preview Samples saves globally without appearing in gallery details', async ({ page }) => {
     let settings = {
         contactWhatsappUrl: '081234567890', message: 'Access message', requestMoreMessage: 'Request message',

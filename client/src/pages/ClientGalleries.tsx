@@ -902,6 +902,7 @@ function GalleryDetailEditor({ data, close, initialMode, focusSelectionDuration 
     wasPairsOpen.current = pairsOpen;
   }, [pairsOpen]);
   const [folderDirty, setFolderDirty] = useState(false);
+  const [editedSyncPending, setEditedSyncPending] = useState(false);
   const initialEditDuration = data.editResultsAccessDurationHours;
   const [editAccessPreset, setEditAccessPreset] = useState(() => initialEditDuration === null ? 'unlimited' : [24, 72, 168, 336].includes(Number(initialEditDuration || 168)) ? String(initialEditDuration || 168) : 'custom');
   const [editCustomDays, setEditCustomDays] = useState(() => Math.max(1, Math.round(Number(initialEditDuration || 168) / 24)));
@@ -958,12 +959,13 @@ function GalleryDetailEditor({ data, close, initialMode, focusSelectionDuration 
         pin.value = '';
         setPendingPin(false);
       }
-      addToast(variables.pin ? 'Gallery updated. The new Photo Selection password is active.' : 'Gallery updated.', 'success');
+      const needsEditedSync = mode === 'edited' && result.editedSourceChanged && data.hasEditResults && !publishAfterSave;
+      addToast(needsEditedSync ? 'Folder saved. Sync Edited Photos to update the client gallery.' : variables.pin ? 'Gallery updated. The new Photo Selection password is active.' : 'Gallery updated.', 'success');
       await qc.invalidateQueries({ queryKey: ['gallery-detail', data.id] });
       void qc.invalidateQueries({ queryKey: ['galleries'] });
       setDirty(false);
       if (mode === 'selection') { setAddonDirty(false); setRestartSelectionWindow(false); }
-      else { setPairsDirty(false); setFolderDirty(false); }
+      else { setPairsDirty(false); setFolderDirty(false); if (needsEditedSync) setEditedSyncPending(true); }
       setSaved(true);
       setSaveError('');
       setActionError('');
@@ -997,8 +999,12 @@ function GalleryDetailEditor({ data, close, initialMode, focusSelectionDuration 
   const editSync = useMutation({
     mutationFn: syncEditResults,
     onSuccess: (result) => {
-      addToast(`Edited Photos folder synced. ${result.photoCount} photos found.`, 'success');
-      qc.invalidateQueries({ queryKey: ['gallery-detail', data.id] });
+      addToast(result.published ? `Published snapshot updated with ${result.photoCount} edited photos. Access settings unchanged.` : `${result.photoCount} edited photos found. Publish to make them available to clients.`, 'success');
+      setPublishWarnings(result.warnings || []);
+      if (result.published) setEditedSyncPending(false);
+      void qc.invalidateQueries({ queryKey: ['galleries'] });
+      void qc.invalidateQueries({ queryKey: ['gallery-detail', data.id] });
+      void qc.invalidateQueries({ queryKey: ['public-edit-results'] });
     },
     onError: (error) => reportActionError('Edited Photos sync', error),
   });
@@ -1014,6 +1020,7 @@ function GalleryDetailEditor({ data, close, initialMode, focusSelectionDuration 
       setEditedStatus('open');
       setDirty(false);
       setSaved(true);
+      setEditedSyncPending(false);
       qc.invalidateQueries({ queryKey: ['galleries'] });
       qc.invalidateQueries({ queryKey: ['gallery-detail', data.id] });
     },
@@ -1050,14 +1057,14 @@ function GalleryDetailEditor({ data, close, initialMode, focusSelectionDuration 
         {saveError && <p role="alert" className="flex items-start gap-2 text-xs leading-5 text-rose-500"><AlertCircle size={15} className="mt-0.5 shrink-0" />{saveError}</p>}
         {actionError && <p role="alert" className="flex items-start gap-2 text-xs leading-5 text-rose-500"><AlertCircle size={15} aria-hidden="true" className="mt-0.5 shrink-0" />{actionError}</p>}
         <div className="flex items-center justify-between gap-3">
-          <span role="status" aria-live="polite" className={clsx('inline-flex min-h-5 items-center gap-2 text-xs transition-colors duration-200 motion-reduce:transition-none', dirty ? 'font-semibold text-[var(--accent)]' : saved ? 'text-emerald-500' : 'text-[var(--text-muted)]')}>
+          <span role="status" aria-live="polite" className={clsx('inline-flex min-h-5 items-center gap-2 text-xs transition-colors duration-200 motion-reduce:transition-none', dirty ? 'font-semibold text-[var(--accent)]' : mode === 'edited' && editedSyncPending ? 'font-semibold text-[var(--text-primary)]' : saved ? 'text-emerald-500' : 'text-[var(--text-muted)]')}>
             {dirty && (
               <span className="relative flex h-2 w-2 shrink-0">
                 <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-[var(--accent)] opacity-75" />
                 <span className="relative inline-flex h-2 w-2 rounded-full bg-[var(--accent)]" />
               </span>
             )}
-            {dirty ? 'Unsaved changes' : mode === 'edited' && editResultsPassword ? 'Delivery password not published' : saved && liveComparisonCount !== null ? `Changes saved · Before / After live on ${liveComparisonCount} ${liveComparisonCount === 1 ? 'photo' : 'photos'}` : saved ? 'Changes saved' : 'No changes to save'}
+            {dirty ? 'Unsaved changes' : mode === 'edited' && editResultsPassword ? 'Delivery password not published' : mode === 'edited' && editedSyncPending ? 'Saved · Sync to update client photos' : saved && liveComparisonCount !== null ? `Changes saved · Before / After live on ${liveComparisonCount} ${liveComparisonCount === 1 ? 'photo' : 'photos'}` : saved ? 'Changes saved' : 'No changes to save'}
           </span>
           <button type="submit" form={mode === 'edited' ? 'edit-delivery-form' : 'edit-gallery-form'} disabled={busy || !dirty} className="inline-flex h-11 min-w-36 items-center justify-center gap-2 rounded-md bg-[var(--accent)] px-4 text-xs font-bold text-[var(--bg-deep)] transition-[opacity,transform] duration-150 hover:opacity-90 active:scale-[0.98] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)] disabled:cursor-not-allowed disabled:opacity-45 motion-reduce:transition-none">
             {update.isPending ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />}
@@ -1084,6 +1091,7 @@ function GalleryDetailEditor({ data, close, initialMode, focusSelectionDuration 
             <p className="text-xs text-[var(--text-muted)]">
               {data.hasEditResults ? `${data.editResultsPhotoCount || 0} edited photos published` : 'Edited Photos not published'}
             </p>
+            {editedSyncPending && <p role="status" className="mt-1 text-xs font-medium text-[var(--text-primary)]">Folder saved. Sync to replace the photos clients see.</p>}
             <p className={clsx('mt-1.5 inline-flex items-center gap-1.5 text-[10px] font-semibold', data.hasEditResults && data.editResultsExpiresAt && Date.parse(data.editResultsExpiresAt) <= Date.now() ? 'text-[var(--text-primary)]' : 'text-[var(--text-secondary)]')}>
               <Clock3 size={12} aria-hidden="true" /> {!data.hasEditResults ? 'Not published' : !data.editResultsExpiresAt ? 'Unlimited' : Date.parse(data.editResultsExpiresAt) <= Date.now() ? 'Expired' : formatDateValue(data.editResultsExpiresAt, dateFormat, 'Expired')} · {data.editResultsAccessDurationHours ? `${data.editResultsAccessDurationHours} hours` : 'Unlimited'}
             </p>

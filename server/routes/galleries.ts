@@ -3,7 +3,7 @@ import { Buffer } from "node:buffer";
 import { createHmac } from "node:crypto";
 import writeExcelFile from "write-excel-file/node";
 import { galleryAll, galleryBatch, galleryInsertReturningId, galleryOne, galleryRun } from "../db/galleries";
-import { fetchDriveFile, getDrivePhotoMetadata, hasAnyoneViewerFolderAccess, listDrivePhotos, listDrivePhotoTree, type DriveFolder, type DrivePhoto } from "../lib/google-drive";
+import { fetchDriveFile, getDrivePhotoMetadata, hasAnyoneViewerFolderAccess, listDrivePhotos, listDrivePhotoTree, type DriveFolder, type DriveFolderPhoto, type DrivePhoto } from "../lib/google-drive";
 import {
     DEFAULT_SELECTION_DURATION_HOURS,
     isSelectionDeadlineExpired,
@@ -1050,6 +1050,7 @@ adminGalleriesRouter.patch("/:id", async (c) => {
             return c.json({ error: "Enter a valid Google Drive ZIP file URL or file ID." }, 400);
         }
     }
+    const editedSourceChanged = editResultsFolderId !== (existing.editResultsFolderId || null) || editResultsZipFileId !== (existing.editResultsZipFileId || null);
     const editedFields = ["editResultsStatus", "editResultsFolderId", "editResultsZipFileId", "editResultsAccessDurationHours", "comparisonEnabled", "comparisonPairs"];
     const changesEdited = editedFields.some((key) => body[key] !== undefined);
     const changesSelection = !deliveryOnly && Object.keys(body).some((key) => !editedFields.includes(key));
@@ -1171,7 +1172,7 @@ adminGalleriesRouter.patch("/:id", async (c) => {
     });
     if (statements.length) await galleryBatch(statements);
     if (changesSelection && status === "open" && driveFolderId === existing.driveFolderId) void prepareGalleryFaceIndex(id);
-    return c.json({ status: "updated", ...(liveComparisonCount === undefined ? {} : { comparisonApplied: true, comparisonCount: liveComparisonCount }) });
+    return c.json({ status: "updated", editedSourceChanged, ...(liveComparisonCount === undefined ? {} : { comparisonApplied: true, comparisonCount: liveComparisonCount }) });
 });
 
 async function pairingRootPhotos(galleryId: number, folderId: string, forceRefresh = false): Promise<Map<string, DrivePhoto>> {
@@ -1284,18 +1285,95 @@ async function validatedEditedFolder(c: Context<Env>, folderId: string) {
     return tree;
 }
 
+async function validatedEditedArchive(c: Context<Env>, zipFileId: string | null | undefined) {
+    if (!zipFileId) return null;
+    let zip: Awaited<ReturnType<typeof getDrivePhotoMetadata>>;
+    try {
+        zip = await getDrivePhotoMetadata(zipFileId);
+    } catch {
+        return c.json({ error: "Unable to read the ZIP file. Check the link and Google Drive access." }, 400);
+    }
+    const zipMimeTypes = ["application/zip", "application/x-zip-compressed", "application/octet-stream"];
+    if (!zipMimeTypes.includes(zip.mimeType.toLowerCase()) || !/\.zip$/i.test(zip.name)) {
+        return c.json({ error: "Edited Photos ZIP must be a .zip archive." }, 400);
+    }
+    const downloadUrl = directDriveDownloadUrl(zip);
+    if (!downloadUrl || zip.canDownload !== true) {
+        return c.json({ error: "Google Drive does not allow this ZIP to be downloaded. Check its sharing and Viewer download permissions." }, 400);
+    }
+    if (await hasAnyoneViewerFolderAccess(zipFileId) === false) {
+        return c.json({ error: "Share the ZIP as Anyone with the link - Viewer before syncing or publishing." }, 400);
+    }
+    return { filename: zip.name, downloadUrl };
+}
+
+async function editedSnapshotComparisons(galleryId: number, workflow: GalleryWorkflow, photos: DriveFolderPhoto[]) {
+    const beforeByEdited = new Map<string, BeforePhoto>();
+    const warnings: string[] = [];
+    const draft = await comparisonDraft(galleryId);
+    if (workflow !== "delivery_only" && draft.comparisonEnabled) {
+        const submitted = await submittedComparisonPhotos(galleryId);
+        const rootEditedIds = new Set(photos.filter((photo) => photo.folderId === null).map((photo) => photo.id));
+        const valid = validComparisonPairs(draft.comparisonPairs, rootEditedIds, new Set(submitted.map((photo) => photo.driveFileId)));
+        const beforeIds = [...new Set(valid.map((pair) => pair.beforeDriveFileId))];
+        const verified = new Map<string, BeforePhoto>();
+        // Keep Drive metadata requests bounded when several B&W variants share a source.
+        for (let offset = 0; offset < beforeIds.length; offset += 4) {
+            await Promise.all(beforeIds.slice(offset, offset + 4).map(async (fileId) => {
+                try {
+                    const photo = await getDrivePhotoMetadata(fileId);
+                    if (!photo.mimeType.startsWith("image/")) return;
+                    verified.set(fileId, { driveFileId: photo.id, filename: photo.name, mimeType: photo.mimeType, thumbnailUrl: photo.thumbnailLink || null, width: photo.width ?? null, height: photo.height ?? null });
+                } catch { /* An unavailable before photo must not block delivery. */ }
+            }));
+        }
+        for (const pair of valid) {
+            const before = verified.get(pair.beforeDriveFileId);
+            if (before) beforeByEdited.set(pair.editedDriveFileId, before);
+        }
+        const removed = draft.comparisonPairs.length - beforeByEdited.size;
+        if (removed) warnings.push(`${removed} unavailable comparison pair(s) were omitted. Review Manage Pairs.`);
+    }
+    return { beforeByEdited, warnings };
+}
+
+function editedSnapshotStatements(galleryId: number, photos: DriveFolderPhoto[], folders: DriveFolder[], beforeByEdited: Map<string, BeforePhoto>) {
+    return [
+        { sql: "DELETE FROM gallery_edit_result_photos WHERE gallery_id = ?", params: [galleryId] },
+        { sql: "DELETE FROM gallery_edit_result_folders WHERE gallery_id = ?", params: [galleryId] },
+        ...folders.map((folder) => ({
+            sql: "INSERT INTO gallery_edit_result_folders (gallery_id, drive_folder_id, parent_id, name) VALUES (?, ?, ?, ?)",
+            params: [galleryId, folder.id, folder.parentId, folder.name],
+        })),
+        ...photos.map((photo, displayOrder) => ({
+            sql: "INSERT INTO gallery_edit_result_photos (gallery_id, drive_file_id, filename, mime_type, thumbnail_url, web_content_link, resource_key, width, height, display_order, before_photo, folder_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            params: [galleryId, photo.id, photo.name, photo.mimeType, photo.thumbnailLink || null, directDriveDownloadUrl(photo), photo.resourceKey || null, photo.width ?? null, photo.height ?? null, displayOrder, beforeByEdited.has(photo.id) ? JSON.stringify(beforeByEdited.get(photo.id)) : null, photo.folderId],
+        })),
+    ];
+}
+
 adminGalleriesRouter.post("/:id/edit-results/sync", async (c) => {
     const denied = await requireGalleryAdmin(c);
     if (denied) return denied;
     const id = Number(c.req.param("id"));
     if (!Number.isInteger(id)) return c.json({ error: "Invalid gallery ID" }, 400);
-    const gallery = await galleryOne<{ editResultsFolderId: string | null }>(`SELECT edit_results_folder_id as "editResultsFolderId" FROM galleries WHERE id = ?`, [id]);
+    const gallery = await galleryOne<GalleryRow>(`SELECT gallery_workflow as workflow, edit_results_folder_id as "editResultsFolderId", edit_results_zip_file_id as "editResultsZipFileId", edit_results_key_hash as "editResultsKeyHash", edit_results_published_at as "editResultsPublishedAt", edit_results_photo_count as "editResultsPhotoCount" FROM galleries WHERE id = ?`, [id]);
     if (!gallery) return c.json({ error: "Gallery not found" }, 404);
     if (!gallery.editResultsFolderId) return c.json({ error: "Save an edited photos folder first." }, 400);
     try {
         const tree = await validatedEditedFolder(c, gallery.editResultsFolderId);
         if (tree instanceof Response) return tree;
-        return c.json({ status: "synced", photoCount: tree.photos.length, folderCount: tree.folders.length });
+        if (!gallery.editResultsKeyHash || !gallery.editResultsPublishedAt || !Number(gallery.editResultsPhotoCount)) {
+            return c.json({ status: "validated", published: false, photoCount: tree.photos.length, folderCount: tree.folders.length }, 200, { "Cache-Control": "no-store" });
+        }
+        const archive = await validatedEditedArchive(c, gallery.editResultsZipFileId);
+        if (archive instanceof Response) return archive;
+        const { beforeByEdited, warnings } = await editedSnapshotComparisons(id, gallery.workflow, tree.photos);
+        await galleryBatch([
+            ...editedSnapshotStatements(id, tree.photos, tree.folders, beforeByEdited),
+            { sql: "UPDATE galleries SET edit_results_photo_count = ?, edit_results_published_zip_file_id = ?, edit_results_zip_filename = ?, edit_results_zip_download_url = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?", params: [tree.photos.length, archive ? gallery.editResultsZipFileId : null, archive?.filename || null, archive?.downloadUrl || null, id] },
+        ]);
+        return c.json({ status: "synced", published: true, photoCount: tree.photos.length, folderCount: tree.folders.length, warnings }, 200, { "Cache-Control": "no-store" });
     } catch {
         return c.json({ error: "Unable to sync the Edited Photos folder. Check Google Drive access and try again." }, 502);
     }
@@ -1319,77 +1397,18 @@ adminGalleriesRouter.post("/:id/edit-results/publish", async (c) => {
         const tree = await validatedEditedFolder(c, gallery.editResultsFolderId);
         if (tree instanceof Response) return tree;
         const { photos, folders } = tree;
-        const snapshot = photos.map((photo, index) => ({ photo, downloadUrl: directDriveDownloadUrl(photo), displayOrder: index }));
-
-        let archive: { filename: string; downloadUrl: string } | null = null;
-        if (gallery.editResultsZipFileId) {
-            let zip: Awaited<ReturnType<typeof getDrivePhotoMetadata>>;
-            try {
-                zip = await getDrivePhotoMetadata(gallery.editResultsZipFileId);
-            } catch {
-                return c.json({ error: "Unable to read the ZIP file. Check the link and Google Drive access." }, 400);
-            }
-            const zipMimeTypes = ["application/zip", "application/x-zip-compressed", "application/octet-stream"];
-            if (!zipMimeTypes.includes(zip.mimeType.toLowerCase()) || !/\.zip$/i.test(zip.name)) {
-                return c.json({ error: "Edited Photos ZIP must be a .zip archive." }, 400);
-            }
-            const downloadUrl = directDriveDownloadUrl(zip);
-            if (!downloadUrl || zip.canDownload !== true) {
-                return c.json({ error: "Google Drive does not allow this ZIP to be downloaded. Check its sharing and Viewer download permissions." }, 400);
-            }
-            const publicZipAccess = await hasAnyoneViewerFolderAccess(gallery.editResultsZipFileId);
-            if (publicZipAccess === false) {
-                return c.json({ error: "Share the ZIP as Anyone with the link - Viewer before publishing." }, 400);
-            }
-            // Readers cannot always audit permissions. The admin must verify
-            // the public link in incognito; never probe the ZIP's binary content.
-            archive = { filename: zip.name, downloadUrl };
-        }
-
-        const draft = await comparisonDraft(id);
-        const beforeByEdited = new Map<string, BeforePhoto>();
-        const warnings: string[] = [];
-        if (gallery.workflow !== "delivery_only" && draft.comparisonEnabled) {
-            const submitted = await submittedComparisonPhotos(id);
-            const rootEditedIds = new Set(photos.filter((photo) => photo.folderId === null).map((photo) => photo.id));
-            const valid = validComparisonPairs(draft.comparisonPairs, rootEditedIds, new Set(submitted.map((p) => p.driveFileId)));
-            const beforeIds = [...new Set(valid.map((pair) => pair.beforeDriveFileId))];
-            const verified = new Map<string, BeforePhoto>();
-            // Bound Drive metadata concurrency; B&W variants share one lookup.
-            for (let offset = 0; offset < beforeIds.length; offset += 4) {
-                await Promise.all(beforeIds.slice(offset, offset + 4).map(async (fileId) => {
-                    try {
-                        const p = await getDrivePhotoMetadata(fileId);
-                        if (!p.mimeType.startsWith("image/")) return;
-                        verified.set(fileId, { driveFileId: p.id, filename: p.name, mimeType: p.mimeType, thumbnailUrl: p.thumbnailLink || null, width: p.width ?? null, height: p.height ?? null });
-                    } catch { /* An unavailable before photo must not block delivery. */ }
-                }));
-            }
-            for (const pair of valid) {
-                const before = verified.get(pair.beforeDriveFileId);
-                if (before) beforeByEdited.set(pair.editedDriveFileId, before);
-            }
-            const removed = draft.comparisonPairs.length - beforeByEdited.size;
-            if (removed) warnings.push(`${removed} unavailable comparison pair(s) were omitted. Review Manage Pairs.`);
-        }
+        const archive = await validatedEditedArchive(c, gallery.editResultsZipFileId);
+        if (archive instanceof Response) return archive;
+        const { beforeByEdited, warnings } = await editedSnapshotComparisons(id, gallery.workflow, photos);
         const keyHash = await Bun.password.hash(password, { algorithm: "bcrypt", cost: 10 });
         const publishedAt = new Date().toISOString();
         const expiresAt = editResultsExpiryFromDuration(gallery.editResultsAccessDurationHours, publishedAt);
         const statements = [
-            { sql: "DELETE FROM gallery_edit_result_photos WHERE gallery_id = ?", params: [id] },
-            { sql: "DELETE FROM gallery_edit_result_folders WHERE gallery_id = ?", params: [id] },
-            ...folders.map((folder) => ({
-                sql: "INSERT INTO gallery_edit_result_folders (gallery_id, drive_folder_id, parent_id, name) VALUES (?, ?, ?, ?)",
-                params: [id, folder.id, folder.parentId, folder.name],
-            })),
-            ...snapshot.map(({ photo, downloadUrl, displayOrder }) => ({
-                sql: "INSERT INTO gallery_edit_result_photos (gallery_id, drive_file_id, filename, mime_type, thumbnail_url, web_content_link, resource_key, width, height, display_order, before_photo, folder_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                params: [id, photo.id, photo.name, photo.mimeType, photo.thumbnailLink || null, downloadUrl, photo.resourceKey || null, photo.width ?? null, photo.height ?? null, displayOrder, beforeByEdited.has(photo.id) ? JSON.stringify(beforeByEdited.get(photo.id)) : null, photo.folderId],
-            })),
-            { sql: "UPDATE galleries SET edit_results_status = 'open', edit_results_key_hash = ?, edit_results_published_at = ?, edit_results_expires_at = ?, edit_results_photo_count = ?, edit_results_published_zip_file_id = ?, edit_results_zip_filename = ?, edit_results_zip_download_url = ?, edit_results_version = edit_results_version + 1, updated_at = CURRENT_TIMESTAMP WHERE id = ?", params: [keyHash, publishedAt, expiresAt, snapshot.length, archive ? gallery.editResultsZipFileId : null, archive?.filename || null, archive?.downloadUrl || null, id] },
+            ...editedSnapshotStatements(id, photos, folders, beforeByEdited),
+            { sql: "UPDATE galleries SET edit_results_status = 'open', edit_results_key_hash = ?, edit_results_published_at = ?, edit_results_expires_at = ?, edit_results_photo_count = ?, edit_results_published_zip_file_id = ?, edit_results_zip_filename = ?, edit_results_zip_download_url = ?, edit_results_version = edit_results_version + 1, updated_at = CURRENT_TIMESTAMP WHERE id = ?", params: [keyHash, publishedAt, expiresAt, photos.length, archive ? gallery.editResultsZipFileId : null, archive?.filename || null, archive?.downloadUrl || null, id] },
         ];
         await galleryBatch(statements);
-        return c.json({ publishedAt, expiresAt, expiresIn: editResultsExpiresIn(expiresAt), photoCount: snapshot.length, folderCount: folders.length, comparisonCount: beforeByEdited.size, warnings }, 201, { "Cache-Control": "no-store" });
+        return c.json({ publishedAt, expiresAt, expiresIn: editResultsExpiresIn(expiresAt), photoCount: photos.length, folderCount: folders.length, comparisonCount: beforeByEdited.size, warnings }, 201, { "Cache-Control": "no-store" });
     } catch (error) {
         console.error(`[gallery ${id}] Edited photos publish failed:`, error instanceof Error ? error.message : error);
         return c.json({ error: "Unable to verify or publish this Google Drive folder." }, 502);

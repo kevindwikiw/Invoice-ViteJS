@@ -23,6 +23,10 @@ Pilihan yang tersedia:
 
 Expiry dihitung sejak Publish/Republish, bukan sejak Save changes. Republish membuat masa berlaku baru.
 
+Untuk mengganti foto atau ZIP setelah galeri terbit: simpan URL/ID baru, lalu
+tekan **Sync**. Sync memperbarui foto yang terlihat klien tanpa mengganti password
+atau memperpanjang masa akses. Jika Sync gagal, foto lama tetap tersedia.
+
 ## Catatan Keamanan
 
 Expiry membatasi password, token, thumbnail, preview, Before / After, dan metadata melalui aplikasi Orbit. URL Google Drive yang sudah tersebar tetap dapat dibuka selama permission Drive masih `Anyone with the link`.

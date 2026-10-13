@@ -60,7 +60,7 @@ export async function createGallery(input: CreateGalleryInput): Promise<GalleryS
     return response.json();
 }
 
-export async function updateGallery(input: { id: number; editResultsStatus?: GalleryStatus; title?: string; comparisonEnabled?: boolean; comparisonPairs?: EditResultPair[]; driveFolderId?: string; driveFolderUrl?: string; editResultsFolderId?: string; editResultsZipFileId?: string; editResultsAccessDurationHours?: number | null; pin?: string; status?: GalleryStatus; contactWhatsappUrl?: string; maxSelections?: number; selectionDurationHours?: number; additionalSelectionLimit?: number; editAddonStatus?: string; editAddonPricingMode?: string; editAddonPrice?: number; editAddonPackageId?: number | null; qrisEnabled?: boolean }): Promise<{ status: string; comparisonApplied?: boolean; comparisonCount?: number }> {
+export async function updateGallery(input: { id: number; editResultsStatus?: GalleryStatus; title?: string; comparisonEnabled?: boolean; comparisonPairs?: EditResultPair[]; driveFolderId?: string; driveFolderUrl?: string; editResultsFolderId?: string; editResultsZipFileId?: string; editResultsAccessDurationHours?: number | null; pin?: string; status?: GalleryStatus; contactWhatsappUrl?: string; maxSelections?: number; selectionDurationHours?: number; additionalSelectionLimit?: number; editAddonStatus?: string; editAddonPricingMode?: string; editAddonPrice?: number; editAddonPackageId?: number | null; qrisEnabled?: boolean }): Promise<{ status: string; editedSourceChanged?: boolean; comparisonApplied?: boolean; comparisonCount?: number }> {
     const { id, ...body } = input;
     const response = await fetchWithAuth(`/galleries/${id}`, {
         method: 'PATCH',
@@ -185,7 +185,7 @@ export async function publishEditResults(input: { id: number; password: string }
     return response.json();
 }
 
-export async function syncEditResults(id: number): Promise<{ status: string; photoCount: number; folderCount?: number }> {
+export async function syncEditResults(id: number): Promise<{ status: 'synced' | 'validated'; published: boolean; photoCount: number; folderCount?: number; warnings?: string[] }> {
     const response = await fetchWithAuth(`/galleries/${id}/edit-results/sync`, { method: 'POST' });
     if (!response.ok) throw await parseError(response, 'Unable to sync edited photos folder.');
     return response.json();

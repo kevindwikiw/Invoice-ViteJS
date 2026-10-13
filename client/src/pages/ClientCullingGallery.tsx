@@ -44,7 +44,7 @@ import { canPrefetchPreview, preloadPreviewImage } from '../features/culling/cli
 import { CountdownLabel } from '../features/culling/client-gallery/countdown';
 import { useSelectionCountdown } from '../features/culling/client-gallery/useSelectionCountdown';
 import { useGalleryStartup } from '../features/culling/client-gallery/useGalleryStartup';
-import { GalleryViewTabs, OrbitLogo, ThemeToggle, type GalleryView } from '../features/culling/client-gallery/GalleryChrome';
+import { GalleryHeaderIdentity, GalleryViewTabs, OrbitLogo, ThemeToggle, type GalleryView } from '../features/culling/client-gallery/GalleryChrome';
 import { PhotoTile } from '../features/culling/client-gallery/PhotoTile';
 import { GalleryLockedScreen, PinGate } from '../features/culling/client-gallery/AccessScreens';
 import { RequestMoreModal, SubmitConfirmationModal, TutorialModal } from '../features/culling/client-gallery/Modals';
@@ -734,33 +734,30 @@ function SelectionCullingGallery({ title }: { title?: string }) {
         {(!token || startup.preparing) && <div inert={startup.leaving} aria-hidden={startup.leaving} className="gallery-unlock-overlay fixed inset-0 z-[140] overflow-y-auto" data-leaving={startup.leaving}>
             <PinGate galleryId={galleryId} title={title} theme={theme} onToggleTheme={toggleTheme} initialMode={urlView === 'edit-results' ? 'edited' : 'gallery'} editedSessionAvailable={Boolean(editResultsToken)} onBackToEdited={() => { setActiveTab('edit-results'); syncGalleryUrl({ view: 'edit-results' }); }} onEditResultsUnlocked={updateEditResultsToken} onUnlocked={(nextToken, nextGallery, submittedAt) => { startup.start(submittedAt); setActiveTab('gallery'); if (urlView === 'edit-results') syncGalleryUrl({ view: 'gallery' }); setToken(nextToken); setUnlockedGallery(nextGallery); setShowTutorial(!localStorage.getItem(tutorialKey(galleryId))); }} opening={startup.preparing} leaving={startup.leaving} preparationError={startup.preparing && photosQuery.isError ? 'Unable to load your gallery. Please try again.' : undefined} onRetry={() => void photosQuery.refetch()} />
         </div>}
-        {token && (!startup.preparing || startup.leaving) && <main inert={startup.preparing || showTutorial} aria-hidden={startup.preparing || showTutorial} className="min-h-screen bg-[var(--bg-deep)] font-sans text-[var(--text-primary)]">
+        {token && (!startup.preparing || startup.leaving) && <main inert={startup.preparing || showTutorial} aria-hidden={startup.preparing || showTutorial} className={clsx('min-h-screen bg-[var(--bg-deep)] font-sans text-[var(--text-primary)]', activeTab === 'edit-results' && 'flex flex-col')}>
             <a href="#gallery-content" className="sr-only focus:not-sr-only focus:fixed focus:left-3 focus:top-3 focus:z-[100] focus:rounded-md focus:bg-[var(--accent)] focus:px-3 focus:py-2 focus:text-xs focus:font-semibold focus:text-[var(--bg-deep)]">
                 Skip to gallery
             </a>
             
-            <header data-testid="gallery-header" className={clsx('sticky top-0 z-40 select-none border-b border-[var(--border)] bg-[var(--bg-deep)] px-2.5 sm:px-8', activeTab === 'edit-results' ? 'h-14' : 'h-20 lg:h-16')}>
-                <div className={clsx('mx-auto h-full max-w-[1600px] min-w-0 items-center gap-x-2', activeTab === 'edit-results' ? 'flex justify-between' : 'grid grid-cols-[auto_minmax(0,1fr)_auto] grid-rows-[2.75rem_1.5rem] py-1 lg:flex lg:py-0')}>
+            <header data-testid="gallery-header" className="sticky top-0 z-40 h-20 select-none border-b border-[var(--border)] bg-[var(--bg-deep)] px-2.5 sm:px-8 lg:h-16">
+                <div className="mx-auto grid h-full max-w-[1600px] min-w-0 grid-cols-[auto_minmax(0,1fr)_auto] grid-rows-[2.75rem_1.5rem] items-center gap-x-2 py-1 lg:flex lg:py-0">
                     <OrbitLogo theme={theme} />
-                    {activeTab !== 'edit-results' && <div className="col-span-3 row-start-2 flex min-w-0 items-baseline gap-2 lg:ml-5">
-                        <span className="shrink-0 text-[11px] font-medium uppercase text-[var(--text-muted)] sm:text-xs lg:text-[13px]">Photo Selection</span>
-                        <h1 className="min-w-0 truncate font-sans text-sm font-semibold leading-tight text-[var(--text-primary)] sm:text-[15px] lg:text-lg" title={displayGallery?.title || ''}>{displayGallery?.title || 'Photo Selection'}</h1>
-                    </div>}
-                    <div className={clsx('flex shrink-0 items-center gap-1 sm:ml-2 sm:gap-2', activeTab !== 'edit-results' && 'col-start-3 row-start-1 lg:ml-auto lg:gap-0')}>
+                    <GalleryHeaderIdentity section={activeTab === 'edit-results' ? 'Edited Photos' : 'Photo Selection'} title={activeTab === 'edit-results' ? title : displayGallery?.title || title} />
+                    <div className="col-start-3 row-start-1 flex shrink-0 items-center gap-1 sm:ml-2 sm:gap-2 lg:ml-auto lg:gap-0">
                         {activeTab === 'edit-results' && <div ref={setExpiryTarget} className="flex min-w-0 items-center" />}
                         {activeTab !== 'edit-results' && <div className="lg:pr-2"><CountdownLabel countdown={countdown} compact /></div>}
                         <div data-testid="header-utilities" className="flex items-center gap-2">
-                            <button type="button" onClick={() => setShowTutorial(true)} title="How to Submit" aria-label="How to Submit" className="flex h-11 w-11 shrink-0 items-center justify-center px-2 text-[var(--text-secondary)] transition-[color,transform] duration-150 hover:text-[var(--text-primary)] active:scale-[0.97] motion-reduce:transition-none"><HelpCircle size={16} aria-hidden="true" /></button>
+                            {activeTab !== 'edit-results' && <button type="button" onClick={() => setShowTutorial(true)} title="How to Submit" aria-label="How to Submit" className="flex h-11 w-11 shrink-0 items-center justify-center px-2 text-[var(--text-secondary)] transition-[color,transform] duration-150 hover:text-[var(--text-primary)] active:scale-[0.97] motion-reduce:transition-none"><HelpCircle size={16} aria-hidden="true" /></button>}
                             <ThemeToggle theme={theme} onToggle={toggleTheme} />
                         </div>
                     </div>
                 </div>
             </header>
 
-            <div data-testid="gallery-toolbar" className={clsx('sticky z-30 select-none border-b border-[var(--border)] bg-[var(--bg-deep)] px-2.5 py-2 [touch-action:manipulation] sm:px-8 sm:py-2.5', activeTab === 'edit-results' ? 'top-14' : 'top-20 lg:top-16')}>
-                <div data-testid="gallery-toolbar-inner" className={clsx('mx-auto flex max-w-[1600px] sm:items-center sm:gap-x-2', activeTab === 'edit-results' ? 'flex-col gap-2 sm:flex-row' : 'items-center gap-1')}>
-                    <div ref={allPhotosMenuRef} className={clsx('relative flex min-w-0 items-center gap-1 sm:w-auto sm:flex-none sm:gap-2', activeTab === 'edit-results' ? 'w-full' : 'w-[calc((100%-0.375rem)/2)] flex-none')}>
-                        <GalleryViewTabs value={activeTab === 'picked' ? 'gallery' : activeTab} galleryAvailable={galleryAvailable} galleryLabel={activeTab === 'picked' ? 'Picked' : submittedOnly ? 'Submitted' : 'All Photos'} editedAvailable={editResultsStatusQuery.data?.available ?? Boolean(displayGallery?.hasEditResults)} selfieAvailable={faceSearchControlVisible} allPhotosMenuOpen={showRefine} allPhotosButtonRef={allPhotosButtonRef} onAllPhotos={activeTab === 'edit-results' ? () => changeView('gallery') : openAllPhotosMenu} onChange={changeView} />
+            <div data-testid="gallery-toolbar" className="sticky top-20 z-30 select-none border-b border-[var(--border)] bg-[var(--bg-deep)] px-2.5 py-2 [touch-action:manipulation] sm:px-8 sm:py-2.5 lg:top-16">
+                <div data-testid="gallery-toolbar-inner" className="mx-auto flex max-w-[1600px] items-center gap-1 sm:gap-x-2">
+                    <div ref={allPhotosMenuRef} className="relative flex w-[calc((100%-0.375rem)/2)] min-w-0 flex-none items-center gap-1 sm:w-auto sm:gap-2">
+                        <GalleryViewTabs value={activeTab === 'picked' ? 'gallery' : activeTab} galleryAvailable={galleryAvailable} galleryLabel={activeTab === 'picked' ? 'Picked' : submittedOnly ? 'Submitted' : 'All Photos'} editedAvailable={editResultsStatusQuery.data?.available ?? Boolean(displayGallery?.hasEditResults)} editedExpired={Boolean(editResultsStatusQuery.data?.isExpired)} selfieAvailable={faceSearchControlVisible} allPhotosMenuOpen={showRefine} allPhotosButtonRef={allPhotosButtonRef} onAllPhotos={activeTab === 'edit-results' ? () => changeView('gallery') : openAllPhotosMenu} onChange={changeView} />
                         {showRefine && activeTab !== 'edit-results' && (
                             <div ref={allPhotosDropdownRef} className="absolute left-0 top-[calc(100%+8px)] z-[80] w-[min(204px,calc(100vw-16px))] rounded-lg border border-[var(--border)] bg-[var(--bg-deep)] p-1.5 shadow-xl transition-[opacity,transform] duration-150 motion-reduce:transition-none" role="menu" aria-label="All Photos views">
                                 <button type="button" role="menuitemradio" aria-checked={refineMode === 'none' && activeTab === 'gallery'} onClick={() => chooseRefineMode('none')} className={clsx('flex min-h-11 w-full items-center justify-between gap-2 rounded-md px-2.5 text-[13px] font-medium', refineMode === 'none' && activeTab === 'gallery' ? 'bg-[var(--accent)] text-[var(--bg-deep)]' : 'text-[var(--text-secondary)] hover:bg-[var(--bg-card)]')}>
@@ -777,7 +774,7 @@ function SelectionCullingGallery({ title }: { title?: string }) {
                         )}
                     </div>
 
-                    <div className={clsx('ml-auto flex min-w-0 shrink-0 items-center gap-1 sm:gap-2 lg:gap-0', activeTab === 'edit-results' && 'w-full justify-end sm:w-auto')}>
+                    <div className="ml-auto flex min-w-0 shrink-0 items-center gap-1 sm:gap-2 lg:gap-0">
                     {activeTab !== 'edit-results' && <div data-testid="selection-summary" className={clsx('inline-flex min-w-0 items-center gap-1 whitespace-nowrap text-xs text-[var(--text-secondary)] transition-transform duration-[320ms] ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none sm:gap-2 sm:text-sm lg:pr-2', requestMoreUrl && !shouldShowRequestMore && 'translate-x-[4rem] min-[390px]:translate-x-[4.75rem] sm:translate-x-20 md:translate-x-[10.5rem] lg:translate-x-44')}>
                         <span className="inline-flex items-center gap-1"><Images size={14} aria-hidden="true" className="shrink-0" /><strong className="tabular-nums text-[var(--text-primary)]">{selectedCount}{selectionLimit ? `/${selectionLimit}` : ''}</strong>{' '}<span className="hidden md:inline">selected</span></span>
                         <span className={clsx('hidden items-center gap-1 sm:inline-flex', isOverLimit && 'text-rose-400')}><ImagePlus size={14} aria-hidden="true" />{selectionLimit ? `${isOverLimit ? overLimitCount : remainingSelections} ${isOverLimit ? 'over' : 'left'}` : 'Unlimited'}</span>
@@ -792,7 +789,7 @@ function SelectionCullingGallery({ title }: { title?: string }) {
                 </div>
             </div>
 
-            <section id="gallery-content" tabIndex={-1} className={clsx('mx-auto max-w-[1664px] px-2.5 pt-3 pb-10 outline-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)] sm:px-8 sm:pt-5 sm:pb-12 md:pt-6', activeTab === 'edit-results' ? 'scroll-mt-44 sm:scroll-mt-28' : 'scroll-mt-44 lg:scroll-mt-36')}>
+            <section id="gallery-content" tabIndex={-1} className={clsx('mx-auto w-full max-w-[1664px] px-2.5 pt-3 pb-10 outline-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)] sm:px-8 sm:pt-5 sm:pb-12 md:pt-6', activeTab === 'edit-results' ? 'flex-1 scroll-mt-44 sm:scroll-mt-28' : 'scroll-mt-44 lg:scroll-mt-36')}>
                 {activeTab !== 'edit-results' && limitMessage && (
                     <div role="alert" className="mb-4 text-xs text-[var(--text-muted)] border border-[var(--border)] p-3 rounded-lg bg-[var(--bg-card)]">
                         {limitMessage} {requestMoreUrl && <button type="button" onClick={() => setShowRequestMore(true)} className="ml-1 font-semibold underline text-[var(--text-primary)]">Request more</button>}
@@ -881,7 +878,7 @@ function SelectionCullingGallery({ title }: { title?: string }) {
                 </div>
             </div>}
 
-            <footer className={clsx('border-t border-[var(--border)] px-4 py-5 text-[10px] text-[var(--text-muted)] md:px-8', showSelectionActionBar && 'pb-[calc(5rem+env(safe-area-inset-bottom))] sm:pb-24')}>
+            <footer className={clsx('border-t border-[var(--border)] px-4 py-5 text-[10px] text-[var(--text-muted)] md:px-8', (showSelectionActionBar || activeTab === 'edit-results') && 'pb-[calc(5rem+env(safe-area-inset-bottom))] sm:pb-24')}>
                 <div className="mx-auto flex max-w-[1600px] flex-col items-center justify-between gap-3 sm:flex-row">
                     <p>&copy; {currentYear ?? ''} The Orbit Photo. All rights reserved.</p>
                     <a href="https://www.instagram.com/theorbitphoto/" target="_blank" rel="noreferrer" aria-label="@theorbitphoto on Instagram" className="inline-flex items-center gap-1.5 text-[var(--text-secondary)] transition-colors hover:text-[var(--text-primary)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)]">

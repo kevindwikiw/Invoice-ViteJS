@@ -120,8 +120,8 @@ function PhotoTileView<T extends GalleryDisplayPhoto>({
                     </>
                 )}
                 {mode === 'delivery' ? (
-                    <button type="button" disabled={!downloadUrl || downloadPending} aria-busy={downloadPending} onClick={() => onDownload?.(photo)} aria-label={downloadPending ? `Preparing download for ${displayLabel}` : `Download ${displayLabel}`} title="Download Original" className="absolute right-1 top-1 flex h-11 w-11 items-center justify-center rounded-md text-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-white disabled:opacity-60">
-                        <span className="flex h-8 w-8 items-center justify-center rounded-md border border-white/30 bg-black/80 transition-colors [@media(hover:hover)]:hover:bg-black motion-reduce:transition-none">{downloadPending ? <Loader2 size={15} aria-hidden="true" className="animate-spin motion-reduce:animate-none" /> : <Download size={15} aria-hidden="true" />}</span>
+                    <button type="button" disabled={!downloadUrl || downloadPending} aria-busy={downloadPending} onClick={() => onDownload?.(photo)} aria-label={downloadPending ? `Preparing download for ${displayLabel}` : `Download ${displayLabel}`} title="Download Original" className="absolute right-1 top-1 flex h-11 w-11 items-center justify-center rounded-full text-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-white disabled:opacity-60">
+                        <span className="flex h-8 w-8 items-center justify-center rounded-full border border-white/30 bg-black/80 transition-colors [@media(hover:hover)]:hover:bg-black motion-reduce:transition-none">{downloadPending ? <Loader2 size={15} aria-hidden="true" className="animate-spin motion-reduce:animate-none" /> : <Download size={15} aria-hidden="true" />}</span>
                     </button>
                 ) : <button
                     type="button"
