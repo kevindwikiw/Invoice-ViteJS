@@ -235,7 +235,6 @@ test('expired Selection Open routes to the window field instead of a rejected qu
     await page.getByRole('button', { name: `${gallery.title} Photo Selection status: Expired` }).click();
     await page.getByRole('group', { name: `${gallery.title} Photo Selection status options` }).getByRole('button', { name: 'Reset window to open…' }).click();
     const dialog = page.getByRole('dialog', { name: gallery.title });
-    await expect(dialog.getByRole('status').filter({ hasText: 'Selection expired' })).toBeVisible();
     await expect(dialog.locator('input[name="selection-duration"]')).toBeFocused();
     expect(patches).toEqual([]);
     await dialog.getByRole('button', { name: 'Save Photo Selection' }).click();
@@ -271,7 +270,6 @@ test('each detail tab saves only its fields and preserves the other draft', asyn
     const editedSync = await dialog.getByRole('button', { name: 'Sync', exact: true }).boundingBox();
     expect(Math.abs(((selectionSync?.y ?? 0) - (selectionTabs?.y ?? 0)) - ((editedSync?.y ?? 0) - (editedTabs?.y ?? 0)))).toBeLessThanOrEqual(1);
     await expect(dialog.getByText('Edited Photos not published', { exact: true })).toBeVisible();
-    await expect(dialog.getByText('Access starts after publication', { exact: true })).toBeVisible();
     await dialog.getByLabel('Edited photos Drive folder').fill('edited-draft');
     await dialog.getByRole('button', { name: 'closed', exact: true }).click();
     for (const width of [1280, 390, 320]) {
@@ -283,9 +281,9 @@ test('each detail tab saves only its fields and preserves the other draft', asyn
         expect(password).not.toBeNull();
         if (width >= 640) {
             expect(Math.abs((duration?.y ?? 0) - (password?.y ?? 0))).toBeLessThanOrEqual(1);
-            expect(password?.x).toBeGreaterThan((duration?.x ?? 0) + (duration?.width ?? 0));
+            expect(duration?.x).toBeGreaterThan((password?.x ?? 0) + (password?.width ?? 0));
         } else {
-            expect(password?.y).toBeGreaterThan((duration?.y ?? 0) + (duration?.height ?? 0));
+            expect(duration?.y).toBeGreaterThan((password?.y ?? 0) + (password?.height ?? 0));
         }
         await expect(dialog.getByRole('button', { name: 'Save Edited Photos', exact: true })).toBeInViewport();
         await page.screenshot({ path: `test-results/admin-edited-${width}.png`, animations: 'disabled' });
@@ -539,7 +537,7 @@ test('status controls clear dirty state when restored to their saved value', asy
     expect(openColor).not.toBe(draftColor);
     await dialog.getByRole('button', { name: 'draft', exact: true }).click();
     await expect(selectionSave).toBeDisabled();
-    await expect(dialog.getByText('Client access is paused while this gallery remains in setup.')).toBeVisible();
+    await expect(dialog.getByRole('group', { name: 'Photo Selection status' }).getByRole('button', { name: 'draft', exact: true })).toHaveAttribute('aria-pressed', 'true');
 
     await dialog.getByRole('tab', { name: 'Edited Photos', exact: true }).click();
     const editedSave = dialog.getByRole('button', { name: 'Save Edited Photos' });
@@ -570,7 +568,7 @@ test('failed Save keeps status and add-on drafts; reset PIN does not save them',
     await dialog.getByLabel('Butuh QRIS self-service?').check();
     await dialog.getByLabel('Add-on edited photos', { exact: true }).fill('10');
     await dialog.getByRole('button', { name: 'Paid', exact: true }).click();
-    await dialog.getByRole('button', { name: 'Reset Password Attempts' }).click();
+    await dialog.getByRole('button', { name: 'Unlock Selection Access' }).click();
     await expect.poll(() => resets).toBe(1);
     expect(patches).toHaveLength(0);
     await dialog.getByRole('button', { name: 'Save Photo Selection' }).click();
@@ -632,25 +630,24 @@ test('edited results folder can be published with an admin-defined password', as
     await dialog.getByRole('button', { name: 'Save Edited Photos' }).click();
     await expect.poll(() => gallery.editResultsFolderId).toBe('https://drive.google.com/drive/folders/edited-folder');
     await expect.poll(() => gallery.editResultsZipFileId).toBe('https://drive.google.com/file/d/edited-archive/view');
-    await dialog.getByLabel('Edited Photos password').fill('delivery-secret');
-    await expect(dialog.getByLabel('Edited Photos password')).toHaveAttribute('type', 'password');
+    await dialog.getByLabel('Password for publication').fill('delivery-secret');
+    await expect(dialog.getByLabel('Password for publication')).toHaveAttribute('type', 'password');
     await dialog.getByRole('button', { name: 'Show password', exact: true }).click();
-    await expect(dialog.getByLabel('Edited Photos password')).toHaveAttribute('type', 'text');
-    await expect(dialog.getByLabel('Edited Photos password')).toHaveValue('delivery-secret');
+    await expect(dialog.getByLabel('Password for publication')).toHaveAttribute('type', 'text');
+    await expect(dialog.getByLabel('Password for publication')).toHaveValue('delivery-secret');
     await dialog.getByRole('button', { name: 'Hide password', exact: true }).click();
-    await expect(dialog.getByLabel('Edited Photos password')).toHaveAttribute('type', 'password');
+    await expect(dialog.getByLabel('Password for publication')).toHaveAttribute('type', 'password');
     await dialog.getByRole('button', { name: 'Show password', exact: true }).click();
-    await dialog.getByRole('button', { name: 'Publish', exact: true }).click();
-    await expect(dialog.getByLabel('Edited Photos password')).toHaveValue('');
-    await expect(dialog.getByLabel('Edited Photos password')).toHaveAttribute('type', 'password');
-    await expect(dialog.getByText('2 published')).toBeVisible();
+    await dialog.getByRole('button', { name: 'Save Edited Photos', exact: true }).click();
+    await expect(dialog.getByLabel('Password for publication')).toHaveValue('');
+    await expect(dialog.getByLabel('Password for publication')).toHaveAttribute('type', 'password');
+    await expect(dialog.getByText('2 edited photos published')).toBeVisible();
 });
 
 test('admin actions explain save prerequisites and preserve drafts on API failures', async ({ page }) => {
     let gallery = { ...exampleGallery, editResultsFolderId: 'edited-folder', hasEditResults: true };
     let publishes = 0;
     let syncs = 0;
-    let unpublishes = 0;
     let patches = 0;
     let failSave = true;
     await page.route('**/api/galleries?*', (route) => route.fulfill({ json: { items: [gallery], total: 1, totalPages: 1 } }));
@@ -670,7 +667,6 @@ test('admin actions explain save prerequisites and preserve drafts on API failur
         return route.fulfill({ status: 400, json: { error: 'Edited folder cannot be read. Check Drive sharing.' } });
     });
     await page.route('**/api/galleries/7/sync', (route) => { syncs++; return route.fulfill({ status: 500, json: { error: 'Drive sync unavailable.' } }); });
-    await page.route('**/api/galleries/7/edit-results/unpublish', (route) => { unpublishes++; return route.fulfill({ status: 500, json: { error: 'Unpublish unavailable.' } }); });
     await page.route('**/api/galleries/7/reset-pin-lock', (route) => route.fulfill({ status: 500, json: { error: 'PIN reset unavailable.' } }));
     await page.goto('/galleries');
     await page.getByText(gallery.title, { exact: true }).click();
@@ -678,41 +674,34 @@ test('admin actions explain save prerequisites and preserve drafts on API failur
     await dialog.getByLabel('Photo Selection password', { exact: true }).fill('9876');
     await dialog.getByRole('button', { name: 'Sync', exact: true }).click();
     await expect(dialog.getByRole('alert')).toContainText('Sync not started. Save changes first');
-    await dialog.getByRole('button', { name: 'Reset Password Attempts' }).click();
+    await dialog.getByRole('button', { name: 'Unlock Selection Access' }).click();
     await expect(dialog.getByRole('alert')).toContainText('Reset password attempts failed');
     await dialog.getByRole('button', { name: 'Save Photo Selection' }).click();
     await expect(dialog.getByRole('alert')).toHaveText('Unable to update client PIN.');
     await dialog.getByRole('tab', { name: 'Edited Photos', exact: true }).click();
-    await dialog.getByLabel('Edited Photos password').fill('delivery-secret');
-    await dialog.getByRole('button', { name: 'Republish', exact: true }).click();
+    await dialog.getByLabel('Password for publication').fill('delivery-secret');
+    failSave = false;
+    await dialog.getByRole('button', { name: 'Save Edited Photos', exact: true }).click();
     await expect(dialog.getByRole('alert')).toHaveText('Republish failed. Edited folder cannot be read. Check Drive sharing.');
     expect(publishes).toBe(1);
     await dialog.getByLabel('Edited photos Drive folder').fill('new-edited-folder');
-    await dialog.getByRole('button', { name: 'Republish', exact: true }).click();
-    await expect(dialog.getByRole('alert')).toContainText('Save changes first');
-    await dialog.getByRole('button', { name: 'Unpublish', exact: true }).click();
-    await expect(dialog.getByRole('alert')).toContainText('Unpublish not started. Save changes first');
     await dialog.getByRole('tab', { name: 'Photo Selection', exact: true }).click();
     await expect(dialog.getByLabel('Photo Selection password', { exact: true })).toHaveValue('9876');
     await expect(dialog.getByRole('alert')).toHaveText('Unable to update client PIN.');
-    failSave = false;
     await dialog.getByRole('button', { name: 'Save Photo Selection' }).click();
     await expect(dialog.getByLabel('Photo Selection password', { exact: true })).toHaveValue('');
     await dialog.getByRole('button', { name: 'Sync', exact: true }).click();
     await expect(dialog.getByRole('alert')).toHaveText('Sync failed. Drive sync unavailable.');
     await dialog.getByRole('tab', { name: 'Edited Photos', exact: true }).click();
     await expect(dialog.getByText('Unsaved changes', { exact: true })).toBeVisible();
-    await expect(dialog.getByLabel('Edited Photos password')).toHaveValue('delivery-secret');
+    await expect(dialog.getByLabel('Password for publication')).toHaveValue('delivery-secret');
     await expect(dialog.getByLabel('Edited photos Drive folder')).toHaveValue('new-edited-folder');
     await dialog.getByRole('button', { name: 'Save Edited Photos' }).click();
-    await expect(dialog.getByText('Delivery password not published', { exact: true })).toBeVisible();
-    page.once('dialog', (confirmation) => confirmation.accept());
-    await dialog.getByRole('button', { name: 'Unpublish', exact: true }).click();
-    await expect(dialog.getByRole('alert')).toHaveText('Unpublish failed. Unpublish unavailable.');
-    expect([publishes, syncs, unpublishes, patches]).toEqual([1, 1, 1, 3]);
+    await expect(dialog.getByRole('alert')).toHaveText('Republish failed. Edited folder cannot be read. Check Drive sharing.');
+    expect([publishes, syncs, patches]).toEqual([2, 1, 4]);
 });
 
-test('publishing explains missing folder and password without sending a request', async ({ page }) => {
+test('publishing validates the folder and password before sending a request', async ({ page }) => {
     const gallery = { ...exampleGallery, editResultsFolderId: '' };
     let publishes = 0;
     await page.route('**/api/galleries?*', (route) => route.fulfill({ json: { items: [gallery], total: 1, totalPages: 1 } }));
@@ -725,14 +714,13 @@ test('publishing explains missing folder and password without sending a request'
     await page.getByText(gallery.title, { exact: true }).click();
     const dialog = page.getByRole('dialog');
     await dialog.getByRole('tab', { name: 'Edited Photos' }).click();
-    await dialog.getByRole('button', { name: 'Publish', exact: true }).click();
+    await dialog.getByLabel('Password for publication').fill('delivery-secret');
+    await dialog.getByRole('button', { name: 'Save Edited Photos' }).click();
     await expect(dialog.getByRole('alert')).toContainText('Add an Edited photos Drive folder');
     await dialog.getByLabel('Edited photos Drive folder').fill('edited-folder');
+    await dialog.getByLabel('Password for publication').fill('short');
     await dialog.getByRole('button', { name: 'Save Edited Photos' }).click();
-    await expect(dialog.getByText('Changes saved', { exact: true })).toBeVisible();
-    await dialog.getByLabel('Edited Photos password').fill('short');
-    await dialog.getByRole('button', { name: 'Publish', exact: true }).click();
-    await expect(dialog.getByRole('alert')).toContainText('at least 6 characters');
+    await expect(dialog.getByRole('alert')).toContainText(/6 characters|lengthen/i);
     expect(publishes).toBe(0);
 });
 
@@ -762,8 +750,9 @@ test('comparison pairing auto-pairs equal counts without a confirmation step', a
         await page.goto('/galleries?mode=selection');
         await page.getByText(gallery.title, { exact: true }).click();
         await page.getByRole('dialog').getByRole('tab', { name: 'Edited Photos' }).click();
-        await page.getByRole('checkbox', { name: 'Enable Before / After' }).check();
-        await page.getByRole('button', { name: 'Manage Pairs', exact: true }).click();
+        await page.getByText('Before & After Comparison', { exact: true }).click();
+        await expect(page.getByRole('checkbox', { name: 'Before & After Comparison' })).toBeChecked();
+        await page.getByRole('button', { name: /^Manage Pairs/ }).click();
         const dialog = page.getByRole('dialog', { name: 'Manage Pairs', exact: true });
         await expect(dialog.getByAltText('final-0.jpg')).toBeVisible();
         await expect.poll(() => transientThumbnailRequests).toBe(2);
@@ -781,12 +770,12 @@ test('comparison pairing auto-pairs equal counts without a confirmation step', a
         await expect.poll(() => gallery.comparisonPairs).toEqual([
             { editedDriveFileId: 'edited-0', beforeDriveFileId: 'before-0' },
         ]);
-        await page.getByRole('button', { name: 'Manage Pairs', exact: true }).click();
+        await page.getByRole('button', { name: /^Manage Pairs/ }).click();
         await expect(dialog.getByRole('article', { name: 'Pair final-1.jpg' })).toContainText('Edited only · No Before / After');
         await dialog.getByRole('button', { name: 'All Sources' }).click();
         await expect(dialog.getByRole('article', { name: 'Pair final-1.jpg' })).toContainText('Auto-paired by order');
         await dialog.getByRole('button', { name: 'Cancel', exact: true }).click();
-        await page.getByRole('button', { name: 'Manage Pairs', exact: true }).click();
+        await page.getByRole('button', { name: /^Manage Pairs/ }).click();
         await expect(dialog.getByRole('article', { name: 'Pair final-1.jpg' })).toContainText('Edited only');
         await dialog.getByRole('button', { name: 'Cancel', exact: true }).click();
 });
@@ -799,8 +788,9 @@ test('Manage Pairs explains an empty Edited Photos folder', async ({ page }) => 
         await page.goto('/galleries?mode=selection');
         await page.getByText(gallery.title, { exact: true }).click();
         await page.getByRole('dialog').getByRole('tab', { name: 'Edited Photos' }).click();
-        await page.getByRole('checkbox', { name: 'Enable Before / After' }).check();
-        await page.getByRole('button', { name: 'Manage Pairs', exact: true }).click();
+        await page.getByText('Before & After Comparison', { exact: true }).click();
+        await expect(page.getByRole('checkbox', { name: 'Before & After Comparison' })).toBeChecked();
+        await page.getByRole('button', { name: /^Manage Pairs/ }).click();
         const dialog = page.getByRole('dialog', { name: 'Manage Pairs', exact: true });
         await expect(dialog.getByRole('status').filter({ hasText: 'No Edited Photos Found' })).toContainText('Sync the Edited Photos folder');
         await expect(dialog.getByRole('navigation', { name: 'Pairing Pages' })).toHaveCount(0);
@@ -822,8 +812,9 @@ test('pairing presets keep 14 B&W variants aligned across 84 edited photos', asy
         await page.goto('/galleries?mode=selection');
         await page.getByText(gallery.title, { exact: true }).click();
         await page.getByRole('dialog').getByRole('tab', { name: 'Edited Photos' }).click();
-        await page.getByRole('checkbox', { name: 'Enable Before / After' }).check();
-        await page.getByRole('button', { name: 'Manage Pairs', exact: true }).click();
+        await page.getByText('Before & After Comparison', { exact: true }).click();
+        await expect(page.getByRole('checkbox', { name: 'Before & After Comparison' })).toBeChecked();
+        await page.getByRole('button', { name: /^Manage Pairs/ }).click();
         const dialog = page.getByRole('dialog', { name: 'Manage Pairs', exact: true });
         await expect(dialog.getByText('14 extra edited photos. Mark their B&W variants to keep the order aligned.')).toBeVisible();
         await dialog.getByRole('button', { name: 'All Sources' }).click();
@@ -886,7 +877,7 @@ test('pairing presets keep 14 B&W variants aligned across 84 edited photos', asy
         await page.getByRole('button', { name: 'Save Edited Photos', exact: true }).click();
         await expect.poll(() => gallery.comparisonPairs.length).toBe(84);
         expect(gallery.comparisonPairs[83]).toEqual({ editedDriveFileId: 'edited-83', beforeDriveFileId: 'before-69' });
-        await page.getByRole('button', { name: 'Manage Pairs', exact: true }).click();
+        await page.getByRole('button', { name: /^Manage Pairs/ }).click();
         for (let index = 0; index < 6; index++) {
             await dialog.getByRole('button', { name: 'Next Pairs' }).click();
             await expect(dialog.getByRole('status').filter({ hasText: `${index + 2} / 7` })).toBeVisible();
@@ -910,8 +901,9 @@ test('comparison pairing realigns 70 submitted photos around a B&W variant', asy
         await page.goto('/galleries?mode=selection');
         await page.getByText(gallery.title, { exact: true }).click();
         await page.getByRole('dialog').getByRole('tab', { name: 'Edited Photos' }).click();
-        await page.getByRole('checkbox', { name: 'Enable Before / After' }).check();
-        await page.getByRole('button', { name: 'Manage Pairs', exact: true }).click();
+        await page.getByText('Before & After Comparison', { exact: true }).click();
+        await expect(page.getByRole('checkbox', { name: 'Before & After Comparison' })).toBeChecked();
+        await page.getByRole('button', { name: /^Manage Pairs/ }).click();
         const dialog = page.getByRole('dialog', { name: 'Manage Pairs', exact: true });
         await expect(dialog.getByRole('article')).toHaveCount(12);
         await expect(dialog.getByText('Auto-paired by order')).toHaveCount(12);
@@ -954,22 +946,22 @@ test('comparison pairing realigns 70 submitted photos around a B&W variant', asy
         expect(gallery.comparisonPairs[20]).toEqual({ editedDriveFileId: 'edited-20', beforeDriveFileId: 'before-19' });
         expect(gallery.comparisonPairs[21]).toEqual({ editedDriveFileId: 'edited-21', beforeDriveFileId: 'before-20' });
         expect(gallery.comparisonPairs[70]).toEqual({ editedDriveFileId: 'edited-70', beforeDriveFileId: 'before-69' });
-        await page.getByRole('button', { name: 'Manage Pairs', exact: true }).click();
+        await page.getByRole('button', { name: /^Manage Pairs/ }).click();
         await dialog.getByRole('button', { name: 'Next Pairs' }).click();
         const reopenedVariant = dialog.getByRole('article', { name: 'Pair final-20.jpg' });
         await expect(reopenedVariant.getByRole('button', { name: 'B&W Variant' })).toHaveAttribute('aria-pressed', 'true');
         await expect(reopenedVariant).toContainText('B&W variant');
         await dialog.getByRole('button', { name: 'Close Manage Pairs', exact: true }).click();
         await expect(page.getByRole('dialog')).toHaveCSS('opacity', '1');
-        await expect(page.getByRole('button', { name: 'Manage Pairs', exact: true })).toBeFocused();
-        await page.getByRole('button', { name: 'Manage Pairs', exact: true }).click();
+        await expect(page.getByRole('button', { name: /^Manage Pairs/ })).toBeFocused();
+        await page.getByRole('button', { name: /^Manage Pairs/ }).click();
         await page.keyboard.press('Escape');
-        await expect(page.getByRole('button', { name: 'Manage Pairs', exact: true })).toBeFocused();
-        await page.getByRole('button', { name: 'Manage Pairs', exact: true }).click();
+        await expect(page.getByRole('button', { name: /^Manage Pairs/ })).toBeFocused();
+        await page.getByRole('button', { name: /^Manage Pairs/ }).click();
         await page.setViewportSize({ width: 320, height: 568 });
         expect(await dialog.locator('.gallery-modal-scroll').evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
         await dialog.getByRole('button', { name: 'Remove pair for final-0.jpg' }).click();
         await dialog.getByRole('button', { name: 'Cancel', exact: true }).click();
-        await page.getByRole('button', { name: 'Manage Pairs', exact: true }).click();
+        await page.getByRole('button', { name: /^Manage Pairs/ }).click();
         await expect(dialog.getByRole('article', { name: 'Pair final-0.jpg' })).toContainText('Saved pair');
 });
