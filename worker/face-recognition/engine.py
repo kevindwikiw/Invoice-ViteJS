@@ -3,9 +3,10 @@ from pathlib import Path
 from threading import Lock
 
 import numpy as np
+from telemetry import measure
 
 # The index version includes face and person-detection settings.
-MODEL_VERSION = "opencv-yunet-2023mar-sface-2021dec-nanodet-2022nov-4"
+MODEL_VERSION = "opencv5-yunet-2023mar-sface-2021dec-nanodet-2022nov-5"
 DETECTION_THRESHOLD = 0.9
 GALLERY_DETECTION_THRESHOLD = 0.8
 SELFIE_RETRY_THRESHOLD = 0.8
@@ -22,20 +23,18 @@ class FaceEngine:
         import cv2
 
         from model_assets import verify_models
+        from opencv5_models import SFaceRecognizer, YuNetDetector
         from person_detector import PersonDetector
 
         verify_models(model_dir)
         self.lock = Lock()
         cv2.setNumThreads(threads)
         cv2.ocl.setUseOpenCL(False)
-        self.detector = cv2.FaceDetectorYN.create(
-            str(model_dir / "face_detection_yunet_2023mar.onnx"), "", (320, 320),
-            DETECTION_THRESHOLD, 0.3, 5000, cv2.dnn.DNN_BACKEND_OPENCV, cv2.dnn.DNN_TARGET_CPU,
+        self.detector = YuNetDetector(
+            str(model_dir / "face_detection_yunet_2023mar.onnx"),
+            DETECTION_THRESHOLD, 0.3, 5000,
         )
-        self.recognizer = cv2.FaceRecognizerSF.create(
-            str(model_dir / "face_recognition_sface_2021dec.onnx"), "",
-            cv2.dnn.DNN_BACKEND_OPENCV, cv2.dnn.DNN_TARGET_CPU,
-        )
+        self.recognizer = SFaceRecognizer(str(model_dir / "face_recognition_sface_2021dec.onnx"))
         self.person_detector = PersonDetector(model_dir / "object_detection_nanodet_2022nov.onnx")
         # Warm both networks, including recognition when detection finds no face.
         self.get(np.zeros((320, 320, 3), dtype=np.uint8))
@@ -60,13 +59,16 @@ class FaceEngine:
 
     def _get(self, image: np.ndarray) -> list[Face]:
         self.detector.setInputSize((image.shape[1], image.shape[0]))
-        _, detections = self.detector.detect(image)
+        with measure("detect_ms"):
+            _, detections = self.detector.detect(image)
         if detections is None:
             return []
         faces = []
         for detection in detections:
-            aligned = self.recognizer.alignCrop(image, detection)
-            embedding = self.recognizer.feature(aligned).reshape(-1).copy()
+            with measure("align_ms"):
+                aligned = self.recognizer.alignCrop(image, detection)
+            with measure("embed_ms"):
+                embedding = self.recognizer.feature(aligned).reshape(-1).copy()
             if embedding.size != 128 or not np.isfinite(embedding).all() or np.linalg.norm(embedding) <= 0:
                 raise ValueError("Invalid SFace embedding")
             x, y, width, height = detection[:4]

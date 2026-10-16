@@ -12,9 +12,16 @@ if (-not (Test-Path -LiteralPath $envPath)) {
 }
 
 Push-Location $workerRoot
+$previousPythonPath = $env:PYTHONPATH
+if ($previousPythonPath) {
+    $env:PYTHONPATH = "$(Split-Path -Parent $workerRoot);$previousPythonPath"
+} else {
+    $env:PYTHONPATH = Split-Path -Parent $workerRoot
+}
 try {
     & $pythonPath -m uvicorn main:app --env-file $envPath --host 127.0.0.1 --port 8088 --workers 1
     if ($LASTEXITCODE -ne 0) { throw 'Face worker stopped with an error.' }
 } finally {
+    $env:PYTHONPATH = $previousPythonPath
     Pop-Location
 }

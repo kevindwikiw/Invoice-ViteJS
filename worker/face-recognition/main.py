@@ -22,7 +22,8 @@ from pydantic import BaseModel, Field
 
 from engine import FaceEngine, MODEL_VERSION, sensitivity_threshold
 from embedding_cache import CacheCapacityError, EmbeddingCache, IndexKey, PreparedIndex, prepare_index
-from drive_source import DriveSource
+from shared.drive_source import DriveSource
+from telemetry import annotate, measure, observation, observed
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
 logger = logging.getLogger("orbit-face-worker")
@@ -52,6 +53,8 @@ MAX_EMBEDDING_RECORDS = max(1, int(os.getenv("FACE_WORKER_MAX_EMBEDDING_RECORDS"
 CACHE_MAX_BYTES = max(1, int(os.getenv("FACE_WORKER_CACHE_MAX_BYTES", str(128 * 1024 * 1024))))
 CACHE_MAX_ENTRIES = max(1, int(os.getenv("FACE_WORKER_CACHE_MAX_ENTRIES", "16")))
 CACHE_TTL_SECONDS = max(1, int(os.getenv("FACE_WORKER_CACHE_TTL_SECONDS", "900")))
+MATCH_CANDIDATE_FILTER = os.getenv("FACE_WORKER_MATCH_CANDIDATE_FILTER", "0") == "1"
+NORMALIZE_ONCE = os.getenv("FACE_WORKER_NORMALIZE_ONCE", "0") == "1"
 embedding_cache = EmbeddingCache(CACHE_MAX_BYTES, CACHE_MAX_ENTRIES, CACHE_TTL_SECONDS)
 cache_cleanup_task: asyncio.Task[None] | None = None
 
@@ -112,12 +115,15 @@ def bounded_payload(payload: bytes, label: str = "payload") -> bytes:
 
 
 def decode_image(payload: bytes) -> np.ndarray:
-    with Image.open(io_bytes(bounded_payload(payload, "image"))) as image:
-        if image.width * image.height > MAX_IMAGE_PIXELS:
-            raise ValueError(f"image exceeds the {MAX_IMAGE_PIXELS} pixel limit")
-        image.draft("RGB", (MAX_IMAGE_SIDE, MAX_IMAGE_SIDE))
-        rgb = ImageOps.exif_transpose(image).convert("RGB")
+    with measure("decode_ms"):
+        with Image.open(io_bytes(bounded_payload(payload, "image"))) as image:
+            if image.width * image.height > MAX_IMAGE_PIXELS:
+                raise ValueError(f"image exceeds the {MAX_IMAGE_PIXELS} pixel limit")
+            image.draft("RGB", (MAX_IMAGE_SIDE, MAX_IMAGE_SIDE))
+            rgb = ImageOps.exif_transpose(image).convert("RGB")
+    with measure("resize_ms"):
         rgb.thumbnail((MAX_IMAGE_SIDE, MAX_IMAGE_SIDE), Image.Resampling.LANCZOS)
+    with measure("color_ms"):
         return np.asarray(rgb)[:, :, ::-1].copy()
 
 
@@ -215,12 +221,12 @@ def normalized_embedding(face: Any) -> list[float]:
     return (vector / norm).astype(np.float32).tolist()
 
 
-def face_payload(face: Any, photo: PhotoInput, face_index: int) -> dict[str, Any]:
+def face_payload(face: Any, photo: PhotoInput, face_index: int, *, embedding: list[float] | None = None) -> dict[str, Any]:
     bbox = np.asarray(face.bbox, dtype=np.float32).tolist() if getattr(face, "bbox", None) is not None else []
     return {
         "driveFileId": photo.driveFileId,
         "faceIndex": face_index,
-        "embedding": normalized_embedding(face),
+        "embedding": normalized_embedding(face) if embedding is None else embedding,
         "boundingBox": {
             "x": float(bbox[0]),
             "y": float(bbox[1]),
@@ -229,6 +235,17 @@ def face_payload(face: Any, photo: PhotoInput, face_index: int) -> dict[str, Any
         } if len(bbox) >= 4 else None,
         "sourceVersion": photo.sourceVersion,
     }
+
+
+def photo_face_payloads(faces: list[Any], photo: PhotoInput, *, normalize_once: bool = False) -> list[dict[str, Any]]:
+    if not normalize_once:
+        return [face_payload(face, photo, i) for i, face in enumerate(faces) if normalized_embedding(face)]
+    records = []
+    for i, face in enumerate(faces):
+        embedding = normalized_embedding(face)
+        if embedding:
+            records.append(face_payload(face, photo, i, embedding=embedding))
+    return records
 
 
 def local_candidates(gallery_id: int, photo: PhotoInput) -> list[Path]:
@@ -307,23 +324,32 @@ async def process_index_job(job: IndexJobInput) -> None:
 
             heartbeat_task = asyncio.create_task(heartbeat())
 
+            @observed("index_photo")
             async def index_photo(photo: PhotoInput) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+                annotate(gallery_id=job.galleryId, job_id=job.jobId)
                 if photo.cachedFaces is not None and photo.cachedIsSolo is not None:
+                    annotate(cached=True, faces=len(photo.cachedFaces))
                     logger.info("Job %s photo %s: cached (%s faces, solo=%s)", job.jobId, photo.driveFileId, len(photo.cachedFaces), photo.cachedIsSolo)
                     return photo.cachedFaces, {"driveFileId": photo.driveFileId, "sourceVersion": photo.sourceVersion, "isSolo": photo.cachedIsSolo}
                 last_error: Exception | None = None
                 for attempt in range(2):
+                    annotate(cached=False, attempt=attempt + 1)
                     started_at = time.perf_counter()
                     try:
-                        payload = await fetch_photo(job, photo)
+                        with measure("fetch_ms"):
+                            payload = await fetch_photo(job, photo)
                         fetched_at = time.perf_counter()
                         image = await asyncio.to_thread(decode_image, payload)
+                        annotate(bytes=len(payload), width=image.shape[1], height=image.shape[0])
                         decoded_at = time.perf_counter()
                         async with inference_semaphore:
                             inference_at = time.perf_counter()
-                            faces = await asyncio.to_thread(recognizer.get, image)
+                            annotate(wait_ms=(inference_at - decoded_at) * 1000)
+                            with measure("face_ms"):
+                                faces = await asyncio.to_thread(recognizer.get, image)
                             faces_at = time.perf_counter()
-                            people = await asyncio.to_thread(recognizer.count_people, image) if len(faces) == 1 else None
+                            with measure("person_ms"):
+                                people = await asyncio.to_thread(recognizer.count_people, image) if len(faces) == 1 else None
                         finished_at = time.perf_counter()
                         is_solo = len(faces) == 1 and people == 1
                         logger.info(
@@ -332,7 +358,9 @@ async def process_index_job(job: IndexJobInput) -> None:
                             (decoded_at - fetched_at) * 1000, (inference_at - decoded_at) * 1000,
                             (faces_at - inference_at) * 1000, (finished_at - faces_at) * 1000,
                         )
-                        records = [face_payload(face, photo, face_index) for face_index, face in enumerate(faces) if normalized_embedding(face)]
+                        annotate(faces=len(faces), people=people if people is not None else -1)
+                        with measure("serialize_ms"):
+                            records = photo_face_payloads(faces, photo, normalize_once=NORMALIZE_ONCE)
                         return records, {"driveFileId": photo.driveFileId, "sourceVersion": photo.sourceVersion, "isSolo": is_solo}
                     except Exception as error:
                         last_error = error
@@ -358,13 +386,16 @@ async def process_index_job(job: IndexJobInput) -> None:
             heartbeat_stop.set()
             await heartbeat_task
             heartbeat_task = None
-            await callback(job, f"callbacks/jobs/{job.jobId}/complete", {
-                "galleryId": job.galleryId,
-                "modelVersion": job.modelVersion,
-                "sourceVersion": job.sourceVersion,
-                "embeddings": embeddings,
-                "indexedPhotos": indexed_photos,
-            })
+            with observation("index_publish"):
+                annotate(gallery_id=job.galleryId, job_id=job.jobId, records=len(embeddings))
+                with measure("index_publish_ms"):
+                    await callback(job, f"callbacks/jobs/{job.jobId}/complete", {
+                        "galleryId": job.galleryId,
+                        "modelVersion": job.modelVersion,
+                        "sourceVersion": job.sourceVersion,
+                        "embeddings": embeddings,
+                        "indexedPhotos": indexed_photos,
+                    })
             logger.info("Completed face job %s: %s photos, %s faces", job.jobId, processed, len(embeddings))
         except Exception as error:
             logger.exception("Face job %s failed", job.jobId)
@@ -468,13 +499,14 @@ async def parse_search_form(request: Request) -> FormData:
 
 @app.post("/v1/search")
 async def search_faces(request: Request, authorization: str | None = Header(default=None)) -> dict[str, Any]:
-    require_worker_token(authorization)
-    recognizer = ready_model()
-    form = await parse_search_form(request)
-    try:
-        return await search_form(form, recognizer)
-    finally:
-        await form.close()
+    with observation("search"):
+        require_worker_token(authorization)
+        recognizer = ready_model()
+        form = await parse_search_form(request)
+        try:
+            return await search_form(form, recognizer)
+        finally:
+            await form.close()
 
 
 async def search_form(form: FormData, recognizer: Any) -> dict[str, Any]:
@@ -500,6 +532,7 @@ async def search_form(form: FormData, recognizer: Any) -> dict[str, Any]:
         raise search_error(409, "model_version_mismatch", "Model version does not match")
     if galleryId <= 0:
         raise search_error(400, "invalid_search_form", "Invalid galleryId")
+    annotate(gallery_id=galleryId)
     cached_index: PreparedIndex | None = None
     if embeddings is not None:
         if not isinstance(embeddings, str) or "sourceVersion" in form or "completedJobId" in form:
@@ -519,7 +552,8 @@ async def search_form(form: FormData, recognizer: Any) -> dict[str, Any]:
         if not isinstance(source, str) or len(source) != 64 or any(c not in "0123456789abcdef" for c in source) or not isinstance(job_id, str) or not 1 <= len(job_id) <= 16 or not job_id.isascii() or not job_id.isdigit() or not 0 < int(job_id) <= 9007199254740991:
             raise search_error(422, "invalid_search_form", "Index identity is required")
         try:
-            cached_index = await embedding_cache.get(IndexKey(galleryId, modelVersion, source, int(job_id)), load_cached_index)
+            with measure("index_load_ms"):
+                cached_index = await embedding_cache.get(IndexKey(galleryId, modelVersion, source, int(job_id)), load_cached_index)
         except CacheCapacityError as error:
             raise search_error(503, "cache_capacity", "Index exceeds cache capacity") from error
         records = []
@@ -534,18 +568,23 @@ async def search_form(form: FormData, recognizer: Any) -> dict[str, Any]:
         image = await asyncio.to_thread(decode_image, payload)
     except (ValueError, OSError, UnidentifiedImageError, Image.DecompressionBombError) as error:
         raise search_error(422, "invalid_selfie", "Invalid selfie image") from error
-    async with inference_semaphore:
-        selfie_face = largest_face(await asyncio.to_thread(recognizer.get, image, selfie=True))
+    with measure("queue_and_face_ms"):
+        async with inference_semaphore:
+            with measure("face_ms"):
+                selfie_face = largest_face(await asyncio.to_thread(recognizer.get, image, selfie=True))
     if selfie_face is None:
         raise search_error(422, "no_face", "No face found in the selfie")
     query = np.asarray(normalized_embedding(selfie_face), dtype=np.float32)
     threshold = sensitivity_threshold(sensitivity)
     if cached_index is not None:
-        matches = await asyncio.to_thread(cached_index.match, query, threshold, solo_only)
+        with measure("query_match_ms"):
+            matches = await asyncio.to_thread(cached_index.match, query, threshold, solo_only, candidate_filter=MATCH_CANDIDATE_FILTER)
         total = cached_index.total
     else:
-        matches = await asyncio.to_thread(match_records, query, records, threshold, solo_only)
+        with measure("query_match_ms"):
+            matches = await asyncio.to_thread(match_records, query, records, threshold, solo_only)
         total = len({str(record.get('driveFileId')) for record in records})
+    annotate(matches=len(matches))
     return {"status": "complete", "galleryId": galleryId, "total": total, "matches": matches}
 
 

@@ -43,6 +43,168 @@ Leave `FACE_WORKER_MEDIA_ROOT` empty for callback thumbnails. Both API and worke
 must run. Restart the API after updating its code; sync an existing gallery once
 to import Drive content versions and start background indexing.
 
+## Independent Edited Photos ZIP worker
+
+Selfie and folder ZIP downloads run as separate services on the same VM:
+
+| Service | App | Private listener | Install directory | Configuration |
+| --- | --- | --- | --- | --- |
+| `orbit-face-worker` | `main:app` | `127.0.0.1:8088` | `/opt/orbit-face-worker` | `/etc/orbit-face-worker.env` |
+| `orbit-archive-worker` | `archive_worker:app` | `127.0.0.1:8089` | `/opt/orbit-archive-worker` | `/etc/orbit-archive-worker.env` |
+
+The ZIP service has its own virtualenv and service user. It installs only
+FastAPI, HTTPX and Uvicorn; it does not import OpenCV, NumPy, Pillow, face models,
+or the Selfie app. Neither service depends on the other in systemd.
+
+The Edited Photos client can request a ZIP for an individual folder. Fly checks
+the Edited access token and the published folder snapshot, then sends only the
+published image file IDs to the worker. The worker reads each original from
+Google Drive in bounded chunks, writes one file at a time into a temporary ZIP,
+and serves the completed ZIP directly to the browser over HTTPS. Video files are
+excluded. The ZIP uses stored entries because JPEG/PNG files are already
+compressed; this avoids spending CPU trying to compress them again. Fly handles
+authorization and job polling, but ZIP bytes do not pass through Fly.
+Download tickets last at most 15 minutes and are bounded by the gallery's Edited
+access deadline. Fly revalidates access and requests a fresh ticket when the
+client starts the download; the completed archive itself remains available for
+the configured archive TTL.
+
+### Ubuntu installation
+
+Run from the repository's `worker/archive-worker` directory:
+
+```bash
+bash deploy/setup-ubuntu.sh
+sudo install -m 0600 .env.example /etc/orbit-archive-worker.env
+sudoedit /etc/orbit-archive-worker.env
+sudo systemctl daemon-reload
+sudo systemctl enable --now orbit-archive-worker
+```
+
+Do not overwrite an existing `/etc/orbit-archive-worker.env` during updates.
+The setup script copies only the ZIP app, shared Drive downloader and ZIP
+requirements into `/opt/orbit-archive-worker`; it never restarts Selfie.
+After updating an existing ZIP installation, run:
+
+```bash
+cd ../archive-worker
+bash deploy/setup-ubuntu.sh
+sudo systemctl daemon-reload
+sudo systemctl restart orbit-archive-worker
+```
+
+Set `FACE_ARCHIVE_WORKER_TOKEN` to a new random token, and
+`FACE_ARCHIVE_WORKER_CALLBACK_ORIGIN` to the Hono API origin. Set
+`FACE_ARCHIVE_WORKER_CALLBACK_TOKEN` to Fly's existing
+`FACE_WORKER_INTERNAL_TOKEN`; the ZIP service uses the API's existing
+`/api/internal/face-index/drive-token` endpoint for short-lived read-only Drive
+credentials. That API endpoint does not depend on Selfie worker availability.
+No service account private key is installed on the ZIP worker.
+
+Configure these separate settings on Fly:
+
+```dotenv
+FACE_ARCHIVE_WORKER_URL=https://media-worker.example.com
+FACE_ARCHIVE_WORKER_PUBLIC_URL=https://media-worker.example.com
+FACE_ARCHIVE_WORKER_TOKEN=match-the-new-archive-token-on-ubuntu
+```
+
+`FACE_ARCHIVE_WORKER_URL` is the Fly-to-ZIP route; use a reachable authenticated
+HTTPS reverse proxy or a private tunnel to port 8089; the service binds to
+loopback. `FACE_ARCHIVE_WORKER_PUBLIC_URL` is the browser-reachable HTTPS
+origin. Keep `FACE_WORKER_URL` and `FACE_WORKER_TOKEN` for Selfie only. Missing
+ZIP configuration returns an unavailable response; it never falls back to Selfie.
+
+### HTTPS reverse proxy
+
+Add the following location to the existing HTTPS Nginx server block, alongside
+its existing Selfie locations. A complete snippet is in
+`../archive-worker/deploy/nginx-location.conf`:
+
+```nginx
+location ^~ /v1/archive/ {
+    proxy_pass http://127.0.0.1:8089;
+    proxy_buffering off;
+    proxy_connect_timeout 5s;
+    proxy_read_timeout 300s;
+    client_max_body_size 8m;
+    access_log off;
+}
+```
+
+Route both `/v1/archive/jobs*` and `/v1/archive/download/*` to 8089 while Selfie
+routes keep their existing upstream. Job routes require the separate archive
+Bearer token; public downloads require a random, short-lived ticket. Disable
+query-string logging for download URLs at every proxy/CDN layer. Do not expose
+8089 directly to the Internet. Validate Nginx configuration before reloading it.
+
+### Local Windows run
+
+In a second terminal in `worker/archive-worker`:
+
+```powershell
+.\setup-windows.ps1
+Copy-Item .env.example .env
+# Edit .env; use FACE_ARCHIVE_WORKER_DIR=archives locally.
+.\run-worker.ps1
+```
+
+Only create `.env` if it does not already exist. The archive folder uses its
+own `.venv` and port 8089; Selfie uses `.venv-ml` and port 8088 from the
+`worker/face-recognition` folder. Set the local server's `FACE_ARCHIVE_WORKER_URL` to
+`http://127.0.0.1:8089`. Completed browser downloads still require the HTTPS
+public proxy configured in `FACE_ARCHIVE_WORKER_PUBLIC_URL`.
+
+Archive `GET /healthz` identifies `orbit-archive-worker`. Archive `/readyz`
+requires its Bearer token and checks local Drive callback configuration without
+loading any face model. This is separate from Selfie's model readiness.
+
+Archive limits can be adjusted in `/etc/orbit-archive-worker.env`:
+
+| Worker setting | Default | Purpose |
+| --- | ---: | --- |
+| `FACE_ARCHIVE_WORKER_MAX_BYTES` | 20 GiB | Maximum total source bytes in a ZIP |
+| `FACE_ARCHIVE_WORKER_MAX_PHOTOS` | 2,000 | Maximum images in one folder job |
+| `FACE_ARCHIVE_WORKER_MAX_ACTIVE` | 4 | Maximum queued and running archive jobs |
+| `FACE_ARCHIVE_WORKER_CONCURRENCY` | 1 | ZIP jobs processed at once |
+| `FACE_ARCHIVE_WORKER_TTL_SECONDS` | 43,200 | Time a completed ZIP stays downloadable |
+| `FACE_ARCHIVE_WORKER_DIR` | `<worker>/archives` | Dedicated temporary archive storage |
+
+Temporary staging holds at most one source photo beside the growing ZIP. The
+worker deletes expired archives periodically and clears orphaned files at
+startup. An Ubuntu service restart cancels in-flight jobs; clients can retry.
+Leave disk space for the ZIP currently being built plus the current source file.
+The legacy `Download All Photos` ZIP remains the separately published Drive ZIP.
+Never point `FACE_ARCHIVE_WORKER_DIR` at a directory with other data: startup
+removes orphaned archive files. Migrating the combined worker cancels its old
+in-memory archive jobs; clients can start a new job on the ZIP service.
+
+For the first migration, deploy the new ZIP service and proxy route, configure
+the Fly archive variables, and deploy Hono. Then update/restart the Selfie
+service with the stripped-down `main.py` to remove the old archive routes.
+Further ZIP updates do not require restarting Selfie.
+
+Verify service isolation with:
+
+```bash
+sudo systemctl status orbit-face-worker orbit-archive-worker
+sudo systemctl restart orbit-archive-worker
+curl --fail http://127.0.0.1:8088/healthz
+curl --fail http://127.0.0.1:8089/healthz
+```
+
+Python regression tests include two real Uvicorn processes, stopping/restarting
+ZIP while Selfie stays alive and stopping Selfie while ZIP stays available:
+
+```bash
+cd ../archive-worker
+python -m unittest test_worker
+cd ../face-recognition
+python -m unittest test_worker_processes test_drive_source test_worker
+```
+
+## Selfie readiness
+
 The run script invokes the venv explicitly and loads `.env`:
 
 ```powershell
@@ -110,7 +272,7 @@ For precision-first behavior, zero or multiple person detections are not solo.
 Person boxes are not persisted. A missed/occluded person can still create a false
 solo classification, so validate representative wedding photos before rollout.
 
-`opencv-yunet-2023mar-sface-2021dec-nanodet-2022nov-4` retains the existing
+`opencv5-yunet-2023mar-sface-2021dec-nanodet-2022nov-5` retains the existing
 YuNet/SFace identity matching and thresholds, then adds the pinned FP32 NanoDet
 Plus model at 416x416, person confidence 0.18 and NMS IoU 0.60. The lower person
 threshold improves recall for cropped, seated and small solo subjects while the
@@ -118,6 +280,12 @@ exactly-one-person rule remains precision-first. Both `engine.py`
 and `server/lib/face-model.ts` must have this exact version. Old indexes are not
 reused, so each gallery rebuilds once. The idempotent storage upgrade adds only
 `face_index_photos.is_solo`; gallery selections are untouched.
+
+OpenCV 5 revision 5 loads YuNet and SFace through `cv2.dnn.readNetFromONNX`
+with automatic engine selection. This avoids the high-level face wrappers,
+which internally set a DNN target unsupported by OpenCV 5's new engine. The
+worker preserves YuNet post-processing and SFace alignment while using the
+engine's default CPU path.
 
 The callback publishes explicit solo metadata for every indexed photo, including
 photos with no face. Incremental jobs reuse that metadata for unchanged photos,
@@ -127,7 +295,7 @@ solo filter; `soloOnly=true` is rejected when person metadata is unavailable.
 Deploy the worker first (update the service code under `/opt/orbit-face-worker`,
 not only the Git checkout, and restart `orbit-face-worker`), then deploy the API.
 Authenticated `/readyz` must report model
-`opencv-yunet-2023mar-sface-2021dec-nanodet-2022nov-4` and capabilities
+`opencv5-yunet-2023mar-sface-2021dec-nanodet-2022nov-5` and capabilities
 `solo-filter-v1` plus `solo-person-filter-v1`. During the version mismatch, face search is
 unavailable. Once versions agree, Sync or the next Find Face search rebuilds the
 gallery index once. Repeated searches then reuse the new index; restarting the
@@ -424,7 +592,7 @@ adaptive fast path. The preference is bounded to the 64 most recent jobs.
 
 Rolling deployment order:
 
-1. Update the worker code, including `drive_source.py`. Keep
+1. Update the worker code, including `../shared/drive_source.py`. Keep
    `FACE_WORKER_PHOTO_SOURCE=callback` (the code default) while the old API is
    running. Drain active jobs before restarting the service. Old payloads still
    work with the old API; explicit `photoSource: "drive"` always uses Drive.
@@ -493,6 +661,14 @@ rclone mount orbit-drive: /mnt/orbit-drive --read-only --vfs-cache-mode off \
 
 Drive IDs are the source of truth. When using local files, prefer
 `<MEDIA_ROOT>/<galleryId>/<driveFileId>` to avoid ambiguous filenames.
+
+## CPU Optimization Audit
+
+See [AUDIT_FINDINGS.md](AUDIT_FINDINGS.md) for the current indexing/search call graph,
+measured evidence and prioritized risks. [Benchmark protocol](benchmarks/README.md)
+documents offline JSON/CSV benchmarking, ARM profiles, accuracy labels, optional
+timing logs, two default-off CPU candidates and rollback. No model/index rebuild
+is required for those candidates. ARM rollout requires actual-host measurements.
 
 ## Models and licenses
 

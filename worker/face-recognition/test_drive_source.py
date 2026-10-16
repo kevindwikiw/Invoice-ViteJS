@@ -1,11 +1,16 @@
 import asyncio
 import time
+import tempfile
+from pathlib import Path
+import sys
 import unittest
 from unittest.mock import AsyncMock, patch
 
 import httpx
 
-from drive_source import DriveError, DriveSource, thumbnail_url
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from shared.drive_source import DriveError, DriveSource, thumbnail_url
 import main
 
 
@@ -72,6 +77,22 @@ class DriveTests(unittest.IsolatedAsyncioTestCase):
         self.handler = lambda r: httpx.Response(200, content=b"original") if "alt" in r.url.params else httpx.Response(200, json={"id": "a"})
         self.assertEqual(await self.source.fetch("a", None, 1), b"original")
         self.assertEqual(self.requests[-1].url.host, "www.googleapis.com")
+
+    async def test_download_to_path_streams_drive_file_and_enforces_limit(self):
+        with tempfile.TemporaryDirectory(dir=Path(__file__).parent) as directory:
+            path = Path(directory) / "photo.jpg"
+            self.handler = lambda request: httpx.Response(200, content=b"full-resolution-photo")
+            written = await self.source.download_to_path("photo-id", path, 100)
+            self.assertEqual(written, len(b"full-resolution-photo"))
+            self.assertEqual(path.read_bytes(), b"full-resolution-photo")
+            request = next(request for request in self.requests if request.url.host == "www.googleapis.com")
+            self.assertEqual(request.url.params["alt"], "media")
+            self.assertEqual(request.url.path, "/drive/v3/files/photo-id")
+
+            self.handler = lambda request: httpx.Response(200, content=b"x" * 101)
+            with self.assertRaisesRegex(DriveError, "drive_payload_too_large"):
+                await self.source.download_to_path("large", path, 100)
+            self.assertFalse(path.exists())
 
     async def test_oversized_original_and_thumbnail_rejected(self):
         self.handler = lambda r: httpx.Response(200, content=b"x" * 101)

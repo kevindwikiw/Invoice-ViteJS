@@ -47,6 +47,36 @@ class PersonDetectorTests(unittest.TestCase):
         self.assertEqual(len(decoded_boxes), 1)
         self.assertAlmostEqual(scores[0], 0.18)
 
+    def test_decode_accepts_opencv5_grouped_outputs(self):
+        detector = self.detector_without_model()
+        detector.strides = (8, 16, 32)
+        detector.anchors = tuple(detector._anchors_for_stride(stride) for stride in detector.strides)
+        class_outputs = [np.zeros((1, len(anchors), 80), dtype=np.float32) for anchors in detector.anchors]
+        box_outputs = [np.zeros((1, len(anchors), 32), dtype=np.float32) for anchors in detector.anchors]
+        for level, classes in enumerate(class_outputs):
+            classes[0, level, 0] = 0.9
+            classes[0, level + 5, 2] = 0.99
+
+        grouped = detector._decode(class_outputs + box_outputs)
+        interleaved = detector._decode([item for pair in zip(class_outputs, box_outputs) for item in pair])
+
+        self.assertEqual(grouped, interleaved)
+        self.assertEqual(len(grouped[0]), 3)
+        self.assertTrue(all(abs(score - 0.9) < 1e-6 for score in grouped[1]))
+        for box in grouped[0]:
+            self.assertEqual(len(box), 4)
+            self.assertGreater(box[2], 0)
+            self.assertGreater(box[3], 0)
+
+    def test_decode_rejects_unpaired_duplicate_and_wrong_rank_outputs(self):
+        detector = self.detector_without_model()
+        classes = np.zeros((1, 1, 80), dtype=np.float32)
+        boxes = np.zeros((1, 1, 32), dtype=np.float32)
+        for outputs in ([classes], [classes, classes], [classes, np.zeros((2, 1, 32))],
+                        [classes, boxes, classes, boxes]):
+            with self.subTest(shapes=[o.shape for o in outputs]), self.assertRaises(ValueError):
+                detector._decode(outputs)
+
     def test_count_applies_person_nms(self):
         detector = self.detector_without_model()
         detector.net = Mock()

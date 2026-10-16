@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from typing import Awaitable, Callable
 
 import numpy as np
+from telemetry import annotate
 
 logger = logging.getLogger("orbit-face-worker")
 
@@ -30,12 +31,21 @@ class PreparedIndex:
     total: int
     byte_size: int
 
-    def match(self, query: np.ndarray, threshold: float, solo_only: bool = False) -> list[dict]:
+    def match(self, query: np.ndarray, threshold: float, solo_only: bool = False, *, candidate_filter: bool = False) -> list[dict]:
         if not len(self.file_ids):
             return []
         distances = np.clip(1 - self.matrix @ query, 0, 2)
         best: dict[str, float] = {}
-        for file_id, distance in zip(self.file_ids, distances):
+        # Keep matrix math and stable row order identical; skip Python work for
+        # rows which cannot pass the threshold. The baseline remains selectable.
+        candidates = zip(self.file_ids, distances)
+        if candidate_filter:
+            indexes = np.flatnonzero(distances <= threshold)
+            # Sparse indexed iteration wins on mostly-unmatched galleries; keep
+            # sequential iteration for dense results to avoid indexing overhead.
+            if len(indexes) * 2 < len(self.file_ids):
+                candidates = ((self.file_ids[i], distances[i]) for i in indexes)
+        for file_id, distance in candidates:
             if solo_only and file_id not in self.solo_file_ids:
                 continue
             if distance <= threshold and distance < best.get(file_id, float("inf")):
@@ -98,9 +108,11 @@ class EmbeddingCache:
         if key in self.entries:
             entry, _ = self.entries.pop(key)
             self.entries[key] = (entry, self.clock())
+            annotate(cached=True, records=len(entry.file_ids))
             logger.info("Face cache hit entries=%s bytes=%s", len(self.entries), self.byte_size)
             return entry
         task = self.pending.get(key)
+        annotate(cached=False)
         if task is None:
             task = asyncio.create_task(self._load(key, loader))
             self.pending[key] = task

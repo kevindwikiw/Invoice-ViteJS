@@ -1,0 +1,11 @@
+{
+  "labeled": false,
+  "photos": [
+    {"id": "fixture-a", "path": "marketing/public/media/hero/home-hero-veil-kiss-1000.webp"},
+    {"id": "fixture-b", "path": "marketing/public/media/hero/home-hero-yosemite-veil-1000.webp"},
+    {"id": "fixture-c", "path": "marketing/public/media/hero/home-hero-bali-cliff-1000.webp"}
+  ],
+  "queries": [
+    {"id": "query-a", "path": "marketing/public/media/hero/home-hero-veil-kiss-1000.webp"}
+  ]
+}

@@ -20,8 +20,6 @@ class PersonDetector:
 
         self.cv2 = cv2
         self.net = cv2.dnn.readNetFromONNX(str(model_path))
-        self.net.setPreferableBackend(cv2.dnn.DNN_BACKEND_OPENCV)
-        self.net.setPreferableTarget(cv2.dnn.DNN_TARGET_CPU)
         self.project = np.arange(self.reg_max + 1, dtype=np.float32)
         self.mean = np.array([103.53, 116.28, 123.675], dtype=np.float32).reshape(1, 1, 3)
         self.std = np.array([57.375, 57.12, 58.395], dtype=np.float32).reshape(1, 1, 3)
@@ -51,14 +49,34 @@ class PersonDetector:
     def _decode(self, outputs: list[np.ndarray]) -> tuple[list[list[float]], list[float]]:
         if len(outputs) % 2 or not 2 <= len(outputs) <= len(self.strides) * 2:
             raise ValueError(f"Unexpected NanoDet output count: {len(outputs)}")
+        box_width = 4 * (self.reg_max + 1)
+        class_outputs: dict[int, np.ndarray] = {}
+        box_outputs: dict[int, np.ndarray] = {}
+        for output in outputs:
+            array = np.asarray(output)
+            if array.ndim == 3 and array.shape[0] == 1:
+                array = array[0]
+            if array.ndim != 2:
+                raise ValueError("Unexpected NanoDet output shape")
+            target = box_outputs if array.shape[1] == box_width else class_outputs
+            if array.shape[0] in target:
+                raise ValueError("Duplicate NanoDet output for anchor level")
+            target[array.shape[0]] = array
+        if len(class_outputs) != len(outputs) // 2 or len(box_outputs) != len(outputs) // 2:
+            raise ValueError("Unexpected NanoDet output channels")
+
         boxes: list[list[float]] = []
         scores: list[float] = []
-        for stride, anchors, class_output, box_output in zip(self.strides, self.anchors, outputs[::2], outputs[1::2]):
-            classes = np.asarray(class_output).squeeze(axis=0) if np.asarray(class_output).ndim == 3 else np.asarray(class_output)
-            distribution = np.asarray(box_output).squeeze(axis=0) if np.asarray(box_output).ndim == 3 else np.asarray(box_output)
+        for stride, anchors in zip(self.strides, self.anchors):
+            classes = class_outputs.get(anchors.shape[0])
+            distribution = box_outputs.get(anchors.shape[0])
+            if classes is None and distribution is None:
+                continue
+            if classes is None or distribution is None:
+                raise ValueError("Missing NanoDet output for anchor level")
             if classes.ndim != 2 or classes.shape[0] != anchors.shape[0] or classes.shape[1] <= PERSON_CLASS_ID:
                 raise ValueError("Unexpected NanoDet class output shape")
-            if distribution.shape != (anchors.shape[0], 4 * (self.reg_max + 1)):
+            if distribution.shape != (anchors.shape[0], box_width):
                 raise ValueError("Unexpected NanoDet box output shape")
 
             class_ids = np.argmax(classes, axis=1)

@@ -3,6 +3,8 @@ import io
 import json
 import unittest
 import tempfile
+from pathlib import Path
+import sys
 from types import SimpleNamespace
 from threading import Lock
 from unittest.mock import AsyncMock, Mock, patch
@@ -10,6 +12,8 @@ from unittest.mock import AsyncMock, Mock, patch
 import httpx
 import numpy as np
 from PIL import Image
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import main
 from embedding_cache import prepare_index
@@ -187,6 +191,11 @@ class WorkerTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(response.status_code, 503)
                 self.assertEqual(response.json()["code"], code)
                 self.assertEqual((await self.client.get("/healthz")).status_code, 200)
+
+    async def test_selfie_does_not_offer_archive_routes_or_capability(self):
+        self.assertEqual((await self.client.post("/v1/archive/jobs", json={})).status_code, 404)
+        self.assertEqual((await self.client.get("/v1/archive/jobs/job")).status_code, 404)
+        self.assertNotIn("folder-archive-v1", (await self.client.get("/readyz")).json()["capabilities"])
 
     async def test_no_face_and_corrupt_selfie_are_422(self):
         for payload in (blank_jpeg(), b"bad jpeg"):

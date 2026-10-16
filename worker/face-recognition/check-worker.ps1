@@ -25,9 +25,16 @@ raise SystemExit(1 if missing else 0)
 '@ | & $pythonPath -
 if ($LASTEXITCODE -ne 0) { throw 'Worker dependency check failed.' }
 Push-Location $workerRoot
+$previousPythonPath = $env:PYTHONPATH
+if ($previousPythonPath) {
+    $env:PYTHONPATH = "$(Split-Path -Parent $workerRoot);$previousPythonPath"
+} else {
+    $env:PYTHONPATH = Split-Path -Parent $workerRoot
+}
 try {
     & $pythonPath -c "from dotenv import load_dotenv; load_dotenv(); from main import load_face_app_sync; load_face_app_sync(); print('Model checksum and warm-up: ready')"
     if ($LASTEXITCODE -ne 0) { throw 'Worker model check failed.' }
 } finally {
+    $env:PYTHONPATH = $previousPythonPath
     Pop-Location
 }

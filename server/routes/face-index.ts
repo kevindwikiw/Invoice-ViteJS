@@ -465,7 +465,12 @@ faceIndexRouter.post("/callbacks/jobs/:id/complete", async (c) => {
         }),
         { sql: `UPDATE face_index_jobs SET status = 'completed', processed = total, completed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND status = 'running' AND ${active}`, params: [jobId, jobId] },
     ];
+    const indexWriteStarted = performance.now();
     await galleryBatch(statements);
+    if (process.env.FACE_WORKER_METRICS === "1") {
+        console.info("[face-index] metrics", { galleryId, jobId, records: embeddings.length,
+            index_write_ms: performance.now() - indexWriteStarted });
+    }
     const published = await galleryOne<{ status: string }>("SELECT status FROM face_index_jobs WHERE id = ?", [jobId]);
     if (published?.status !== "completed") return jsonError(c, "Face index job is no longer active.", 409);
     return c.json({ ok: true, embeddings: embeddings.length });
