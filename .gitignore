@@ -37,6 +37,7 @@ __pycache__/
 *.py[cod]
 .venv/
 .venv-ml/
+/worker/archive-worker/archives/
 /worker/face-recognition/models/
 /worker/face-recognition/.evaluation/
 

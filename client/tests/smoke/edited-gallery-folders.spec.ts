@@ -1,7 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
 
 const id = 'edited-folders';
-const photo = (driveFileId: string, folderId: string | null) => ({ driveFileId, folderId, filename: `${driveFileId}.jpg`, width: 800, height: 600, downloadUrl: `https://example.test/${driveFileId}` });
+const photo = (driveFileId: string, folderId: string | null) => ({ driveFileId, folderId, filename: `${driveFileId}.jpg`, mimeType: 'image/jpeg', width: 800, height: 600, downloadUrl: `https://example.test/${driveFileId}` });
 const snapshot = {
     folders: [{ id: 'no-watermark', parentId: null, name: 'No Watermark' }, { id: 'empty', parentId: 'no-watermark', name: 'Empty' }],
     photos: [...Array.from({ length: 55 }, (_, index) => photo(`root-photo-${index}`, null)), photo('clean-photo', 'no-watermark')],
@@ -26,27 +26,32 @@ for (const width of [320, 390, 1280]) {
         const folderBar = page.getByTestId('edited-folder-bar');
         const folderTrigger = folderBar.getByRole('button', { name: /Choose folder, current:/ });
         const folderPanel = page.getByTestId('edited-folder-panel');
-        await expect(folderBar).toBeVisible();
+        await expect(folderBar).toHaveCount(0);
         await expect(page.getByTestId('edited-folder-tiles').getByRole('link', { name: 'Open folder No Watermark' })).toBeVisible();
         await expect(page.getByRole('heading', { name: 'Photos' })).toBeVisible();
-        await expect(folderTrigger).toHaveAttribute('aria-expanded', 'false');
-        await expect(folderTrigger).toContainText('Edited Photos');
-        await expect(folderBar).not.toContainText('55');
-        expect(await folderBar.evaluate((element) => getComputedStyle(element).position)).toBe('fixed');
-        const initialBarBox = await folderBar.boundingBox();
-        expect(initialBarBox).not.toBeNull();
-        await folderTrigger.click();
-        await expect(folderPanel).toHaveAttribute('aria-hidden', 'false');
-        await expect(folderPanel.getByRole('link', { name: 'Edited Photos' })).toHaveAttribute('aria-current', 'page');
-        await expect(folderPanel.getByRole('link', { name: 'Open folder No Watermark', exact: true })).toBeVisible();
-        await page.keyboard.press('Escape');
-        await expect(folderTrigger).toBeFocused();
-        await expect(folderPanel).toHaveAttribute('aria-hidden', 'true');
         await expect(grid.locator('img')).toHaveCount(54);
         await expect(grid.locator('img').first()).toHaveAttribute('src', /root-photo-0\/thumbnail/);
         await page.getByRole('button', { name: 'Next page', exact: true }).click();
         await expect(page).toHaveURL(/editedPage=2/);
         await expect(grid.locator('img')).toHaveAttribute('src', /root-photo-54\/thumbnail/);
+        await page.getByTestId('edited-folder-tiles').getByRole('link', { name: 'Open folder No Watermark' }).click();
+        await expect(folderBar).toBeVisible();
+        await expect(folderTrigger).toHaveAttribute('aria-expanded', 'false');
+        await expect(folderTrigger).toContainText('No Watermark');
+        await expect(folderBar).not.toContainText('55');
+        expect(await folderBar.evaluate((element) => getComputedStyle(element).position)).toBe('fixed');
+        const initialBarBox = await folderBar.boundingBox();
+        expect(initialBarBox).not.toBeNull();
+        const breadcrumb = page.getByRole('navigation', { name: 'Folder breadcrumb' });
+        await expect(breadcrumb).toContainText('Edited Photos');
+        await expect(breadcrumb).toContainText('No Watermark');
+        await folderTrigger.click();
+        await expect(folderPanel).toHaveAttribute('aria-hidden', 'false');
+        await expect(folderPanel.getByRole('link', { name: 'Edited Photos' })).toBeVisible();
+        await expect(folderPanel.getByRole('link', { name: 'Open folder No Watermark', exact: true })).toBeVisible();
+        await page.keyboard.press('Escape');
+        await expect(folderTrigger).toBeFocused();
+        await expect(folderPanel).toHaveAttribute('aria-hidden', 'true');
         await folderTrigger.click();
         await folderPanel.getByRole('link', { name: 'Open folder No Watermark', exact: true }).click();
         await expect(page).toHaveURL(/folder=no-watermark/);
@@ -76,6 +81,7 @@ for (const width of [320, 390, 1280]) {
         await expect(page.getByRole('link', { name: 'Back to No Watermark' })).toBeVisible();
         await folderTrigger.click();
         await folderPanel.getByRole('link', { name: 'Edited Photos' }).click();
+        await expect(folderBar).toHaveCount(0);
         await expect(grid.locator('img').first()).toHaveAttribute('src', /root-photo-0\/thumbnail/);
         await expect(page.getByText('Page 1 of 2')).toBeVisible();
         await page.goto(`/culling/${id}?view=edit-results&folder=removed`);
@@ -100,6 +106,10 @@ for (const theme of ['black', 'white']) {
             return route.fulfill({ contentType: 'image/png', body: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl6z7QAAAAASUVORK5CYII=', 'base64') });
         });
         await page.goto(`/culling/${id}?view=edit-results`);
+        await expect(page.getByTestId('edited-folder-tiles').getByRole('link', { name: 'Open folder Folder 1', exact: true })).toBeVisible();
+        const rootFolderNames = await page.getByTestId('edited-folder-tiles').locator('a').evaluateAll((links) => links.map((link) => link.textContent?.trim()));
+        expect(rootFolderNames.slice(0, 4)).toEqual(['Folder 1', 'Folder 2', 'Folder 3', 'Folder 4']);
+        await page.getByTestId('edited-folder-tiles').getByRole('link', { name: 'Open folder Folder 1', exact: true }).click();
         const trigger = page.getByRole('button', { name: /Choose folder, current:/ });
         const panel = page.getByTestId('edited-folder-panel');
         await trigger.click();
@@ -178,13 +188,15 @@ test('switching folders from the bottom picker returns to the new folder start',
         const path = new URL(route.request().url()).pathname;
         if (path.endsWith('/edit-results/status')) return route.fulfill({ json: { available: true } });
         if (path.endsWith('/edit-results')) return route.fulfill({ json: {
-            folders: [{ id: 'second', parentId: null, name: 'Second Folder' }],
-            photos: [...Array.from({ length: 54 }, (_, index) => photo(`first-${index}`, null)), ...Array.from({ length: 54 }, (_, index) => photo(`second-${index}`, 'second'))],
+            folders: [{ id: 'second', parentId: null, name: 'Second Folder' }, { id: 'first-folder', parentId: null, name: 'First Folder' }],
+            photos: [...Array.from({ length: 54 }, (_, index) => photo(`first-${index}`, null)), ...Array.from({ length: 54 }, (_, index) => photo(`first-folder-${index}`, 'first-folder')), ...Array.from({ length: 54 }, (_, index) => photo(`second-${index}`, 'second'))],
         } });
         return route.fulfill({ contentType: 'image/png', body: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl6z7QAAAAASUVORK5CYII=', 'base64') });
     });
     await page.goto(`/culling/${id}?view=edit-results`);
     await expect(page.getByTestId('edited-gallery-grid').locator('article')).toHaveCount(54);
+    await page.getByRole('link', { name: 'Open folder First Folder' }).click();
+    await expect(page.getByTestId('edited-folder-bar')).toBeVisible();
     await page.evaluate(() => window.scrollTo(0, 1200));
     await expect.poll(() => page.evaluate(() => window.scrollY)).toBeGreaterThan(1000);
     await page.getByRole('button', { name: /Choose folder, current:/ }).click();
@@ -192,6 +204,33 @@ test('switching folders from the bottom picker returns to the new folder start',
     await expect(page).toHaveURL(/folder=second/);
     await expect(page.getByTestId('edited-gallery-grid').locator('img').first()).toHaveAttribute('src', /second-0\/thumbnail/);
     await expect.poll(() => page.evaluate(() => window.scrollY)).toBeLessThan(100);
+});
+
+test('folder ZIP button tracks the worker job and exposes the completed download', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 800 });
+    await seed(page);
+    let created = false;
+    await page.route(`**/api/public/galleries/${id}/**`, async (route) => {
+        const url = new URL(route.request().url());
+        const path = url.pathname;
+        if (path.endsWith('/edit-results/status')) return route.fulfill({ json: { available: true } });
+        if (path.endsWith('/edit-results/folders/no-watermark/archive/jobs') && route.request().method() === 'POST') {
+            created = true;
+            return route.fulfill({ status: 202, json: { jobId: 'a'.repeat(32), status: 'queued', total: 1 } });
+        }
+        if (path.endsWith(`/edit-results/archive/jobs/${'a'.repeat(32)}`)) {
+            return route.fulfill({ json: created ? { status: 'completed', processed: 1, total: 1, filename: 'No Watermark.zip', downloadUrl: 'https://worker.example.test/v1/archive/download/job?ticket=ticket' } : { status: 'queued', processed: 0, total: 1 } });
+        }
+        if (path.endsWith('/edit-results')) return route.fulfill({ json: snapshot });
+        return route.fulfill({ contentType: 'image/png', body: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl6z7QAAAAASUVORK5CYII=', 'base64') });
+    });
+    await page.goto(`/culling/${id}?view=edit-results`);
+    const downloadButton = page.getByRole('button', { name: 'Download No Watermark folder as ZIP' });
+    await expect(downloadButton).toBeVisible();
+    await downloadButton.click();
+    await expect.poll(() => created).toBe(true);
+    await expect(page.getByRole('button', { name: 'Download No Watermark ZIP' })).toBeVisible({ timeout: 5000 });
+    await expect(page.getByRole('status').filter({ hasText: 'No Watermark ZIP is ready' })).toBeVisible();
 });
 
 test('Edited Photos guide opens once, restarts from Help, and closes with Escape', async ({ page }) => {

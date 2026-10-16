@@ -1,0 +1,23 @@
+[Unit]
+Description=Orbit Photo folder ZIP worker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=orbit-archive
+Group=orbit-archive
+WorkingDirectory=/opt/orbit-archive-worker
+EnvironmentFile=/etc/orbit-archive-worker.env
+ExecStart=/opt/orbit-archive-worker/.venv/bin/uvicorn archive_worker:app --host 127.0.0.1 --port 8089 --workers 1 --no-access-log
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/orbit-archive-worker/archives
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

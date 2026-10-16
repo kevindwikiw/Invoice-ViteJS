@@ -15,7 +15,7 @@ mock.module('../lib/google-drive', () => ({
     listDrivePhotos: async () => edited,
     listDrivePhotoTree: async () => {
         if (treeFails) throw new Error('Folder unavailable');
-        return { folders: folderSnapshot, photos: edited.map((photo) => ({ ...photo, folderId: folderSnapshot.length && photo.id === 'bw' ? 'no-watermark' : null })) };
+        return { folders: folderSnapshot, photos: edited.map((photo) => ({ ...photo, folderId: folderSnapshot.length ? photo.id === 'nested-photo' ? 'empty' : photo.id === 'bw' ? 'no-watermark' : null : null })) };
     },
     hasAnyoneViewerFolderAccess: async () => true,
     getDrivePhotoMetadata: async (id: string) => { metadataCalls.push(id); if (missing.has(id)) throw new Error('missing'); if (restricted.has(id)) return { ...drivePhoto(id), canDownload: false }; return id === 'archive' ? { ...drivePhoto(id), name: 'backup.zip', mimeType: 'application/zip', canDownload: true } : drivePhoto(id); },
@@ -50,6 +50,26 @@ app.use('/admin/*', async (c, next) => { if (c.req.header('x-test-admin')) c.set
 app.route('/admin', adminGalleriesRouter);
 app.route('/public', publicGalleriesRouter);
 const request = (path: string, method = 'GET', body?: unknown, authenticated = true) => app.request(path, { method, headers: { 'content-type': 'application/json', ...(authenticated ? { 'x-test-admin': '1' } : {}) }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
+let workerArchivePayload: any = null;
+let archiveWorkerOffline = false;
+const workerArchiveJobId = 'a'.repeat(32);
+globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    const url = String(input);
+    if (new URL(url).pathname.startsWith('/v1/archive/')) {
+        assert.equal(new URL(url).origin, 'https://archive-private.example.test');
+        assert.equal(new Headers(init?.headers).get('Authorization'), 'Bearer archive-test-token');
+        if (archiveWorkerOffline) return Response.json({ error: 'offline' }, { status: 503 });
+    }
+    if (url.endsWith('/v1/archive/jobs') && init?.method === 'POST') {
+        workerArchivePayload = JSON.parse(String(init.body));
+        return Response.json({ jobId: workerArchiveJobId, status: 'queued' }, { status: 202 });
+    }
+    if (url.endsWith(`/v1/archive/jobs/${workerArchiveJobId}`)) {
+        return Response.json({ galleryId: 1, folderId: 'no-watermark', status: 'completed', processed: 1, total: 1, filename: 'No Watermark.zip', downloadTicket: 'opaque-ticket', expiresAt: Date.now() / 1000 + 3600 });
+    }
+    if (url.endsWith('/readyz')) return Response.json({ code: 'worker_not_ready' }, { status: 503 });
+    return Response.json({ error: 'not_found' }, { status: 404 });
+}) as typeof fetch;
 type Archive = { filename: string; downloadUrl: string; downloadResolveUrl: string };
 type Payload = { archive: Archive | null; code?: string; downloadUrl?: string; filename?: string; submitted: Array<{ driveFileId: string }>; edited: Array<{ driveFileId: string; thumbnailUrl: string }>; comparisonEnabled: boolean; comparisonCount: number; token: string; warnings: string[]; photos: Array<{ driveFileId?: string; downloadResolveUrl?: string; comparison: { previewUrl: string } | null }> };
 const json = async (response: Response) => await response.json() as Payload;
@@ -164,6 +184,7 @@ for (const claims of [{ ...editedClaims, exp: 1 }, { ...editedClaims, gid: 2 }])
     assert.equal((await request(`/public/gallery/edit-results/photos/color/before/preview?token=${invalidPayload}.${validSignature}`)).status, 401);
 }
 folderSnapshot = [{ id: 'no-watermark', parentId: null, name: 'No Watermark' }, { id: 'empty', parentId: 'no-watermark', name: 'Empty' }];
+edited.push(drivePhoto('nested-photo'));
 const nestedCandidates = await json(await request('/admin/1/edit-results/pairing'));
 assert.deepEqual(nestedCandidates.edited.map((photo) => photo.driveFileId), ['color']);
 assert.equal((await request('/admin/1/edit-results/pairing/edited/bw/thumbnail')).status, 404);
@@ -180,6 +201,29 @@ assert.deepEqual(nested.folders, [...folderSnapshot].sort((a, b) => a.name.local
 assert.equal(nested.photos.find((photo: any) => photo.driveFileId === 'bw').folderId, 'no-watermark');
 assert.equal(nested.photos.find((photo: any) => photo.driveFileId === 'bw').comparison, null);
 assert.equal(nested.photos.find((photo: any) => photo.driveFileId === 'color').folderId, null);
+const archiveStart = await request(`/public/gallery/edit-results/folders/no-watermark/archive/jobs?token=${token}`, 'POST');
+if (process.env.FACE_ARCHIVE_WORKER_URL) {
+    assert.equal(archiveStart.status, 202, await archiveStart.clone().text());
+    assert.deepEqual(workerArchivePayload.photos, [
+        { driveFileId: 'bw', filename: 'bw.jpg', archivePath: 'No Watermark/bw.jpg' },
+        { driveFileId: 'nested-photo', filename: 'nested-photo.jpg', archivePath: 'No Watermark/Empty/nested-photo.jpg' },
+    ]);
+    assert.equal((await request(`/public/gallery/edit-results/folders/not-published/archive/jobs?token=${token}`, 'POST')).status, 404);
+    assert.equal((await request(`/public/gallery/edit-results/folders/no-watermark/archive/jobs?token=bad`, 'POST')).status, 401);
+    const archiveJob = await json(await request(`/public/gallery/edit-results/archive/jobs/${workerArchiveJobId}?token=${token}`));
+    assert.equal((archiveJob as any).status, 'completed');
+    assert.equal((archiveJob as any).downloadUrl, `https://archive.example.test/v1/archive/download/${workerArchiveJobId}?ticket=opaque-ticket`);
+    archiveWorkerOffline = true;
+    assert.equal((await request(`/public/gallery/edit-results/folders/no-watermark/archive/jobs?token=${token}`, 'POST')).status, 503);
+    assert.equal((await request(`/public/gallery/edit-results/archive/jobs/${workerArchiveJobId}?token=${token}`)).status, 503);
+    assert.equal((await request(`/public/gallery/edit-results?token=${token}`)).status, 200);
+    archiveWorkerOffline = false;
+} else {
+    assert.equal(archiveStart.status, 503);
+    assert.equal((await archiveStart.json() as { code: string }).code, 'ARCHIVE_WORKER_UNAVAILABLE');
+    assert.equal(workerArchivePayload, null);
+    assert.equal((await request(`/public/gallery/edit-results/archive/jobs/${workerArchiveJobId}?token=${token}`)).status, 503);
+}
 treeFails = true;
 const previousError = console.error;
 console.error = () => {};

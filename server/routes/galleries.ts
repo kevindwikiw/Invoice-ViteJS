@@ -43,6 +43,10 @@ const DEFAULT_CONTACT_MESSAGE = "Halo Kak Admin Orbit\nSaya ingin meminta bantua
 const DEFAULT_REQUEST_MORE_MESSAGE = "Halo Kak Admin Orbit\nSaya ingin meminta tambahan edited photos.\n\nIni URL saya: {{gallery_url}}\nSaya client dari: {{gallery_title}}\nPilihan saat ini: {{selected_count}} foto\nSaya ingin menambah: {{requested_count}} foto\nPromo: {{promo_label}}\nEstimasi biaya: {{estimated_price}}";
 const PUBLIC_KEY_TIME_ZONE = "Asia/Jakarta";
 const PAIRING_CANDIDATE_CACHE_MS = 60_000;
+const ARCHIVE_WORKER_URL = process.env.FACE_ARCHIVE_WORKER_URL?.trim().replace(/\/$/, "") || "";
+const ARCHIVE_WORKER_PUBLIC_URL = process.env.FACE_ARCHIVE_WORKER_PUBLIC_URL?.trim().replace(/\/$/, "") || "";
+const ARCHIVE_WORKER_TOKEN = process.env.FACE_ARCHIVE_WORKER_TOKEN?.trim() || "";
+const MAX_FOLDER_ARCHIVE_PHOTOS = 2_000;
 const pairingCandidateCache = new Map<number, { folderId: string; expiresAt: number; photos: Map<string, DrivePhoto> }>();
 const pendingPairingCandidates = new Map<string, Promise<Map<string, DrivePhoto>>>();
 
@@ -1931,6 +1935,112 @@ publicGalleriesRouter.get("/:id/edit-results/photos/:fileId/download-url", async
     } catch (error) {
         console.warn(`[edited photos] Download resolution failed for gallery ${access.galleryId}:`, error instanceof Error ? error.message : error);
         return c.json({ error: "This photo is no longer available from Google Drive. Contact the photographer.", code: "DRIVE_DOWNLOAD_UNAVAILABLE" }, 502);
+    }
+});
+
+publicGalleriesRouter.post("/:id/edit-results/folders/:folderId/archive/jobs", async (c) => {
+    const access = await requireEditResultsAccess(c);
+    if (access instanceof Response) return access;
+    if (!ARCHIVE_WORKER_URL || !ARCHIVE_WORKER_TOKEN || !ARCHIVE_WORKER_PUBLIC_URL) {
+        return c.json({ error: "Folder downloads are temporarily unavailable.", code: "ARCHIVE_WORKER_UNAVAILABLE" }, 503);
+    }
+    const requestedFolderId = c.req.param("folderId");
+    const folders = await galleryAll<{ id: string; parentId: string | null; name: string }>(
+        'SELECT drive_folder_id as id, parent_id as "parentId", name FROM gallery_edit_result_folders WHERE gallery_id = ?',
+        [access.galleryId],
+    );
+    const byId = new Map(folders.map((folder) => [folder.id, folder]));
+    const root = byId.get(requestedFolderId);
+    if (!root) return c.json({ error: "This folder is not part of the published gallery.", code: "EDIT_RESULT_FOLDER_NOT_FOUND" }, 404);
+
+    const subtree = new Set<string>([root.id]);
+    let changed = true;
+    while (changed) {
+        changed = false;
+        for (const folder of folders) {
+            if (folder.parentId && subtree.has(folder.parentId) && !subtree.has(folder.id)) {
+                subtree.add(folder.id);
+                changed = true;
+            }
+        }
+    }
+    const folderIds = [...subtree];
+    const photos = await galleryAll<{ driveFileId: string; filename: string; folderId: string }>(
+        `SELECT drive_file_id as "driveFileId", filename, folder_id as "folderId" FROM gallery_edit_result_photos WHERE gallery_id = ? AND mime_type LIKE 'image/%' AND folder_id IN (${folderIds.map(() => "?").join(",")}) ORDER BY display_order, filename`,
+        [access.galleryId, ...folderIds],
+    );
+    if (!photos.length) return c.json({ error: "This folder has no downloadable photos.", code: "EDIT_RESULT_FOLDER_EMPTY" }, 404);
+    if (photos.length > MAX_FOLDER_ARCHIVE_PHOTOS) return c.json({ error: "This folder contains too many photos for one ZIP. Contact the photographer.", code: "EDIT_RESULT_ARCHIVE_TOO_LARGE" }, 413);
+
+    const archivePhotos = photos.map((photo) => {
+        const nested: string[] = [];
+        let current = byId.get(photo.folderId);
+        const seen = new Set<string>();
+        while (current && current.id !== root.id && !seen.has(current.id)) {
+            seen.add(current.id);
+            nested.push(current.name);
+            current = current.parentId ? byId.get(current.parentId) : undefined;
+        }
+        if (!current || current.id !== root.id) return null;
+        return { driveFileId: photo.driveFileId, filename: photo.filename, archivePath: [root.name, ...nested.reverse(), photo.filename].join("/") };
+    });
+    if (archivePhotos.some((photo) => !photo)) return c.json({ error: "The folder structure is invalid. Sync the gallery and try again.", code: "EDIT_RESULT_FOLDER_INVALID" }, 409);
+
+    try {
+        const response = await fetch(`${ARCHIVE_WORKER_URL}/v1/archive/jobs`, {
+            method: "POST",
+            headers: { Authorization: `Bearer ${ARCHIVE_WORKER_TOKEN}`, "Content-Type": "application/json" },
+            body: JSON.stringify({ galleryId: access.galleryId, folderId: root.id, folderName: root.name, accessExpiresAt: access.expiresAt, photos: archivePhotos }),
+            signal: AbortSignal.timeout(15_000),
+        });
+        if (!response.ok) {
+            const code = response.status === 429 ? "ARCHIVE_QUEUE_FULL" : "ARCHIVE_WORKER_UNAVAILABLE";
+            return c.json({ error: response.status === 429 ? "The download queue is busy. Try again shortly." : "Folder download could not be started. Try again shortly.", code }, response.status === 429 ? 429 : 503);
+        }
+        const result = await response.json() as { jobId?: unknown; status?: unknown };
+        if (typeof result.jobId !== "string" || !/^[a-f0-9]{32}$/.test(result.jobId)) throw new Error("invalid_worker_job");
+        return c.json({ jobId: result.jobId, status: typeof result.status === "string" ? result.status : "queued", total: photos.length }, 202);
+    } catch (error) {
+        console.warn(`[edited photos] Folder archive start failed for gallery ${access.galleryId}:`, error instanceof Error ? error.message : "unknown");
+        return c.json({ error: "Folder download could not be started. Try again shortly.", code: "ARCHIVE_WORKER_UNAVAILABLE" }, 503);
+    }
+});
+
+publicGalleriesRouter.get("/:id/edit-results/archive/jobs/:jobId", async (c) => {
+    const access = await requireEditResultsAccess(c);
+    if (access instanceof Response) return access;
+    const jobId = c.req.param("jobId");
+    if (!/^[a-f0-9]{32}$/.test(jobId)) return c.json({ error: "Archive job not found.", code: "ARCHIVE_JOB_NOT_FOUND" }, 404);
+    if (!ARCHIVE_WORKER_URL || !ARCHIVE_WORKER_TOKEN || !ARCHIVE_WORKER_PUBLIC_URL) return c.json({ error: "Folder downloads are temporarily unavailable.", code: "ARCHIVE_WORKER_UNAVAILABLE" }, 503);
+    try {
+        const response = await fetch(`${ARCHIVE_WORKER_URL}/v1/archive/jobs/${jobId}`, {
+            headers: { Authorization: `Bearer ${ARCHIVE_WORKER_TOKEN}` },
+            signal: AbortSignal.timeout(5_000),
+        });
+        if (response.status === 404) return c.json({ error: "Archive job expired. Start the download again.", code: "ARCHIVE_JOB_EXPIRED" }, 404);
+        if (!response.ok) return c.json({ error: "Unable to check folder download progress.", code: "ARCHIVE_WORKER_UNAVAILABLE" }, 503);
+        const result = await response.json() as { galleryId?: unknown; status?: unknown; processed?: unknown; total?: unknown; filename?: unknown; downloadTicket?: unknown; expiresAt?: unknown; errorCode?: unknown };
+        if (result.galleryId !== access.galleryId) return c.json({ error: "Archive job not found.", code: "ARCHIVE_JOB_NOT_FOUND" }, 404);
+        const payload: Record<string, unknown> = {
+            status: result.status,
+            processed: Number(result.processed) || 0,
+            total: Number(result.total) || 0,
+        };
+        if (result.status === "failed") payload.error = "Some photos could not be packaged. Please retry or contact the photographer.";
+        if (result.status === "completed" && typeof result.downloadTicket === "string" && typeof result.filename === "string") {
+            const base = new URL(ARCHIVE_WORKER_PUBLIC_URL);
+            if (base.protocol !== "https:") throw new Error("worker_public_url_must_use_https");
+            const download = new URL(`/v1/archive/download/${jobId}`, base);
+            download.searchParams.set("ticket", result.downloadTicket);
+            payload.downloadUrl = download.toString();
+            payload.filename = result.filename;
+            payload.expiresAt = result.expiresAt;
+        }
+        c.header("Cache-Control", "no-store");
+        return c.json(payload);
+    } catch (error) {
+        console.warn(`[edited photos] Folder archive status failed for gallery ${access.galleryId}:`, error instanceof Error ? error.message : "unknown");
+        return c.json({ error: "Unable to check folder download progress.", code: "ARCHIVE_WORKER_UNAVAILABLE" }, 503);
     }
 });
 

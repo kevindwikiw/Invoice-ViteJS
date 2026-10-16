@@ -1,4 +1,4 @@
-import { memo, useEffect, useId, useRef, useState, type RefObject } from 'react';
+import { memo, type RefObject } from 'react';
 import { ChevronDown, ImageIcon, Images, Moon, ScanFace, Sun } from 'lucide-react';
 import clsx from 'clsx';
 
@@ -12,40 +12,7 @@ export function GalleryHeaderIdentity({ section, title }: { section: 'Photo Sele
     const eventTitle = title?.trim() || 'Your Gallery';
     return <div className="col-span-3 row-start-2 flex min-w-0 items-baseline gap-2 lg:ml-5">
         <span className="shrink-0 text-[11px] font-medium uppercase text-[var(--text-muted)] sm:text-xs lg:text-[13px]">{section}</span>
-        {section === 'Edited Photos' ? <ExpandableEventTitle title={eventTitle} /> : <h1 className="min-w-0 truncate font-sans text-sm font-semibold leading-tight text-[var(--text-primary)] sm:text-[15px] lg:text-lg" title={eventTitle}>{eventTitle}</h1>}
-    </div>;
-}
-
-function ExpandableEventTitle({ title }: { title: string }) {
-    const [titleOpen, setTitleOpen] = useState(false);
-    const titleId = useId();
-    const titleRef = useRef<HTMLButtonElement>(null);
-    const containerRef = useRef<HTMLDivElement>(null);
-    useEffect(() => {
-        if (!titleOpen) return;
-        const closeOutside = (event: PointerEvent) => {
-            if (!containerRef.current?.contains(event.target as Node)) setTitleOpen(false);
-        };
-        const closeOnEscape = (event: KeyboardEvent) => {
-            if (event.key !== 'Escape') return;
-            event.preventDefault();
-            setTitleOpen(false);
-            titleRef.current?.focus({ preventScroll: true });
-        };
-        document.addEventListener('pointerdown', closeOutside);
-        document.addEventListener('keydown', closeOnEscape);
-        return () => {
-            document.removeEventListener('pointerdown', closeOutside);
-            document.removeEventListener('keydown', closeOnEscape);
-        };
-    }, [titleOpen]);
-    return <div ref={containerRef} className="min-w-0">
-            <h1 className="min-w-0 font-sans text-sm font-semibold leading-tight text-[var(--text-primary)] sm:text-[15px] lg:text-lg">
-                <button ref={titleRef} type="button" aria-expanded={titleOpen} aria-controls={titleOpen ? titleId : undefined} onClick={() => setTitleOpen((open) => !open)} title="Show full event title" className="inline-flex max-w-full min-w-0 items-center gap-1 text-left hover:underline hover:underline-offset-2 focus-visible:rounded-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)]">
-                    <span className="min-w-0 truncate">{title}</span><ChevronDown size={12} aria-hidden="true" className={clsx('shrink-0 transition-transform duration-150 motion-reduce:transition-none', titleOpen && 'rotate-180')} />
-                </button>
-            </h1>
-            {titleOpen && <div id={titleId} role="region" aria-label="Full event title" className="fixed left-2.5 right-2.5 top-20 z-[80] mx-auto max-w-lg rounded-md border border-[var(--border)] bg-[var(--bg-deep)] p-3 text-sm font-semibold leading-5 text-[var(--text-primary)] shadow-lg [overflow-wrap:anywhere] lg:top-16">{title}</div>}
+        <h1 className="min-w-0 truncate font-sans text-sm font-semibold leading-tight text-[var(--text-primary)] sm:text-[15px] lg:text-lg" title={eventTitle}>{eventTitle}</h1>
     </div>;
 }
 

@@ -92,6 +92,27 @@ export async function getEditResults(id: string, token: string): Promise<EditRes
     };
 }
 
+export type EditFolderArchiveJob = {
+    jobId: string;
+    status: 'queued' | 'running' | 'completed' | 'failed';
+    processed?: number;
+    total?: number;
+    filename?: string;
+    downloadUrl?: string;
+};
+
+export async function startEditFolderArchive(id: string, folderId: string, token: string): Promise<EditFolderArchiveJob> {
+    const response = await apiFetch(`/public/galleries/${encodeURIComponent(id)}/edit-results/folders/${encodeURIComponent(folderId)}/archive/jobs?token=${encodeURIComponent(token)}`, { method: 'POST' });
+    if (!response.ok) throw await parseError(response, 'Unable to prepare this folder download.');
+    return response.json();
+}
+
+export async function getEditFolderArchiveJob(id: string, jobId: string, token: string, signal?: AbortSignal): Promise<EditFolderArchiveJob> {
+    const response = await apiFetch(`/public/galleries/${encodeURIComponent(id)}/edit-results/archive/jobs/${encodeURIComponent(jobId)}?token=${encodeURIComponent(token)}`, { signal });
+    if (!response.ok) throw await parseError(response, 'Unable to check folder download progress.');
+    return { jobId, ...await response.json() } as EditFolderArchiveJob;
+}
+
 export function normalizeEditResultPhoto(id: string, token: string, photo: EditResultPhoto): EditResultPhoto {
     if (!photo || typeof photo.driveFileId !== 'string' || !photo.driveFileId.trim()) throw new Error('Edited photo data is incomplete. Retry to reload the gallery.');
     return {

@@ -5,7 +5,7 @@ import { Link, useNavigate, useSearch } from '@tanstack/react-router';
 import { AlertCircle, ArrowLeft, Check, ChevronLeft, ChevronRight, ChevronUp, Clock3, Download, Folder, FolderOpen, HelpCircle, Loader2, Lock, MessageCircle, RotateCcw, ScanFace, X } from 'lucide-react';
 import clsx from 'clsx';
 
-import { editResultVideoUrl, getEditResults, getEditResultsStatus, resolveEditResultDownload, verifyEditResultsPassword } from '../culling.public';
+import { editResultVideoUrl, getEditFolderArchiveJob, getEditResults, getEditResultsStatus, resolveEditResultDownload, startEditFolderArchive, verifyEditResultsPassword } from '../culling.public';
 import type { EditResultPhoto } from '../culling.types';
 import { BLACK_THEME, GALLERY_PAGE_SIZE, WHITE_THEME } from './constants';
 import { GalleryHeaderIdentity, GalleryViewTabs, OrbitLogo, ThemeToggle, type GalleryView } from './GalleryChrome';
@@ -24,6 +24,7 @@ const previewUrlFor = (photo: EditResultPhoto) => photo.previewUrl;
 const thumbnailUrlFor = (photo: EditResultPhoto) => photo.thumbnailUrl;
 const downloadUrlFor = (photo: EditResultPhoto) => photo.downloadResolveUrl;
 const comparisonFor = (photo: EditResultPhoto) => photo.comparison;
+const compareFolderPaths = (a: string, b: string) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' });
 type EditedSelfieMatches = { ids: string[]; total: number; sourceVersion?: string | null };
 const expiryLabel = (expiresAt: string | null) => {
     if (!expiresAt || expiresAt === 'unlimited') return 'Unlimited access';
@@ -45,6 +46,13 @@ function ArchiveDownloadAction({ archive, pending, onDownload }: { archive: { fi
             <Download size={13} aria-hidden="true" />
             {pending ? <><span className="sm:hidden">Preparing…</span><span className="hidden sm:inline">Preparing download…</span></> : <span>Download All Photos</span>}
         </button><span role="status" aria-live="polite" className="sr-only">{pending ? 'Preparing ZIP download' : ''}</span></>;
+}
+
+function FolderArchiveButton({ name, busy, ready, disabled, progress, onClick }: { name: string; busy: boolean; ready: boolean; disabled?: boolean; progress?: string; onClick: () => void }) {
+    const label = ready ? `Download ${name} ZIP` : busy ? `Preparing ${name} ZIP${progress ? `, ${progress}` : ''}` : `Download ${name} folder as ZIP`;
+    return <button type="button" aria-label={label} title={label} disabled={disabled || busy} onClick={onClick} className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-md text-[var(--text-secondary)] transition-colors hover:bg-[var(--bg-elevated)] hover:text-[var(--text-primary)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)] disabled:cursor-wait disabled:opacity-65 motion-reduce:transition-none sm:h-11 sm:w-11">
+        {busy ? <Loader2 size={16} aria-hidden="true" className="animate-spin motion-reduce:animate-none" /> : <Download size={16} aria-hidden="true" />}
+    </button>;
 }
 
 export function EditResultsGrid({
@@ -94,6 +102,7 @@ export function EditResultsGrid({
     const [navigation, setNavigation] = useState({ galleryId, token, folderId: requestedFolder ?? null, selfie: isSelfieView, page: viewPage, photoId: null as string | null });
     const [pendingDownload, setPendingDownload] = useState<string | null>(null);
     const [downloadError, setDownloadError] = useState('');
+    const [folderArchiveTarget, setFolderArchiveTarget] = useState<{ folderId: string; name: string; jobId: string } | null>(null);
     const [pendingPage, setPendingPage] = useState<{ folderId: string | null; selfie: boolean; page: number } | null>(null);
     const [showFaceSearch, setShowFaceSearch] = useState(false);
     const [showSelectionInfo, setShowSelectionInfo] = useState(false);
@@ -167,6 +176,18 @@ export function EditResultsGrid({
         staleTime: 60_000,
         refetchOnWindowFocus: 'always',
     });
+    const folderArchiveMutation = useMutation({
+        mutationFn: ({ folderId }: { folderId: string; name: string }) => startEditFolderArchive(galleryId, folderId, token),
+        onSuccess: (job, target) => setFolderArchiveTarget({ ...target, jobId: job.jobId }),
+        onError: (cause) => setDownloadError(cause instanceof Error ? cause.message : 'Unable to prepare this folder download.'),
+    });
+    const folderArchiveStatus = useQuery({
+        queryKey: ['edit-folder-archive', galleryId, token, folderArchiveTarget?.jobId],
+        queryFn: ({ signal }) => getEditFolderArchiveJob(galleryId, folderArchiveTarget!.jobId, token, signal),
+        enabled: Boolean(folderArchiveTarget?.jobId),
+        retry: false,
+        refetchInterval: (query) => ['queued', 'running'].includes(query.state.data?.status ?? 'queued') ? 1200 : false,
+    });
     useEffect(() => {
         if (!preparingAccess) return;
         if (results.isError) {
@@ -198,8 +219,23 @@ export function EditResultsGrid({
             ? current
             : { galleryId, token, folderId, selfie: isSelfieView, page: viewPage, photoId: null });
     }, [galleryId, token, folderId, viewPage, isSelfieView]);
-    const childFolders = folders.filter((folder) => folder.parentId === folderId);
+    const childFolders = useMemo(() => folders.filter((folder) => folder.parentId === folderId).sort((a, b) => compareFolderPaths(a.name, b.name)), [folders, folderId]);
     const currentFolder = folders.find((folder) => folder.id === folderId);
+    const folderPhotoCounts = useMemo(() => {
+        const counts = new Map<string, number>();
+        const byId = new Map(folders.map((folder) => [folder.id, folder]));
+        for (const photo of results.data?.photos ?? []) {
+            if (!photo.mimeType?.startsWith('image/')) continue;
+            let current = photo.folderId ? byId.get(photo.folderId) : undefined;
+            const seen = new Set<string>();
+            while (current && !seen.has(current.id)) {
+                seen.add(current.id);
+                counts.set(current.id, (counts.get(current.id) ?? 0) + 1);
+                current = current.parentId ? byId.get(current.parentId) : undefined;
+            }
+        }
+        return counts;
+    }, [folders, results.data?.photos]);
     const folderOptions = useMemo(() => {
         const byId = new Map(folders.map((folder) => [folder.id, folder]));
         return folders.map((folder) => {
@@ -214,8 +250,20 @@ export function EditResultsGrid({
                 parentId = parent.parentId;
             }
             return { id: folder.id, name: folder.name, path: names.join(' / '), parentPath: names.slice(0, -1).join(' / ') };
-        });
+        }).sort((a, b) => compareFolderPaths(a.path, b.path));
     }, [folders]);
+    const folderBreadcrumbs = useMemo(() => {
+        const byId = new Map(folders.map((folder) => [folder.id, folder]));
+        const trail = [];
+        const seen = new Set<string>();
+        let folder = currentFolder;
+        while (folder && !seen.has(folder.id)) {
+            seen.add(folder.id);
+            trail.push(folder);
+            folder = folder.parentId ? byId.get(folder.parentId) : undefined;
+        }
+        return trail.reverse();
+    }, [currentFolder, folders]);
     const activeFolder = folderOptions.find((folder) => folder.id === folderId);
     const folderPaths = useMemo(() => new Map(folderOptions.map((folder) => [folder.id, folder.path])), [folderOptions]);
     useEffect(() => setFolderPickerOpen(false), [folderId]);
@@ -349,6 +397,54 @@ export function EditResultsGrid({
             setPendingDownload(null);
         }
     }, []);
+    const downloadFolder = useCallback((targetFolderId: string, name: string) => {
+        const activeJob = folderArchiveTarget?.folderId === targetFolderId ? folderArchiveStatus.data : null;
+        if (activeJob?.status === 'completed' && activeJob.downloadUrl) {
+            setPendingDownload(`folder-archive:${targetFolderId}`);
+            void folderArchiveStatus.refetch().then(({ data }) => {
+                if (data?.status === 'completed' && data.downloadUrl) window.location.assign(data.downloadUrl);
+                else setDownloadError('The folder ZIP link expired. Prepare the download again.');
+            }).catch((cause) => setDownloadError(cause instanceof Error ? cause.message : 'Unable to start this folder download.'))
+                .finally(() => setPendingDownload(null));
+            return;
+        }
+        if (activeJob && ['queued', 'running'].includes(activeJob.status)) return;
+        setDownloadError('');
+        setFolderArchiveTarget(null);
+        folderArchiveMutation.mutate({ folderId: targetFolderId, name });
+    }, [folderArchiveMutation, folderArchiveStatus, folderArchiveTarget]);
+    useEffect(() => {
+        if (!folderArchiveStatus.data || folderArchiveStatus.data.status !== 'failed') return;
+        setDownloadError('Could not prepare this folder ZIP. Please try again.');
+        setFolderArchiveTarget(null);
+    }, [folderArchiveStatus.data]);
+    useEffect(() => {
+        if (!folderArchiveTarget || !folderArchiveStatus.isError) return;
+        setDownloadError('Unable to check the folder ZIP. Please try again.');
+        setFolderArchiveTarget(null);
+    }, [folderArchiveTarget, folderArchiveStatus.isError]);
+    useEffect(() => {
+        if (!token || unavailable) {
+            setFolderArchiveTarget(null);
+            folderArchiveMutation.reset();
+        }
+    }, [token, unavailable]);
+    const archiveJobInProgress = folderArchiveMutation.isPending || ['queued', 'running'].includes(folderArchiveStatus.data?.status ?? '');
+    const renderFolderArchiveButton = (targetFolderId: string, name: string) => {
+        if (!folderPhotoCounts.get(targetFolderId)) return null;
+        const isTarget = folderArchiveTarget?.folderId === targetFolderId || (folderArchiveMutation.isPending && folderArchiveMutation.variables?.folderId === targetFolderId);
+        const status = isTarget ? folderArchiveStatus.data : null;
+        const starting = folderArchiveMutation.isPending && folderArchiveMutation.variables?.folderId === targetFolderId;
+        const busy = starting || Boolean(isTarget && (!status || ['queued', 'running'].includes(status.status)));
+        return <FolderArchiveButton
+            name={name}
+            busy={busy || pendingDownload === `folder-archive:${targetFolderId}`}
+            ready={status?.status === 'completed' && Boolean(status.downloadUrl)}
+            disabled={archiveJobInProgress && !isTarget}
+            progress={status?.total ? `${status.processed ?? 0}/${status.total}` : undefined}
+            onClick={() => downloadFolder(targetFolderId, name)}
+        />;
+    };
     const archiveAction = !unavailable && token && results.isSuccess && archive ? (
         <ArchiveDownloadAction key={`${galleryId}:${token}:${archive.downloadResolveUrl}`} archive={archive} pending={pendingDownload === 'archive'} onDownload={() => void startDownload(archive.downloadResolveUrl, 'archive')} />
     ) : null;
@@ -436,16 +532,34 @@ export function EditResultsGrid({
                 <h2 className="font-sans text-base font-semibold">{validSelfieResults ? `${matchedPhotos.length} matching photos` : 'Find Your Photos'}</h2>
                 {selfieSearchAvailable && <button type="button" onClick={() => setShowFaceSearch(true)} className="inline-flex min-h-11 shrink-0 items-center gap-2 rounded-md border border-[var(--border)] px-3 text-sm font-medium focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)]"><ScanFace size={16} aria-hidden="true" />{validSelfieResults ? 'Change selfie' : 'Choose selfie'}</button>}
             </div>}
-            {!isSelfieView && currentFolder && <div className="mb-4 flex min-w-0 items-center gap-3 border-b border-[var(--border)] pb-3">
+            {!isSelfieView && currentFolder && <div className="mb-4 flex min-w-0 items-center gap-2 border-b border-[var(--border)] pb-3">
                 <Link to="/culling/$galleryId/edited" params={{ galleryId }} search={(current) => ({ ...current, view: undefined, selfieSource: undefined, folder: currentFolder.parentId ?? undefined, editedPage: 1 })} resetScroll onClick={closePhoto} aria-label={`Back to ${folders.find((folder) => folder.id === currentFolder.parentId)?.name ?? 'Edited Photos'}`} className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-md border border-[var(--border)] text-[var(--text-secondary)] hover:bg-[var(--bg-card)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)]"><ArrowLeft size={18} aria-hidden="true" /></Link>
-                <h2 className="min-w-0 break-words font-sans text-base font-semibold leading-snug tracking-normal">{currentFolder.name}</h2>
+                <nav aria-label="Folder breadcrumb" className="min-w-0 flex-1 overflow-hidden text-xs font-medium text-[var(--text-muted)]">
+                    <ol className="flex min-w-0 flex-wrap items-center gap-x-1 gap-y-0.5">
+                        <li className="flex min-w-0 items-center gap-1">
+                            <Link to="/culling/$galleryId/edited" params={{ galleryId }} search={(current) => ({ ...current, view: undefined, selfieSource: undefined, folder: undefined, editedPage: 1 })} resetScroll onClick={closePhoto} className="max-w-32 truncate hover:text-[var(--text-primary)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)]">Edited Photos</Link>
+                        </li>
+                        {folderBreadcrumbs.map((folder, index) => <li key={folder.id} className="flex min-w-0 items-center gap-1">
+                            <ChevronRight size={13} aria-hidden="true" className="shrink-0 opacity-60" />
+                            {index === folderBreadcrumbs.length - 1
+                                ? <span aria-current="page" className="max-w-[min(55vw,18rem)] truncate font-semibold text-[var(--text-primary)]">{folder.name}</span>
+                                : <Link to="/culling/$galleryId/edited" params={{ galleryId }} search={(current) => ({ ...current, view: undefined, selfieSource: undefined, folder: folder.id, editedPage: 1 })} resetScroll onClick={closePhoto} className="max-w-32 truncate hover:text-[var(--text-primary)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)]">{folder.name}</Link>}
+                        </li>)}
+                    </ol>
+                </nav>
+                {renderFolderArchiveButton(currentFolder.id, currentFolder.name)}
             </div>}
+            {folderArchiveTarget && ['queued', 'running'].includes(folderArchiveStatus.data?.status ?? 'queued') && <p role="status" aria-live="polite" className="mb-3 text-xs text-[var(--text-secondary)]">Preparing {folderArchiveTarget.name} ZIP{folderArchiveStatus.data?.total ? ` (${folderArchiveStatus.data.processed ?? 0}/${folderArchiveStatus.data.total})` : '…'}</p>}
+            {folderArchiveTarget && folderArchiveStatus.data?.status === 'completed' && folderArchiveStatus.data.downloadUrl && <p role="status" className="mb-3 text-xs text-[var(--text-secondary)]">{folderArchiveTarget.name} ZIP is ready. Select its download icon to save it.</p>}
             {!isSelfieView && childFolders.length > 0 && <section aria-label="Folders" className={photos.length > 0 ? 'mb-6' : undefined}>
-                {photos.length > 0 && <h2 className="mb-3 font-sans text-xs font-semibold tracking-normal text-[var(--text-secondary)]">Folders</h2>}
-                <div data-testid="edited-folder-tiles" className="grid grid-cols-1 gap-2 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6">
-                    {childFolders.map((folder) => <Link key={folder.id} to="/culling/$galleryId/edited" params={{ galleryId }} search={(current) => ({ ...current, view: undefined, selfieSource: undefined, folder: folder.id, editedPage: 1 })} resetScroll onClick={closePhoto} aria-label={`Open folder ${folder.name}`} className="group flex min-h-16 min-w-0 items-center gap-3 rounded-md border border-[var(--border)] bg-[var(--bg-card)] px-3 py-3 text-sm font-medium transition-colors hover:border-[var(--accent)] hover:bg-[var(--bg-elevated)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)] sm:min-h-20">
-                        <Folder size={19} aria-hidden="true" className="shrink-0 text-[var(--text-secondary)]" /><span className="min-w-0 flex-1 [overflow-wrap:anywhere]">{folder.name}</span><ChevronRight size={16} aria-hidden="true" className="shrink-0 text-[var(--text-muted)]" />
-                    </Link>)}
+                <h2 className="mb-2 flex items-center gap-2 font-sans text-xs font-semibold tracking-normal text-[var(--text-secondary)]"><Folder size={14} aria-hidden="true" />Folders</h2>
+                <div data-testid="edited-folder-tiles" className="grid grid-cols-1 gap-0 border-t border-[var(--border)] sm:grid-cols-2 sm:gap-2 sm:border-0 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6">
+                    {childFolders.map((folder) => <div key={folder.id} className="flex min-w-0 items-center border-b border-[var(--border)] sm:min-h-16 sm:rounded-md sm:border sm:bg-[var(--bg-card)]">
+                        <Link to="/culling/$galleryId/edited" params={{ galleryId }} search={(current) => ({ ...current, view: undefined, selfieSource: undefined, folder: folder.id, editedPage: 1 })} resetScroll onClick={closePhoto} aria-label={`Open folder ${folder.name}`} className="group flex min-h-12 min-w-0 flex-1 items-center gap-3 px-2.5 py-2 text-[13px] font-medium transition-colors hover:bg-[var(--bg-card)] focus-visible:z-10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-[var(--accent)] sm:min-h-16 sm:rounded-md sm:px-3 sm:py-3 sm:text-sm sm:hover:bg-[var(--bg-elevated)]">
+                            <Folder size={17} aria-hidden="true" className="shrink-0 text-[var(--text-secondary)]" /><span className="min-w-0 flex-1 [overflow-wrap:anywhere]">{folder.name}</span><ChevronRight size={15} aria-hidden="true" className="shrink-0 text-[var(--text-muted)] transition-transform duration-150 group-hover:translate-x-0.5 motion-reduce:transition-none" />
+                        </Link>
+                        {renderFolderArchiveButton(folder.id, folder.name)}
+                    </div>)}
                 </div>
             </section>}
             {!isSelfieView && childFolders.length > 0 && photos.length > 0 && <h2 className="mb-3 border-t border-[var(--border)] pt-5 font-sans text-xs font-semibold tracking-normal text-[var(--text-secondary)]">Photos</h2>}
@@ -473,7 +587,7 @@ export function EditResultsGrid({
                 <span role="status" aria-live="polite" className="text-xs tabular-nums text-[var(--text-secondary)]">Page {page} of {totalPages}</span>
                 <button type="button" aria-label="Next page" title="Next page" disabled={page === totalPages} onClick={() => changePage(page + 1)} className="flex h-11 w-11 items-center justify-center rounded-md border border-[var(--border)] text-[var(--text-secondary)] hover:bg-[var(--bg-elevated)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)] disabled:opacity-35"><ChevronRight size={18} /></button>
             </nav>}
-            {!isSelfieView && folders.length > 0 && (
+            {!isSelfieView && folderId && folders.length > 0 && (
                 <nav data-testid="edited-folder-bar" aria-label="Edited photo folders" className="fixed inset-x-0 bottom-0 z-50 border-t border-[var(--border)] bg-[var(--bg-deep)] px-2.5 pt-3 pb-[calc(0.75rem+env(safe-area-inset-bottom))] shadow-[0_-8px_24px_rgba(0,0,0,0.12)] sm:px-8">
                     <div ref={folderPickerRef} className="relative mx-auto flex max-w-[1600px] min-w-0 items-center">
                         <button ref={folderTriggerRef} type="button" aria-label={`Choose folder, current: ${activeFolder?.path ?? 'Edited Photos'}`} aria-expanded={folderPickerOpen} aria-controls={folderPickerId} onClick={() => setFolderPickerOpen((open) => !open)} className="inline-flex h-11 w-full max-w-md min-w-0 items-center gap-2 rounded-md border border-[var(--border)] bg-[var(--bg-card)] px-3 text-left text-sm font-semibold text-[var(--text-primary)] transition-colors hover:border-[var(--accent)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)] [touch-action:manipulation]">
@@ -536,7 +650,7 @@ export function EditResultsGrid({
             </div>
         </div>}
         <div id="edited-gallery-content" tabIndex={-1} className="flex-1 scroll-mt-44 outline-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)] lg:scroll-mt-36">{content}</div>
-        <GalleryFooter className={clsx(results.isSuccess && folders.length > 0 && !isSelfieView && 'pb-[calc(5rem+env(safe-area-inset-bottom))] sm:pb-24')} />
+        <GalleryFooter className={clsx(results.isSuccess && folderId && folders.length > 0 && !isSelfieView && 'pb-[calc(5rem+env(safe-area-inset-bottom))] sm:pb-24')} />
         {guide}
         {selfieModal}
         {showSelectionInfo && <div className="fixed inset-0 z-[150] flex items-center justify-center overscroll-contain bg-black/60 p-4 [touch-action:manipulation]" onMouseDown={(event) => { if (event.target === event.currentTarget) { setShowSelectionInfo(false); selectionInfoTriggerRef.current?.focus({ preventScroll: true }); } }}>

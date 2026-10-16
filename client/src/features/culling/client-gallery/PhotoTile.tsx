@@ -149,7 +149,7 @@ function PhotoTileView<T extends GalleryDisplayPhoto>({
                     </span>
                 </button>}
             </div>
-            <div className="flex h-7 items-center justify-between gap-2 border-t border-[var(--border)] px-2 text-[9px] text-[var(--text-secondary)] sm:h-8 sm:px-2.5 sm:text-[10px]">
+            <div className="flex h-8 items-center justify-between gap-2 border-t border-[var(--border)] px-2 text-[10px] text-[var(--text-secondary)] sm:px-2.5">
                 <p title={displayLabel} className="min-w-0 truncate font-semibold">{displayLabel}</p>
                 <p className="shrink-0 font-bold uppercase tracking-[0.12em] text-[var(--text-muted)]">#{String(displayIndex + 1).padStart(3, '0')}</p>
             </div>
