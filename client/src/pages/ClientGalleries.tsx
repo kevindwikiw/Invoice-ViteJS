@@ -1289,7 +1289,7 @@ function GalleryDetailEditor({ data, close, initialMode, focusSelectionDuration 
               <div className="min-w-0 space-y-2">
                 <div className="flex items-baseline justify-between gap-2">
                   <label htmlFor="editResultsZipFileId" className="block text-[11px] font-semibold text-[var(--text-secondary)]">Edited Photos ZIP <span className="font-normal text-[var(--text-muted)]">(optional)</span></label>
-                  <span id="edited-zip-help" className="text-[10px] text-[var(--text-muted)]">Used for client's Download All button</span>
+                  <span id="edited-zip-help" className="text-[10px] text-[var(--text-muted)]">Used for the client's Download All Photos button</span>
                 </div>
                 <input id="editResultsZipFileId" form="edit-delivery-form" name="editResultsZipFileId" defaultValue={data.editResultsZipFileId || ''} placeholder="Google Drive ZIP file URL or ID" aria-describedby="edited-zip-help" className={inputClass} />
               </div>

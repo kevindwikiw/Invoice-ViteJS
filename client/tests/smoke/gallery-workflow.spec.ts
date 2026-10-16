@@ -78,14 +78,14 @@ for (const width of [320, 390, 1280]) {
         for (const name of ['All Photos', 'Submit', 'Request More', 'Back to gallery']) await expect(page.getByRole('button', { name, exact: true })).toHaveCount(0);
         await expect(page.getByRole('button', { name: 'Selfie', exact: true })).toBeDisabled();
         await expect(page.getByText('Before / After', { exact: true })).toHaveCount(0);
-        await page.getByRole('button', { name: 'Download All (.zip)' }).click();
+        await page.getByRole('button', { name: 'Download All Photos' }).click();
         await expect(page.getByRole('alert')).toContainText('Check Drive sharing and retry');
         await expect(page.getByRole('alert')).toBeFocused();
         const downloads: string[] = [];
         await page.route('https://drive.google.com/download/**', (route) => { downloads.push(route.request().url()); return route.fulfill({ status: 200, contentType: 'application/zip', headers: { 'Content-Disposition': 'attachment; filename=wedding.zip' }, body: 'test archive' }); });
         failDownload = false;
         const download = page.waitForEvent('download');
-        await page.getByRole('button', { name: 'Download All (.zip)' }).click();
+        await page.getByRole('button', { name: 'Download All Photos' }).click();
         expect((await download).suggestedFilename()).toBe('wedding.zip');
         expect(downloads).toHaveLength(1);
         await expect(grid).toBeVisible();
@@ -284,7 +284,7 @@ test('Wedding expired token restores the edited gate without opening a stored se
     await page.getByRole('button', { name: 'Unlock Edited Photos' }).click();
     await expect(page.getByTestId('edited-gallery-grid').locator('img')).toHaveCount(1);
     await expect(page).toHaveURL(/editedPage=2/);
-    await expect(page.getByRole('button', { name: 'Download All (.zip)' })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Download All Photos' })).toHaveCount(0);
     expect(selectionRequests).toEqual([]);
 });
 
@@ -296,6 +296,6 @@ for (const state of ['draft', 'closed', 'expired'] as const) {
         await expect(page.getByLabel('Edited photos password', { exact: true })).toHaveCount(0);
         await expect(page.getByLabel('Photo Selection password', { exact: true })).toHaveCount(0);
         await expect(page.getByRole('button', { name: 'All Photos', exact: true })).toHaveCount(0);
-        await expect(page.getByRole('button', { name: 'Download All (.zip)' })).toHaveCount(0);
+        await expect(page.getByRole('button', { name: 'Download All Photos' })).toHaveCount(0);
     });
 }

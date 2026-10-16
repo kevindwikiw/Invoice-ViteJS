@@ -25,6 +25,22 @@ function AccessHeader({ theme, onToggleTheme, title, section = 'Photo Selection'
     </header>;
 }
 
+export function GalleryPreparingScreen({ title, theme, onToggleTheme }: { title?: string; theme: GalleryTheme; onToggleTheme?: () => void }) {
+    return <main style={theme === 'black' ? BLACK_THEME : WHITE_THEME} className="flex min-h-dvh flex-col bg-[var(--bg-deep)] font-sans text-[var(--text-primary)]">
+        <AccessHeader theme={theme} onToggleTheme={onToggleTheme ?? (() => undefined)} title={title} section="Edited Photos" />
+        <section className="flex flex-1 items-center justify-center px-4 py-8 sm:px-5 sm:py-12">
+            <div className="w-full max-w-sm border border-[var(--border)] bg-[var(--bg-card)] px-5 py-7 text-center shadow-2xl sm:px-8 sm:py-9">
+                <div className="mb-7 flex justify-center"><OrbitLogo theme={theme} /></div>
+                <div role="status" className="gallery-unlock-loading">
+                    <h1 className="font-sans text-lg font-semibold leading-tight text-[var(--text-primary)] [text-wrap:balance]">Preparing your gallery…</h1>
+                    <span className="gallery-unlock-progress mt-8" aria-hidden="true"><span /></span>
+                </div>
+            </div>
+        </section>
+        <GalleryFooter />
+    </main>;
+}
+
 export function PinGate({
     galleryId,
     title,

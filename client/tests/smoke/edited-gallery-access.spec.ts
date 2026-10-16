@@ -31,6 +31,7 @@ test('Edited password gate has Orbit branding and a responsive footer', async ({
 
     await page.getByLabel('Edited photos password', { exact: true }).fill('a1');
     await page.getByRole('button', { name: 'Unlock Edited Photos' }).click();
+    await expect(page.getByRole('heading', { name: 'Preparing your gallery…' })).toBeVisible();
     await expect(page.getByText('No edited photos are available.')).toBeVisible();
 });
 
@@ -45,7 +46,7 @@ for (const state of ['closed', 'expired', 'draft'] as const) {
         await expect(page).toHaveURL(/\/culling\/closed-edited\/edited$/);
         await expect(page.getByRole('heading', { name: state === 'expired' ? 'Edited Photos access expired' : 'Edited Photos unavailable', exact: true })).toBeVisible();
         await expect(page.getByLabel('Edited photos password', { exact: true })).toHaveCount(0);
-        await expect(page.getByRole('button', { name: 'Download All (.zip)' })).toHaveCount(0);
+        await expect(page.getByRole('button', { name: 'Download All Photos' })).toHaveCount(0);
         await expect(page.getByRole('link', { name: 'Having trouble? Download backup ZIP' })).toHaveCount(0);
     });
 }
@@ -124,7 +125,7 @@ for (const theme of ['black', 'white']) {
         const toolbar = page.getByTestId('gallery-toolbar');
         await expect(header.getByRole('heading', { name: 'Kevin & Putri Wedding' })).toBeVisible();
         await expect(toolbar.getByText('Edited Photos', { exact: true })).toBeVisible();
-        await expect(toolbar.getByRole('button', { name: 'Download All (.zip)' })).toBeVisible();
+        await expect(toolbar.getByRole('button', { name: 'Download All Photos' })).toBeVisible();
         await expect(page.getByTestId('edited-gallery-grid')).toBeVisible();
         await expect(page.getByTestId('edited-gallery-grid').locator('img')).toHaveJSProperty('complete', true);
         await expect(page.getByTestId('edited-gallery-grid').getByText('Failed to load')).toHaveCount(0);
@@ -151,10 +152,10 @@ test('Wedding access expires without leaving cached photos or downloads visible'
     });
     await page.goto(`/culling/${id}?view=edit-results`);
     await expect(page.getByTestId('edited-gallery-grid')).toBeVisible();
-    await expect(page.getByRole('button', { name: 'Download All (.zip)' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Download All Photos' })).toBeVisible();
     await expect(page.getByRole('heading', { name: 'Edited Photos access expired' })).toBeVisible();
     await expect(page.getByTestId('edited-gallery-grid')).toHaveCount(0);
-    await expect(page.getByRole('button', { name: 'Download All (.zip)' })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Download All Photos' })).toHaveCount(0);
     await expect(page.getByTestId('gallery-toolbar')).toContainText('Expired');
 });
 

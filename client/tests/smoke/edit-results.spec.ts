@@ -74,9 +74,9 @@ test(`edited photos reuse culling tiles and lightbox ${withArchive ? 'with' : 'w
     await expect(page.getByText('FINAL DELIVERY', { exact: true })).toHaveCount(0);
     await expect(page.getByText('final-photo.jpg')).toBeVisible();
     await expect(page.getByRole('button', { name: 'Download final-photo.jpg' })).toBeVisible();
-    const downloadAll = page.getByRole('button', { name: 'Download All (.zip)' });
+    const downloadAll = page.getByRole('button', { name: 'Download All Photos' });
     if (archive) {
-        await expect(page.getByTestId('gallery-toolbar').getByRole('button', { name: 'Download All (.zip)' })).toBeVisible();
+        await expect(page.getByTestId('gallery-toolbar').getByRole('button', { name: 'Download All Photos' })).toBeVisible();
     } else {
         await expect(downloadAll).toHaveCount(0);
     }
@@ -128,9 +128,9 @@ test('download resolver failure announces a retryable error without opening a bl
 
     await page.goto(`/culling/${galleryId}?view=edit-results`);
     const pageCount = context.pages().length;
-    await page.getByRole('button', { name: 'Download All (.zip)' }).click();
+    await page.getByRole('button', { name: 'Download All Photos' }).click();
     await expect(page.getByText('Preparing download…')).toBeVisible();
     await expect(page.getByRole('alert')).toContainText('Google Drive cannot prepare this ZIP right now.');
     await expect.poll(() => context.pages().length).toBe(pageCount);
-    await expect(page.getByRole('button', { name: 'Download All (.zip)' })).toBeEnabled();
+    await expect(page.getByRole('button', { name: 'Download All Photos' })).toBeEnabled();
 });

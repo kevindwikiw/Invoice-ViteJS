@@ -232,10 +232,10 @@ test('guide adapts to a gallery without folders or ZIP', async ({ page }) => {
     await page.goto(`/culling/${id}?view=edit-results`);
     const guide = page.getByTestId('edited-photos-guide');
     await expect(guide.getByRole('heading', { name: 'Browse your photos' })).toBeVisible();
-    await expect(guide).toContainText('1 / 2');
+    await expect(guide).toContainText('Step 1 of 2');
     await guide.getByRole('button', { name: 'Next' }).click();
     await expect(guide.getByRole('heading', { name: 'Download your photos' })).toBeVisible();
-    await expect(guide).not.toContainText('Download All');
+    await expect(guide).not.toContainText('Download All Photos');
     await guide.getByRole('button', { name: 'View photos' }).click();
     await expect(page.getByTestId('edited-gallery-grid')).toBeVisible();
     await expect(page.getByTestId('edited-folder-bar')).toHaveCount(0);

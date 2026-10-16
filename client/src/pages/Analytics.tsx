@@ -316,6 +316,8 @@ const CalendarHeatmap = memo(({ bookings, year }: { bookings: Booking[], year: n
                                     onMouseLeave={() => setHoveredIso(null)}
                                     className={clsx(
                                         "aspect-square rounded text-[9px] flex items-center justify-center cursor-pointer transition-transform duration-100 hover:scale-125 relative group",
+                                        "hover:z-[80]",
+                                        day.iso === hoveredIso && "z-[80]",
                                         getIntensity(day.data.count),
                                         day.data.count > 0
                                             ? "text-[var(--text-primary)] font-bold shadow-sm"

@@ -10,6 +10,7 @@ import type { EditResultPhoto } from '../culling.types';
 import { BLACK_THEME, GALLERY_PAGE_SIZE, WHITE_THEME } from './constants';
 import { GalleryHeaderIdentity, GalleryViewTabs, OrbitLogo, ThemeToggle, type GalleryView } from './GalleryChrome';
 import { GalleryFooter } from './GalleryFooter';
+import { GalleryPreparingScreen } from './AccessScreens';
 import { PhotoTile } from './PhotoTile';
 import { Lightbox } from './Lightbox';
 import { GalleryPasswordField } from './GalleryPasswordField';
@@ -40,9 +41,9 @@ const prefetchPhoto = (photo: EditResultPhoto) => {
 };
 
 function ArchiveDownloadAction({ archive, pending, onDownload }: { archive: { filename: string; downloadResolveUrl: string }; pending: boolean; onDownload: () => void }) {
-    return <><button type="button" disabled={pending} aria-busy={pending} onClick={onDownload} title={archive.filename} aria-label={pending ? 'Preparing ZIP download' : 'Download All (.zip)'} className="inline-flex h-11 w-36 shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-md border border-[var(--border)] bg-[var(--accent)] px-2 text-xs font-semibold text-[var(--bg-deep)] transition-[opacity,transform] duration-150 hover:opacity-90 active:scale-[0.97] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)] disabled:opacity-60 motion-reduce:transition-none min-[390px]:w-40 sm:w-[210px] sm:gap-2 sm:px-4 sm:text-[13px]">
+    return <><button type="button" disabled={pending} aria-busy={pending} onClick={onDownload} title={archive.filename} aria-label={pending ? 'Preparing ZIP download' : 'Download All Photos'} className="inline-flex h-11 w-36 shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-md border border-[var(--border)] bg-[var(--accent)] px-2 text-xs font-semibold text-[var(--bg-deep)] transition-[opacity,transform] duration-150 hover:opacity-90 active:scale-[0.97] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)] disabled:opacity-60 motion-reduce:transition-none min-[390px]:w-40 sm:w-[210px] sm:gap-2 sm:px-4 sm:text-[13px]">
             <Download size={13} aria-hidden="true" />
-            {pending ? <><span className="sm:hidden">Preparing…</span><span className="hidden sm:inline">Preparing download…</span></> : <><span className="sm:hidden">Download ZIP</span><span className="hidden sm:inline">Download All <span className="font-normal opacity-75">(.zip)</span></span></>}
+            {pending ? <><span className="sm:hidden">Preparing…</span><span className="hidden sm:inline">Preparing download…</span></> : <span>Download All Photos</span>}
         </button><span role="status" aria-live="polite" className="sr-only">{pending ? 'Preparing ZIP download' : ''}</span></>;
 }
 
@@ -87,6 +88,9 @@ export function EditResultsGrid({
     const [password, setPassword] = useState('');
     const [error, setError] = useState('');
     const [accessExpiresAt, setAccessExpiresAt] = useState<string | null>(null);
+    const [preparingAccess, setPreparingAccess] = useState(false);
+    const [accessPreparationUntil, setAccessPreparationUntil] = useState(0);
+    const accessSubmittedAt = useRef(0);
     const [navigation, setNavigation] = useState({ galleryId, token, folderId: requestedFolder ?? null, selfie: isSelfieView, page: viewPage, photoId: null as string | null });
     const [pendingDownload, setPendingDownload] = useState<string | null>(null);
     const [downloadError, setDownloadError] = useState('');
@@ -148,6 +152,8 @@ export function EditResultsGrid({
             setError('');
             setPassword('');
             setAccessExpiresAt(result.expiresAt);
+            setPreparingAccess(true);
+            setAccessPreparationUntil(Math.max(Date.now(), accessSubmittedAt.current + 2000));
             localStorage.setItem(`orbit:edit-results-expiry:${galleryId}`, result.expiresAt || 'unlimited');
             onToken(result.token);
         },
@@ -161,6 +167,17 @@ export function EditResultsGrid({
         staleTime: 60_000,
         refetchOnWindowFocus: 'always',
     });
+    useEffect(() => {
+        if (!preparingAccess) return;
+        if (results.isError) {
+            setPreparingAccess(false);
+            return;
+        }
+        if (!results.isSuccess) return;
+        const remaining = Math.max(0, accessPreparationUntil - Date.now());
+        const timer = window.setTimeout(() => setPreparingAccess(false), remaining);
+        return () => window.clearTimeout(timer);
+    }, [preparingAccess, results.isError, results.isSuccess, accessPreparationUntil]);
     useEffect(() => {
         const status = (results.error as (Error & { status?: number }) | null)?.status;
         if (status === 401 && token) {
@@ -392,7 +409,7 @@ export function EditResultsGrid({
                 <div className="mb-3 flex items-center justify-center gap-2 text-[10px] font-semibold uppercase tracking-[0.12em] text-[var(--text-muted)]"><FolderOpen size={14} aria-hidden="true" /><span>Edited Gallery</span></div>
                 <h1 className="font-display text-[26px] font-medium leading-tight text-[var(--text-primary)] [text-wrap:balance]">View Your Edited Photos</h1>
                 <p className="mx-auto mt-2 max-w-xs text-xs leading-5 text-[var(--text-muted)]">Enter your password to view and download your finished gallery.</p>
-            <form aria-busy={verify.isPending} className="mt-7 flex w-full flex-col" onSubmit={(event) => { event.preventDefault(); if (verify.isPending) return; if (!password.trim()) { setError('Enter your password.'); return; } setError(''); verify.mutate(); }}>
+            <form aria-busy={verify.isPending} className="mt-7 flex w-full flex-col" onSubmit={(event) => { event.preventDefault(); if (verify.isPending) return; if (!password.trim()) { setError('Enter your password.'); return; } setError(''); accessSubmittedAt.current = Date.now(); verify.mutate(); }}>
                 <GalleryPasswordField label="Edited photos password" name="editedPhotosPassword" value={password} onChange={(value) => { setPassword(value); if (error) setError(''); }} error={error} />
                 <button disabled={verify.isPending} aria-live="polite" className="mt-3 inline-flex h-12 items-center justify-center gap-2 rounded-md bg-[var(--accent)] px-4 text-xs font-bold text-[var(--bg-deep)] transition-opacity hover:opacity-85 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)] disabled:opacity-45">
                     {verify.isPending ? <Loader2 size={15} aria-hidden="true" className="animate-spin motion-reduce:animate-none" /> : <Lock size={15} aria-hidden="true" />} {verify.isPending ? 'Checking password…' : 'Unlock Edited Photos'}
@@ -497,6 +514,7 @@ export function EditResultsGrid({
         </div>
     );
 
+    if (preparingAccess && !results.isError) return <GalleryPreparingScreen title={accessStatus.data?.title} theme={theme} onToggleTheme={onToggleTheme} />;
     if (!standalone) return <>{downloadTarget && createPortal(archiveAction, downloadTarget)}{expiryTarget && createPortal(expiryAction, expiryTarget)}{helpTarget && createPortal(helpAction, helpTarget)}{content}{guide}{selfieModal}</>;
     return <main style={theme === 'black' ? BLACK_THEME : WHITE_THEME} className="flex min-h-screen flex-col bg-[var(--bg-deep)] font-sans text-[var(--text-primary)]">
         <a href="#edited-gallery-content" className="sr-only focus:not-sr-only focus:fixed focus:left-3 focus:top-3 focus:z-[160] focus:rounded-md focus:bg-[var(--accent)] focus:px-3 focus:py-2 focus:text-xs focus:font-semibold focus:text-[var(--bg-deep)]">Skip to edited photos</a>

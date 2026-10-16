@@ -207,7 +207,7 @@ test('expired Edited access closes Selfie and removes cached photos and download
     await expect(page.getByRole('heading', { name: 'Edited Photos access expired' })).toBeVisible();
     await expect(page.getByRole('dialog', { name: 'Filter by selfie' })).toHaveCount(0);
     await expect(page.getByTestId('edited-gallery-grid')).toHaveCount(0);
-    await expect(page.getByRole('button', { name: 'Download All (.zip)' })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Download All Photos' })).toHaveCount(0);
     await expect(page.getByRole('button', { name: 'Selfie', exact: true })).toHaveCount(0);
 });
 
