@@ -3,7 +3,7 @@ import { bodyLimit } from "hono/body-limit";
 import { galleryAll, galleryBatch, galleryInsertReturningId, galleryOne, galleryRun } from "../db/galleries";
 import { fetchDriveFile, getDrivePhotoMetadata, getReadonlyDriveToken } from "../lib/google-drive";
 import { FACE_MODEL_VERSION, facePhotoVersion, faceSourceVersion } from "../lib/face-model";
-import { FaceSourceChanged, getFaceSourceVersion } from "../lib/face-source";
+import { FaceSourceChanged, getFaceSourceVersion, type FaceSourceScope } from "../lib/face-source";
 
 type Env = {
     Variables: {
@@ -23,11 +23,15 @@ type GalleryPhoto = {
     displayOrder: number;
     createdAt: string;
     sourceVersion?: string;
+    folderId?: string | null;
+    downloadUrl?: string;
+    beforePhoto?: string | null;
 };
 
 type FaceIndexJob = {
     id: number;
     galleryId: number;
+    sourceScope: FaceSourceScope;
     status: "queued" | "running" | "completed" | "failed" | "cancelled";
     modelVersion: string;
     sourceVersion: string;
@@ -61,7 +65,7 @@ const WORKER_TOKEN = process.env.FACE_WORKER_TOKEN?.trim() || "";
 const INTERNAL_TOKEN = process.env.FACE_WORKER_INTERNAL_TOKEN?.trim() || "";
 const MAX_PHOTOS_PER_JOB = 10_000;
 const STALE_JOB_MS = 2 * 60 * 1000;
-const pendingJobs = new Map<number, Promise<FaceIndexJob | null>>();
+const pendingJobs = new Map<string, Promise<FaceIndexJob | null>>();
 
 export const faceIndexRouter = new Hono<Env>();
 const MAX_SELFIE_BYTES = 4 * 1024 * 1024;
@@ -115,6 +119,7 @@ function jobShape(row: Record<string, unknown>): FaceIndexJob {
     return {
         id: Number(row.id),
         galleryId: Number(row.galleryId ?? row.gallery_id),
+        sourceScope: row.source_scope === 'edited' ? 'edited' : 'selection',
         status: String(row.status) as FaceIndexJob["status"],
         modelVersion: String(row.modelVersion ?? row.model_version ?? MODEL_VERSION),
         sourceVersion: String(row.sourceVersion ?? row.source_version ?? ""),
@@ -128,7 +133,14 @@ function jobShape(row: Record<string, unknown>): FaceIndexJob {
     };
 }
 
-async function getGalleryPhotos(galleryId: number): Promise<GalleryPhoto[]> {
+async function getGalleryPhotos(galleryId: number, scope: FaceSourceScope = 'selection', matchIds?: string[]): Promise<GalleryPhoto[]> {
+    if (matchIds?.length === 0) return [];
+    if (scope === 'edited') return galleryAll<GalleryPhoto>(`
+        SELECT 0 as id, gallery_id as "galleryId", drive_file_id as "driveFileId", filename, mime_type as "mimeType",
+            thumbnail_url as "thumbnailUrl", width, height, display_order as "displayOrder", '' as "createdAt", source_version as "sourceVersion",
+            folder_id as "folderId", web_content_link as "downloadUrl", before_photo as "beforePhoto"
+        FROM gallery_edit_result_photos WHERE gallery_id = ? AND mime_type LIKE 'image/%' ${matchIds ? `AND drive_file_id IN (${matchIds.map(() => '?').join(',')})` : ''} ORDER BY display_order, filename
+    `, [galleryId, ...(matchIds ?? [])]);
     return galleryAll<GalleryPhoto>(`
         SELECT id, gallery_id as "galleryId", drive_file_id as "driveFileId", filename, mime_type as "mimeType",
                thumbnail_url as "thumbnailUrl", width, height, display_order as "displayOrder", created_at as "createdAt", source_version as "sourceVersion"
@@ -136,7 +148,7 @@ async function getGalleryPhotos(galleryId: number): Promise<GalleryPhoto[]> {
     `, [galleryId]);
 }
 
-async function dispatchJob(jobId: number, galleryId: number, sourceVersion: string, photos: GalleryPhoto[]): Promise<void> {
+async function dispatchJob(jobId: number, galleryId: number, sourceVersion: string, photos: GalleryPhoto[], scope: FaceSourceScope): Promise<void> {
     if (!workerConfigured()) {
         await galleryRun("UPDATE face_index_jobs SET status = 'failed', error = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?", ["Face worker is not configured.", jobId]);
         return;
@@ -151,14 +163,14 @@ async function dispatchJob(jobId: number, galleryId: number, sourceVersion: stri
     }
 
     const indexed = await galleryAll<{ driveFileId: string; sourceVersion: string; isSolo: number }>(
-        'SELECT drive_file_id as "driveFileId", source_version as "sourceVersion", is_solo as "isSolo" FROM face_index_photos WHERE gallery_id = ? AND model_version = ?',
-        [galleryId, MODEL_VERSION],
+        'SELECT drive_file_id as "driveFileId", source_version as "sourceVersion", is_solo as "isSolo" FROM face_index_photos WHERE gallery_id = ? AND model_version = ? AND source_scope = ?',
+        [galleryId, MODEL_VERSION, scope],
     );
     const versions = new Map(indexed.map((photo) => [photo.driveFileId, photo.sourceVersion]));
     const soloByFile = new Map(indexed.map((photo) => [photo.driveFileId, photo.isSolo === 1]));
     const stored = await galleryAll<{ driveFileId: string; faceIndex: number; embedding: string; boundingBox: string | null; sourceVersion: string }>(
-        'SELECT drive_file_id as "driveFileId", face_index as "faceIndex", embedding, bounding_box as "boundingBox", source_version as "sourceVersion" FROM face_embeddings WHERE gallery_id = ? AND model_version = ?',
-        [galleryId, MODEL_VERSION],
+        'SELECT drive_file_id as "driveFileId", face_index as "faceIndex", embedding, bounding_box as "boundingBox", source_version as "sourceVersion" FROM face_embeddings WHERE gallery_id = ? AND model_version = ? AND source_scope = ?',
+        [galleryId, MODEL_VERSION, scope],
     );
     const cached = new Map<string, unknown[]>();
     for (const face of stored) {
@@ -199,65 +211,66 @@ async function dispatchJob(jobId: number, galleryId: number, sourceVersion: stri
     await galleryRun("UPDATE face_index_jobs SET status = 'running', started_at = COALESCE(started_at, CURRENT_TIMESTAMP), updated_at = CURRENT_TIMESTAMP WHERE id = ? AND status = 'queued'", [jobId]);
 }
 
-async function createOrReuseJob(galleryId: number, dispatch = true): Promise<FaceIndexJob | null> {
-    const pending = pendingJobs.get(galleryId);
+async function createOrReuseJob(galleryId: number, dispatch = true, scope: FaceSourceScope = 'selection'): Promise<FaceIndexJob | null> {
+    const key = `${galleryId}:${scope}`;
+    const pending = pendingJobs.get(key);
     if (pending) return pending;
-    const operation = createJob(galleryId, dispatch);
-    pendingJobs.set(galleryId, operation);
+    const operation = createJob(galleryId, dispatch, scope);
+    pendingJobs.set(key, operation);
     try {
         return await operation;
     } finally {
-        pendingJobs.delete(galleryId);
+        pendingJobs.delete(key);
     }
 }
 
-async function createJob(galleryId: number, dispatch: boolean): Promise<FaceIndexJob | null> {
+async function createJob(galleryId: number, dispatch: boolean, scope: FaceSourceScope): Promise<FaceIndexJob | null> {
     const gallery = await galleryOne<{ syncedAt?: string | null; updatedAt?: string | null; photoCount?: number }>(
         "SELECT synced_at as syncedAt, updated_at as updatedAt, photo_count as photoCount FROM galleries WHERE id = ?",
         [galleryId],
     );
     if (!gallery) return null;
-    const photos = await getGalleryPhotos(galleryId);
+    const photos = await getGalleryPhotos(galleryId, scope);
     const sourceVersion = faceSourceVersion(photos);
-    if (sourceVersion !== await getFaceSourceVersion(galleryId)) throw new FaceSourceChanged();
-    await currentJob(galleryId); // Expire stale work before reusing an active job.
+    if (sourceVersion !== await getFaceSourceVersion(galleryId, scope)) throw new FaceSourceChanged();
+    await currentJob(galleryId, scope); // Expire stale work before reusing an active job.
     const existing = await galleryOne<Record<string, unknown>>(`
-        SELECT id, gallery_id as "galleryId", status, model_version as "modelVersion", source_version as "sourceVersion", total, processed, error,
+        SELECT id, gallery_id as "galleryId", source_scope, status, model_version as "modelVersion", source_version as "sourceVersion", total, processed, error,
                created_at as "createdAt", started_at as "startedAt", completed_at as "completedAt", updated_at as "updatedAt"
         FROM face_index_jobs
-        WHERE gallery_id = ? AND model_version = ? AND source_version = ? AND status IN ('queued', 'running', 'completed')
+        WHERE gallery_id = ? AND model_version = ? AND source_version = ? AND source_scope = ? AND status IN ('queued', 'running', 'completed')
         ORDER BY id DESC LIMIT 1
-    `, [galleryId, MODEL_VERSION, sourceVersion]);
+    `, [galleryId, MODEL_VERSION, sourceVersion, scope]);
     if (existing) return jobShape(existing);
 
     if (photos.length > MAX_PHOTOS_PER_JOB) throw new Error(`Gallery has too many photos for one indexing job (max ${MAX_PHOTOS_PER_JOB}).`);
     const id = await galleryInsertReturningId(
-        "INSERT INTO face_index_jobs (gallery_id, status, model_version, source_version, total) VALUES (?, 'queued', ?, ?, ?)",
-        [galleryId, MODEL_VERSION, sourceVersion, photos.length],
+        "INSERT INTO face_index_jobs (gallery_id, status, model_version, source_version, total, source_scope) VALUES (?, 'queued', ?, ?, ?, ?)",
+        [galleryId, MODEL_VERSION, sourceVersion, photos.length, scope],
     );
     if (dispatch) {
         try {
-            await dispatchJob(id, galleryId, sourceVersion, photos);
+            await dispatchJob(id, galleryId, sourceVersion, photos, scope);
         } catch (error) {
             await galleryRun("UPDATE face_index_jobs SET status = 'failed', error = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND status IN ('queued', 'running')", [String(error), id]);
         }
     }
     return jobShape((await galleryOne<Record<string, unknown>>(`
-        SELECT id, gallery_id as "galleryId", status, model_version as "modelVersion", source_version as "sourceVersion", total, processed, error,
+        SELECT id, gallery_id as "galleryId", source_scope, status, model_version as "modelVersion", source_version as "sourceVersion", total, processed, error,
                created_at as "createdAt", started_at as "startedAt", completed_at as "completedAt", updated_at as "updatedAt"
         FROM face_index_jobs WHERE id = ?
     `, [id]))!);
 }
 
-async function currentJob(galleryId: number): Promise<FaceIndexJob | null> {
-    const sourceVersion = await getFaceSourceVersion(galleryId);
+async function currentJob(galleryId: number, scope: FaceSourceScope = 'selection'): Promise<FaceIndexJob | null> {
+    const sourceVersion = await getFaceSourceVersion(galleryId, scope);
     if (sourceVersion === null) return null;
     const row = await galleryOne<Record<string, unknown>>(`
-        SELECT id, gallery_id as "galleryId", status, model_version as "modelVersion", source_version as "sourceVersion", total, processed, error,
+        SELECT id, gallery_id as "galleryId", source_scope, status, model_version as "modelVersion", source_version as "sourceVersion", total, processed, error,
                created_at as "createdAt", started_at as "startedAt", completed_at as "completedAt", updated_at as "updatedAt"
-        FROM face_index_jobs WHERE gallery_id = ? AND model_version = ? AND source_version = ?
+        FROM face_index_jobs WHERE gallery_id = ? AND model_version = ? AND source_version = ? AND source_scope = ?
         ORDER BY id DESC LIMIT 1
-    `, [galleryId, MODEL_VERSION, sourceVersion]);
+    `, [galleryId, MODEL_VERSION, sourceVersion, scope]);
     if (!row) return null;
     const job = jobShape(row);
     const updatedAt = /Z$|[+-]\d{2}:\d{2}$/.test(job.updatedAt) ? job.updatedAt : `${job.updatedAt.replace(" ", "T")}Z`;
@@ -267,7 +280,7 @@ async function currentJob(galleryId: number): Promise<FaceIndexJob | null> {
             ["Face worker stopped reporting progress.", job.id],
         );
         const stale = await galleryOne<Record<string, unknown>>(`
-            SELECT id, gallery_id as "galleryId", status, model_version as "modelVersion", source_version as "sourceVersion", total, processed, error,
+            SELECT id, gallery_id as "galleryId", source_scope, status, model_version as "modelVersion", source_version as "sourceVersion", total, processed, error,
                    created_at as "createdAt", started_at as "startedAt", completed_at as "completedAt", updated_at as "updatedAt"
             FROM face_index_jobs WHERE id = ?
         `, [job.id]);
@@ -352,7 +365,7 @@ faceIndexRouter.post("/jobs", async (c) => {
 faceIndexRouter.get("/jobs/:id", async (c) => {
     if (!c.get("user")) return jsonError(c, "Not authenticated.", 401);
     const job = await galleryOne<Record<string, unknown>>(`
-        SELECT id, gallery_id as "galleryId", status, model_version as "modelVersion", source_version as "sourceVersion", total, processed, error,
+        SELECT id, gallery_id as "galleryId", source_scope, status, model_version as "modelVersion", source_version as "sourceVersion", total, processed, error,
                created_at as "createdAt", started_at as "startedAt", completed_at as "completedAt", updated_at as "updatedAt"
         FROM face_index_jobs WHERE id = ?
     `, [Number(c.req.param("id"))]);
@@ -383,8 +396,8 @@ faceIndexRouter.post("/callbacks/jobs/:id/complete", async (c) => {
     if (!Array.isArray(body.indexedPhotos)) return jsonError(c, "Indexed photo metadata must be an array.");
     const embeddings = body.embeddings as FaceEmbedding[];
     const indexedPhotos = body.indexedPhotos as IndexedPhoto[];
-    const job = await galleryOne<{ galleryId: number; modelVersion: string; sourceVersion: string; status: string }>(
-        "SELECT gallery_id as galleryId, model_version as modelVersion, source_version as sourceVersion, status FROM face_index_jobs WHERE id = ?",
+    const job = await galleryOne<{ galleryId: number; sourceScope: FaceSourceScope; modelVersion: string; sourceVersion: string; status: string }>(
+        "SELECT gallery_id as galleryId, source_scope as sourceScope, model_version as modelVersion, source_version as sourceVersion, status FROM face_index_jobs WHERE id = ?",
         [jobId],
     );
     if (!job || job.galleryId !== galleryId) return jsonError(c, "Face index job not found.", 404);
@@ -392,8 +405,9 @@ faceIndexRouter.post("/callbacks/jobs/:id/complete", async (c) => {
         return jsonError(c, "Face index job is no longer active or does not match its source.", 409);
     }
 
-    const photos = await getGalleryPhotos(galleryId);
-    if (faceSourceVersion(photos) !== sourceVersion || (await currentJob(galleryId))?.id !== jobId) {
+    const scope = job.sourceScope;
+    const photos = await getGalleryPhotos(galleryId, scope);
+    if (faceSourceVersion(photos) !== sourceVersion || (await currentJob(galleryId, scope))?.id !== jobId) {
         return jsonError(c, "Gallery changed during indexing.", 409);
     }
     const versions = new Map(photos.map((photo) => [photo.driveFileId, facePhotoVersion(photo)]));
@@ -429,24 +443,24 @@ faceIndexRouter.post("/callbacks/jobs/:id/complete", async (c) => {
     // Recheck inside the transaction so a stale/failure callback cannot replace
     // an index after a newer callback committed while this request was awaiting IO.
     const active = `EXISTS (SELECT 1 FROM face_index_jobs j JOIN galleries g ON g.id = j.gallery_id
-        WHERE j.id = ? AND j.status = 'running' AND g.face_source_version = j.source_version
-        AND NOT EXISTS (SELECT 1 FROM face_index_jobs newer WHERE newer.gallery_id = j.gallery_id AND newer.model_version = j.model_version AND newer.id > j.id))`;
+        WHERE j.id = ? AND j.status = 'running' AND g.${scope === 'edited' ? 'edited_face_source_version' : 'face_source_version'} = j.source_version
+        AND NOT EXISTS (SELECT 1 FROM face_index_jobs newer WHERE newer.gallery_id = j.gallery_id AND newer.source_scope = j.source_scope AND newer.model_version = j.model_version AND newer.id > j.id))`;
     const statements = [
         // Only the latest published snapshot may be reused as a complete index.
-        { sql: `UPDATE face_index_jobs SET status = 'cancelled', updated_at = CURRENT_TIMESTAMP WHERE gallery_id = ? AND model_version = ? AND id < ? AND status IN ('queued', 'running', 'completed') AND ${active}`, params: [galleryId, modelVersion, jobId, jobId] },
-        { sql: `DELETE FROM face_embeddings WHERE gallery_id = ? AND model_version = ? AND ${active}`, params: [galleryId, modelVersion, jobId] },
-        { sql: `DELETE FROM face_index_photos WHERE gallery_id = ? AND model_version = ? AND ${active}`, params: [galleryId, modelVersion, jobId] },
+        { sql: `UPDATE face_index_jobs SET status = 'cancelled', updated_at = CURRENT_TIMESTAMP WHERE gallery_id = ? AND source_scope = ? AND model_version = ? AND id < ? AND status IN ('queued', 'running', 'completed') AND ${active}`, params: [galleryId, scope, modelVersion, jobId, jobId] },
+        { sql: `DELETE FROM face_embeddings WHERE gallery_id = ? AND source_scope = ? AND model_version = ? AND ${active}`, params: [galleryId, scope, modelVersion, jobId] },
+        { sql: `DELETE FROM face_index_photos WHERE gallery_id = ? AND source_scope = ? AND model_version = ? AND ${active}`, params: [galleryId, scope, modelVersion, jobId] },
         ...photos.map((photo) => ({
-            sql: `INSERT INTO face_index_photos (gallery_id, drive_file_id, source_version, model_version, is_solo) SELECT ?, ?, ?, ?, ? WHERE ${active}`,
-            params: [galleryId, photo.driveFileId, facePhotoVersion(photo), modelVersion, indexedByFile.get(photo.driveFileId)!.isSolo ? 1 : 0, jobId],
+            sql: `INSERT INTO face_index_photos (gallery_id, source_scope, drive_file_id, source_version, model_version, is_solo) SELECT ?, ?, ?, ?, ?, ? WHERE ${active}`,
+            params: [galleryId, scope, photo.driveFileId, facePhotoVersion(photo), modelVersion, indexedByFile.get(photo.driveFileId)!.isSolo ? 1 : 0, jobId],
         })),
         ...embeddings.flatMap((item) => {
             if (!item || typeof item.driveFileId !== "string" || !Array.isArray(item.embedding)) return [];
             const vector = item.embedding.map(Number);
             if (!vector.length || vector.some((value) => !Number.isFinite(value))) return [];
             return [{
-                sql: `INSERT INTO face_embeddings (gallery_id, drive_file_id, face_index, embedding, bounding_box, source_version, model_version) SELECT ?, ?, ?, ?, ?, ?, ? WHERE ${active}`,
-                params: [galleryId, item.driveFileId, Number(item.faceIndex || 0), JSON.stringify(vector), item.boundingBox ? JSON.stringify(item.boundingBox) : null, String(item.sourceVersion || ""), modelVersion, jobId],
+                sql: `INSERT INTO face_embeddings (gallery_id, source_scope, drive_file_id, face_index, embedding, bounding_box, source_version, model_version) SELECT ?, ?, ?, ?, ?, ?, ?, ? WHERE ${active}`,
+                params: [galleryId, scope, item.driveFileId, Number(item.faceIndex || 0), JSON.stringify(vector), item.boundingBox ? JSON.stringify(item.boundingBox) : null, String(item.sourceVersion || ""), modelVersion, jobId],
             }];
         }),
         { sql: `UPDATE face_index_jobs SET status = 'completed', processed = total, completed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND status = 'running' AND ${active}`, params: [jobId, jobId] },
@@ -477,11 +491,11 @@ faceIndexRouter.get("/indexes/:jobId", async (c) => {
         SELECT j.gallery_id AS "galleryId", j.model_version AS "modelVersion", j.source_version AS "sourceVersion",
             e.drive_file_id AS "driveFileId", e.face_index AS "faceIndex", e.embedding, p.is_solo AS "isSolo"
         FROM face_index_jobs j JOIN galleries g ON g.id = j.gallery_id
-        LEFT JOIN face_embeddings e ON e.gallery_id = j.gallery_id AND e.model_version = j.model_version
-        LEFT JOIN face_index_photos p ON p.gallery_id = e.gallery_id AND p.drive_file_id = e.drive_file_id AND p.model_version = e.model_version
-        WHERE j.id = ? AND j.status = 'completed' AND g.face_source_version = j.source_version
+        LEFT JOIN face_embeddings e ON e.gallery_id = j.gallery_id AND e.model_version = j.model_version AND e.source_scope = j.source_scope
+        LEFT JOIN face_index_photos p ON p.gallery_id = e.gallery_id AND p.drive_file_id = e.drive_file_id AND p.model_version = e.model_version AND p.source_scope = j.source_scope
+        WHERE j.id = ? AND j.status = 'completed' AND CASE j.source_scope WHEN 'edited' THEN g.edited_face_source_version ELSE g.face_source_version END = j.source_version
         AND NOT EXISTS (SELECT 1 FROM face_index_jobs newer WHERE newer.gallery_id = j.gallery_id
-            AND newer.model_version = j.model_version AND newer.status = 'completed' AND newer.id > j.id)
+            AND newer.source_scope = j.source_scope AND newer.model_version = j.model_version AND newer.status = 'completed' AND newer.id > j.id)
         ORDER BY e.id
     `, [id]);
     if (!rows.length) return jsonError(c, "Index changed.", 409, "index_changed");
@@ -549,13 +563,13 @@ export type PublicFaceSearchStatus = {
     code?: string;
 };
 
-export async function publicFaceSearchStatus(galleryId: number): Promise<PublicFaceSearchStatus> {
+export async function publicFaceSearchStatus(galleryId: number, scope: FaceSourceScope = 'selection'): Promise<PublicFaceSearchStatus> {
     const readiness = await workerReadiness();
     if (!readiness.ready) {
         return { available: false, status: "unavailable", processed: 0, total: 0, code: readiness.code };
     }
     let job: FaceIndexJob | null;
-    try { job = await currentJob(galleryId); }
+    try { job = await currentJob(galleryId, scope); }
     catch (error) {
         if (!(error instanceof FaceSourceChanged)) throw error;
         return { available: false, status: "unavailable", processed: 0, total: 0, code: "index_changed" };
@@ -568,8 +582,9 @@ export async function publicFaceSearchStatus(galleryId: number): Promise<PublicF
     return { available: true, status: "failed", processed: job.processed, total: job.total, code: "index_failed" };
 }
 
-export async function handlePublicFaceSearchStatus(c: Context<Env>, galleryId: number): Promise<Response> {
-    return c.json(await publicFaceSearchStatus(galleryId));
+export async function handlePublicFaceSearchStatus(c: Context<Env>, galleryId: number, scope: FaceSourceScope = 'selection'): Promise<Response> {
+    c.header('Cache-Control', 'no-store');
+    return c.json(await publicFaceSearchStatus(galleryId, scope));
 }
 
 // Public gallery gateway. It starts indexing on first use and only sends the
@@ -577,8 +592,9 @@ export async function handlePublicFaceSearchStatus(c: Context<Env>, galleryId: n
 export async function handlePublicFaceSearch(
     c: Context<Env>,
     galleryId: number,
-    serializePhoto: (photo: GalleryPhoto) => unknown = (photo) => photo,
+    serializePhoto: (photo: GalleryPhoto) => unknown | Promise<unknown> = (photo) => photo,
     revalidateAccess?: () => Promise<Response | null>,
+    scope: FaceSourceScope = 'selection',
 ): Promise<Response> {
     const readiness = await workerReadiness();
     if (!readiness.ready) return jsonError(c, "Face worker is not ready.", 503, readiness.code);
@@ -596,10 +612,10 @@ export async function handlePublicFaceSearch(
     if (selfie.size > MAX_SELFIE_BYTES) return jsonError(c, "Selfie image is too large.", 413, "selfie_too_large");
     let job: FaceIndexJob | null;
     try {
-        job = await currentJob(galleryId);
+        job = await currentJob(galleryId, scope);
         if (!job || job.status !== "completed") {
-            if (!job || job.status === "failed" || job.status === "cancelled") await createOrReuseJob(galleryId);
-            return c.json({ status: "indexing", job: await currentJob(galleryId), matches: [], total: 0 }, 202);
+            if (!job || job.status === "failed" || job.status === "cancelled") await createOrReuseJob(galleryId, true, scope);
+            return c.json({ status: "indexing", job: await currentJob(galleryId, scope), matches: [], total: 0 }, 202);
         }
     } catch (error) {
         console.error(`[face-search] Unable to prepare index for gallery ${galleryId}:`, error);
@@ -612,14 +628,16 @@ export async function handlePublicFaceSearch(
         }
         const result = await response.json() as { matches?: Array<{ driveFileId: string; distance: number }>; total?: number };
         const matchIds = new Set((result.matches || []).map((match) => match.driveFileId));
-        const photos = await getGalleryPhotos(galleryId);
+        const photos = await getGalleryPhotos(galleryId, scope, scope === 'edited' ? Array.from(matchIds) : undefined);
+        const matches = await Promise.all(photos.filter((photo) => matchIds.has(photo.driveFileId)).map(serializePhoto));
         const denied = await revalidateAccess?.();
         if (denied) return denied;
-        const latest = await currentJob(galleryId);
+        const latest = await currentJob(galleryId, scope);
         if (latest?.id !== job.id || latest.status !== "completed" || latest.sourceVersion !== job.sourceVersion) {
             return jsonError(c, "This gallery changed during your search. Please try again.", 409, "index_changed");
         }
-        return c.json({ status: "complete", matches: photos.filter((photo) => matchIds.has(photo.driveFileId)).map(serializePhoto), total: photos.length });
+        c.header('Cache-Control', 'no-store');
+        return c.json({ status: "complete", matches, total: scope === 'edited' ? job.total : photos.length, sourceVersion: job.sourceVersion });
     } catch (error) {
         if (error instanceof FaceSourceChanged) return jsonError(c, "This gallery changed during your search. Please try again.", 409, "index_changed");
         console.error(`[face-search] Worker unavailable for gallery ${galleryId}:`, error);
@@ -658,10 +676,10 @@ faceIndexRouter.post("/search", async (c) => {
 
 export { createOrReuseJob, currentJob, MODEL_VERSION, INTERNAL_TOKEN };
 
-export async function prepareGalleryFaceIndex(galleryId: number): Promise<void> {
+export async function prepareGalleryFaceIndex(galleryId: number, scope: FaceSourceScope = 'selection'): Promise<void> {
     try {
         if (!(await workerReadiness()).ready) return;
-        await createOrReuseJob(galleryId);
+        await createOrReuseJob(galleryId, true, scope);
     } catch (error) {
         console.error(`[face-index] Background indexing could not start for gallery ${galleryId}:`, error);
     }

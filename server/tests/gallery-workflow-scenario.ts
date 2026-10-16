@@ -19,6 +19,7 @@ mock.module('../lib/google-drive', () => ({
     listDrivePhotos: async () => [photo('source')],
     getDrivePhotoMetadata: async (id: string) => photo(id),
     fetchDriveFile: async () => new Response('image', { headers: { 'content-type': 'image/jpeg' } }),
+    fetchDriveVideo: async () => new Response('video', { headers: { 'content-type': 'video/mp4' } }),
 }));
 const { sqlite: db } = await import('../db/runtime');
 db!.exec('CREATE TABLE user_permissions (user_id INTEGER, permission_key TEXT, effect TEXT)');
@@ -109,15 +110,28 @@ driveFails = true;
 assert.equal((await request(`/admin/${id}/edit-results/sync`, 'POST')).status, 502);
 driveFails = false;
 assert.equal((await json(await request(`/admin/${id}/edit-results/sync`, 'POST'))).folderCount, 1);
-assert.equal((await request(`/admin/${id}/edit-results/publish`, 'POST', { password: '123' })).status, 400);
-assert.equal((await request(`/admin/${id}/edit-results/publish`, 'POST', { password: 'wedding-password' })).status, 201);
+assert.equal((await request(`/admin/${id}/edit-results/publish`, 'POST', { password: '12345' })).status, 400);
+assert.equal((await request(`/admin/${id}/edit-results/publish`, 'POST', { password: 'pass' })).status, 201);
 const status = await json(await request(`/public/${slug}/edit-results/status`));
 assert.equal(status.workflow, 'delivery_only');
 assert.equal(status.title, 'Updated Wedding');
 assert.equal(status.available, true);
+assert.equal(status.selectionAvailable, false);
+assert.equal(status.selectionStatus, 'closed');
+const legacySelectionState = await one<any>('SELECT status, selection_deadline_at FROM galleries WHERE id = 1');
+await run("UPDATE galleries SET status = 'open', selection_deadline_at = '2099-01-01' WHERE id = 1");
+const openSelectionStatus = await json(await request('/public/legacy/edit-results/status'));
+assert.equal(openSelectionStatus.selectionAvailable, true);
+assert.equal(openSelectionStatus.selectionExpired, false);
+await run("UPDATE galleries SET status = 'open', selection_deadline_at = '2000-01-01' WHERE id = 1");
+const expiredSelectionStatus = await json(await request('/public/legacy/edit-results/status'));
+assert.equal(expiredSelectionStatus.selectionAvailable, false);
+assert.equal(expiredSelectionStatus.selectionExpired, true);
+assert.equal(expiredSelectionStatus.selectionStatus, 'closed');
+await run('UPDATE galleries SET status = ?, selection_deadline_at = ? WHERE id = 1', [legacySelectionState!.status, legacySelectionState!.selection_deadline_at]);
 assert.equal((await request(`/public/${slug}/edit-results/verify`, 'POST', { password: 'wrong-password' })).status, 401);
 for (let attempt = 0; attempt < 4; attempt++) assert.equal((await request(`/public/${slug}/edit-results/verify`, 'POST', { password: 'wrong-password' })).status, 401);
-assert.equal((await json(await request(`/public/${slug}/edit-results/verify`, 'POST', { password: 'wedding-password' }))).code, 'EDIT_RESULTS_RATE_LIMITED');
+assert.equal((await json(await request(`/public/${slug}/edit-results/verify`, 'POST', { password: 'pass' }))).code, 'EDIT_RESULTS_RATE_LIMITED');
 assert.equal((await json(await request(`/public/${slug}/verify`, 'POST', { pin: 'wrong' }))).code, 'SELECTION_NOT_AVAILABLE');
 assert.equal((await json(await request(`/admin/${id}/edit-results/reset-lock`, 'POST'))).status, 'reset');
 for (let attempt = 0; attempt < 5; attempt++) await request('/public/legacy/verify', 'POST', { pin: 'wrong' });
@@ -126,7 +140,7 @@ assert.equal((await json(await request('/admin/1/edit-results/reset-lock', 'POST
 assert.equal((await request('/public/legacy/verify', 'POST', { pin: 'wrong' })).status, 429);
 assert.equal((await json(await request('/admin/1/reset-pin-lock', 'POST'))).status, 'reset');
 assert.notEqual((await request('/public/legacy/verify', 'POST', { pin: 'wrong' })).status, 429);
-const access = await json(await request(`/public/${slug}/edit-results/verify`, 'POST', { password: 'wedding-password' }));
+const access = await json(await request(`/public/${slug}/edit-results/verify`, 'POST', { password: 'pass' }));
 const listing = await json(await request(`/public/${slug}/edit-results?token=${access.token}`));
 assert.equal(listing.expiresAt, null);
 assert.equal(listing.photos[0].folderId, 'ceremony-folder');
@@ -138,7 +152,7 @@ assert.equal((await json(await request(`/public/${slug}/edit-results?token=${acc
 assert.equal((await request(`/admin/${id}`, 'PATCH', { editResultsStatus: 'open' })).status, 200);
 assert.equal((await json(await request(`/public/${slug}/edit-results?token=${access.token}`))).code, 'EDIT_RESULTS_TOKEN_INVALID');
 await run("UPDATE galleries SET edit_results_expires_at = '2000-01-01' WHERE id = ?", [id]);
-assert.equal((await json(await request(`/public/${slug}/edit-results/verify`, 'POST', { password: 'wedding-password' }))).code, 'EDIT_RESULTS_EXPIRED');
+assert.equal((await json(await request(`/public/${slug}/edit-results/verify`, 'POST', { password: 'pass' }))).code, 'EDIT_RESULTS_EXPIRED');
 assert.equal((await json(await request('/admin?mode=wedding&status=closed'))).total, 1);
 assert.equal((await json(await request('/admin?mode=edited&status=closed'))).total, 0);
 assert.ok(driveReads > 0);

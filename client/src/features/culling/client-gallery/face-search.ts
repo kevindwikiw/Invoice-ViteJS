@@ -1,6 +1,6 @@
 import { apiFetch } from '../../../lib/api';
-import { parseError } from '../culling.public';
-import type { GalleryPhoto } from '../culling.types';
+import { normalizeEditResultPhoto, parseError } from '../culling.public';
+import type { EditResultPhoto, GalleryPhoto } from '../culling.types';
 import { prepareSelfie } from './prepare-selfie';
 
 export type FaceSearchSensitivity = 'strict' | 'balanced' | 'wide';
@@ -20,9 +20,11 @@ export type FaceSearchStatus = {
     code?: string;
 };
 
-export type FaceSearchResult = {
+export type FaceSearchSource = 'selection' | 'edited';
+export type FaceSearchResult<T = GalleryPhoto> = {
     status: 'complete';
-    matches: Array<{ photo: GalleryPhoto; distance: number }>;
+    sourceVersion?: string;
+    matches: Array<{ photo: T; distance: number }>;
     total: number;
 } | {
     status: 'indexing';
@@ -34,6 +36,7 @@ export type FaceSearchResult = {
 type FaceSearchInput = {
     galleryId: string;
     token: string;
+    source?: FaceSearchSource;
     selfieFile: File;
     sensitivity: FaceSearchSensitivity;
     soloOnly: boolean;
@@ -49,26 +52,26 @@ declare global {
     }
 }
 
-export async function getFaceSearchStatus(galleryId: string, token: string, signal?: AbortSignal): Promise<FaceSearchStatus> {
-    const response = await apiFetch(`/public/galleries/${encodeURIComponent(galleryId)}/face-search/status`, {
-        headers: { 'x-gallery-token': token },
+export async function getFaceSearchStatus(galleryId: string, token: string, signal?: AbortSignal, source: FaceSearchSource = 'selection'): Promise<FaceSearchStatus> {
+    const response = await apiFetch(`/public/galleries/${encodeURIComponent(galleryId)}/${source === 'edited' ? 'edit-results/' : ''}face-search/status`, {
+        headers: { [source === 'edited' ? 'x-edit-results-token' : 'x-gallery-token']: token },
         signal,
     });
     if (!response.ok) throw await parseError(response, 'Unable to check face search availability.');
     return response.json();
 }
 
-export async function runFaceSearch(input: FaceSearchInput): Promise<FaceSearchResult> {
+export async function runFaceSearch<T extends GalleryPhoto | EditResultPhoto = GalleryPhoto>(input: FaceSearchInput): Promise<FaceSearchResult<T>> {
     const testHook = typeof window !== 'undefined' ? window.__ORBIT_FACE_SEARCH_TEST__ : undefined;
-    if (testHook) return testHook(input);
+    if (testHook && input.source !== 'edited') return testHook(input) as Promise<FaceSearchResult<T>>;
 
     const body = new FormData();
     body.append('selfie', await prepareSelfie(input.selfieFile, input.signal), 'selfie.jpg');
     body.append('sensitivity', input.sensitivity);
     body.append('soloOnly', String(input.soloOnly));
-    const response = await apiFetch(`/public/galleries/${encodeURIComponent(input.galleryId)}/face-search`, {
+    const response = await apiFetch(`/public/galleries/${encodeURIComponent(input.galleryId)}/${input.source === 'edited' ? 'edit-results/' : ''}face-search`, {
         method: 'POST',
-        headers: { 'x-gallery-token': input.token },
+        headers: { [input.source === 'edited' ? 'x-edit-results-token' : 'x-gallery-token']: input.token },
         body,
         signal: input.signal,
     });
@@ -88,9 +91,9 @@ export async function runFaceSearch(input: FaceSearchInput): Promise<FaceSearchR
     }
     if (!response.ok) throw await parseError(response, 'Unable to search faces.');
 
-    const payload = await response.json() as { status: 'complete'; matches?: GalleryPhoto[]; total?: number };
-    const matches = Array.isArray(payload.matches) ? payload.matches.map((photo) => ({ photo, distance: 0 })) : [];
+    const payload = await response.json() as { status: 'complete'; matches?: T[]; total?: number; sourceVersion?: string };
+    const matches = Array.isArray(payload.matches) ? payload.matches.map((photo) => ({ photo: input.source === 'edited' ? normalizeEditResultPhoto(input.galleryId, input.token, photo as EditResultPhoto) as T : photo, distance: 0 })) : [];
     const total = Number(payload.total || matches.length);
     input.onProgress?.({ phase: 'complete', processed: total, total, matches: matches.length });
-    return { status: 'complete', matches, total };
+    return { status: 'complete', matches, total, sourceVersion: payload.sourceVersion };
 }

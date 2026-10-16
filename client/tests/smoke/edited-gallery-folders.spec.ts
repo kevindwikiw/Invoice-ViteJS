@@ -50,7 +50,7 @@ for (const width of [320, 390, 1280]) {
         await folderTrigger.click();
         await folderPanel.getByRole('link', { name: 'Open folder No Watermark', exact: true }).click();
         await expect(page).toHaveURL(/folder=no-watermark/);
-        await expect(page).toHaveURL(/editedPage=1/);
+        await expect(page).not.toHaveURL(/editedPage=1/);
         await expect(folderTrigger).toContainText('No Watermark');
         await expect(folderTrigger).toHaveAttribute('aria-expanded', 'false');
         await expect(grid.locator('img')).toHaveAttribute('src', /clean-photo\/thumbnail/);

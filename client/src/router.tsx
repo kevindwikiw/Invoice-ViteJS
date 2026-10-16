@@ -13,6 +13,22 @@ const FeedbackRoute = lazyRouteComponent(() => import('./pages/Feedback'))
 const FeedbackInboxRoute = lazyRouteComponent(() => import('./pages/FeedbackInbox'))
 const ClientGalleriesRoute = lazyRouteComponent(() => import('./pages/ClientGalleries'))
 const ClientCullingGalleryRoute = lazyRouteComponent(() => import('./pages/ClientCullingGallery'))
+const EditedClientCullingGalleryRoute = lazyRouteComponent(() => import('./pages/ClientCullingGallery'), 'EditedClientCullingGalleryRoute')
+
+type ClientCullingSearch = {
+    folder?: string
+    view?: 'picked' | 'selfie' | 'edit-results'
+    filter?: 'submitted'
+    page?: number
+    editedPage?: number
+    selfieSource?: 'edited' | 'selection'
+    selfiePage?: number
+}
+
+const positiveSearchPage = (value: unknown) => {
+    const page = Number(value)
+    return Number.isSafeInteger(page) && page > 1 ? page : undefined
+}
 
 // Root route - Just the shell
 const rootRoute = createRootRoute({
@@ -42,15 +58,34 @@ const feedbackRoute = createRoute({
 const clientCullingGalleryRoute = createRoute({
     getParentRoute: () => rootRoute,
     path: '/culling/$galleryId',
-    component: ClientCullingGalleryRoute,
-    validateSearch: (search: Record<string, unknown>) => ({
+    component: () => <Outlet />,
+    validateSearch: (search: Record<string, unknown>): ClientCullingSearch => ({
         folder: typeof search.folder === 'string' && search.folder.length <= 256 ? search.folder : undefined,
-        view: (search.view === 'picked' || search.view === 'selfie' || search.view === 'edit-results' ? search.view : 'gallery') as 'gallery' | 'picked' | 'selfie' | 'edit-results',
-        filter: (search.filter === 'submitted' ? 'submitted' : 'none') as 'none' | 'submitted',
-        page: Math.max(1, Number(search.page) || 1),
-        editedPage: Math.max(1, Number(search.editedPage) || 1),
+        view: search.view === 'picked' || search.view === 'selfie' || search.view === 'edit-results' ? search.view : undefined,
+        filter: search.filter === 'submitted' ? 'submitted' : undefined,
+        page: positiveSearchPage(search.page),
+        editedPage: positiveSearchPage(search.editedPage),
+        selfieSource: search.selfieSource === 'edited' || search.selfieSource === 'selection' ? search.selfieSource : undefined,
+        selfiePage: positiveSearchPage(search.selfiePage),
     }),
 })
+
+const clientCullingSelectionRoute = createRoute({
+    getParentRoute: () => clientCullingGalleryRoute,
+    path: '/',
+    component: ClientCullingGalleryRoute,
+})
+
+const clientCullingEditedRoute = createRoute({
+    getParentRoute: () => clientCullingGalleryRoute,
+    path: 'edited',
+    component: EditedClientCullingGalleryRoute,
+})
+
+const clientCullingGalleryRoutes = clientCullingGalleryRoute.addChildren([
+    clientCullingSelectionRoute,
+    clientCullingEditedRoute,
+])
 
 // App Routes (Children of GlobalSidebar/Layout)
 const indexRoute = createRoute({
@@ -118,7 +153,7 @@ const clientGalleriesRoute = createRoute({
 const routeTree = rootRoute.addChildren([
     loginRoute,
     feedbackRoute,
-    clientCullingGalleryRoute,
+    clientCullingGalleryRoutes,
     layoutRoute.addChildren([
         indexRoute,
         createInvoiceRoute,

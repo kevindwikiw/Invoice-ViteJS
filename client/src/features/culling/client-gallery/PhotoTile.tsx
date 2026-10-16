@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, memo } from 'react';
-import { Check, CheckSquare, Download, ImageOff, Loader2, X } from 'lucide-react';
+import { Check, CheckSquare, Download, ImageOff, Loader2, Play, X } from 'lucide-react';
 import clsx from 'clsx';
 
 import { galleryThumbnailUrl } from '../culling.public';
@@ -19,6 +19,7 @@ function PhotoTileView<T extends GalleryDisplayPhoto>({
     thumbnailPriority,
     thumbnailEager,
     downloadPending = false,
+    folderLabel,
     onOpen,
     onPrefetch,
     onToggle,
@@ -35,13 +36,16 @@ function PhotoTileView<T extends GalleryDisplayPhoto>({
     thumbnailPriority?: boolean;
     thumbnailEager?: boolean;
     downloadPending?: boolean;
+    folderLabel?: string;
     onOpen: (driveFileId: string) => void;
     onPrefetch: (photo: T) => void;
     onToggle?: (photo: T) => void;
     onDownload?: (photo: T) => void;
 }) {
     const [hasError, setHasError] = useState(false);
+    const [thumbnailAttempt, setThumbnailAttempt] = useState(0);
     const prefetchTimerRef = useRef<number | null>(null);
+    const thumbnailRetryTimerRef = useRef<number | null>(null);
     const displayLabel = displayPhotoLabel(photo, displayIndex);
 
     const cancelScheduledPrefetch = () => {
@@ -60,6 +64,7 @@ function PhotoTileView<T extends GalleryDisplayPhoto>({
 
     useEffect(() => () => {
         if (prefetchTimerRef.current != null) window.clearTimeout(prefetchTimerRef.current);
+        if (thumbnailRetryTimerRef.current != null) window.clearTimeout(thumbnailRetryTimerRef.current);
     }, []);
 
     return (
@@ -84,7 +89,7 @@ function PhotoTileView<T extends GalleryDisplayPhoto>({
                     <span className="absolute inset-0 block [content-visibility:auto]">
                         {!hasError ? (
                             <img
-                                src={thumbnailUrl ?? galleryThumbnailUrl(galleryId, photo.driveFileId, token, photo.photoToken)}
+                                src={`${thumbnailUrl ?? galleryThumbnailUrl(galleryId, photo.driveFileId, token, photo.photoToken)}${(thumbnailUrl ?? '').includes('?') || !thumbnailUrl ? '&' : '?'}thumbnailRetry=${thumbnailAttempt}`}
                                 alt={displayLabel}
                                 title={displayLabel}
                                 draggable={false}
@@ -96,7 +101,15 @@ function PhotoTileView<T extends GalleryDisplayPhoto>({
                                 className={clsx('h-full w-full object-cover transition-opacity duration-150 motion-reduce:transition-none', !thumbnailPriority && 'opacity-0')}
                                 onLoad={(event) => event.currentTarget.classList.remove('opacity-0')}
                                 onDragStart={(event) => event.preventDefault()}
-                                onError={() => setHasError(true)}
+                                onError={() => {
+                                    if (thumbnailAttempt === 0 && thumbnailRetryTimerRef.current === null) {
+                                        thumbnailRetryTimerRef.current = window.setTimeout(() => {
+                                            thumbnailRetryTimerRef.current = null;
+                                            setThumbnailAttempt(1);
+                                        }, 650);
+                                    }
+                                    else setHasError(true);
+                                }}
                             />
                         ) : (
                             <span className="flex h-full w-full flex-col items-center justify-center bg-[var(--bg-elevated)] text-[var(--text-muted)]">
@@ -119,6 +132,7 @@ function PhotoTileView<T extends GalleryDisplayPhoto>({
                         <div className="pointer-events-none absolute inset-0 border-[3px] border-[var(--accent)] shadow-[inset_0_0_0_1px_var(--bg-deep)]" />
                     </>
                 )}
+                {mode === 'delivery' && photo.mimeType?.toLowerCase().startsWith('video/') && <span aria-hidden="true" className="pointer-events-none absolute left-2 bottom-2 flex h-8 items-center gap-1.5 rounded-full border border-white/25 bg-black/80 px-2.5 text-[10px] font-semibold uppercase tracking-wide text-white shadow"><Play size={12} fill="currentColor" /> Video</span>}
                 {mode === 'delivery' ? (
                     <button type="button" disabled={!downloadUrl || downloadPending} aria-busy={downloadPending} onClick={() => onDownload?.(photo)} aria-label={downloadPending ? `Preparing download for ${displayLabel}` : `Download ${displayLabel}`} title="Download Original" className="absolute right-1 top-1 flex h-11 w-11 items-center justify-center rounded-full text-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-white disabled:opacity-60">
                         <span className="flex h-8 w-8 items-center justify-center rounded-full border border-white/30 bg-black/80 transition-colors [@media(hover:hover)]:hover:bg-black motion-reduce:transition-none">{downloadPending ? <Loader2 size={15} aria-hidden="true" className="animate-spin motion-reduce:animate-none" /> : <Download size={15} aria-hidden="true" />}</span>
@@ -139,6 +153,7 @@ function PhotoTileView<T extends GalleryDisplayPhoto>({
                 <p title={displayLabel} className="min-w-0 truncate font-semibold">{displayLabel}</p>
                 <p className="shrink-0 font-bold uppercase tracking-[0.12em] text-[var(--text-muted)]">#{String(displayIndex + 1).padStart(3, '0')}</p>
             </div>
+            {folderLabel && <p title={folderLabel} className="h-7 truncate px-2 text-xs leading-6 text-[var(--text-muted)] sm:px-2.5">{folderLabel}</p>}
         </article>
     );
 }

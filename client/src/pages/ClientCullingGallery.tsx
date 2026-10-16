@@ -1,13 +1,14 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, useCallback } from 'react';
 import { useNavigate, useParams, useSearch } from '@tanstack/react-router';
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { AlertCircle, Check, CheckSquare, ChevronLeft, ChevronRight, HelpCircle, ImageIcon, ImagePlus, Images, Instagram, Loader2, Lock, Plus, ScanFace, Send, X } from 'lucide-react';
+import { AlertCircle, Check, CheckSquare, ChevronLeft, ChevronRight, HelpCircle, ImageIcon, ImagePlus, Images, Loader2, Lock, Plus, ScanFace, Send, X } from 'lucide-react';
 import clsx from 'clsx';
 
 import {
     calculateAddonQuote,
     getEditResultsStatus,
     galleryPreviewUrl,
+    getPublicGalleryContact,
     getPublicGalleryPhotos,
     submitGallerySelections,
 } from '../features/culling/culling.public';
@@ -27,7 +28,9 @@ import {
 import {
     draftKey,
     galleryThemeKey,
+    hasPendingSelectionDraft,
     photoToSelectedMeta,
+    pendingDraftKey,
     pruneSelectedPhotoMeta,
     readGalleryTheme,
     readSelectedPhotoMetaDraft,
@@ -46,6 +49,7 @@ import { useGalleryStartup } from '../features/culling/client-gallery/useGallery
 import { GalleryHeaderIdentity, GalleryViewTabs, OrbitLogo, ThemeToggle, type GalleryView } from '../features/culling/client-gallery/GalleryChrome';
 import { PhotoTile } from '../features/culling/client-gallery/PhotoTile';
 import { GalleryLockedScreen, PinGate } from '../features/culling/client-gallery/AccessScreens';
+import { GalleryFooter } from '../features/culling/client-gallery/GalleryFooter';
 import { RequestMoreModal, SubmitConfirmationModal, TutorialModal } from '../features/culling/client-gallery/Modals';
 import { Lightbox } from '../features/culling/client-gallery/Lightbox';
 import { FaceSearchModal } from '../features/culling/client-gallery/FaceSearchModal';
@@ -59,31 +63,80 @@ import type {
 
 type GalleryRefineMode = 'none' | 'submitted';
 
-export default function ClientCullingGallery() {
+function RouteTransition({ children = 'Opening Edited Photos…' }: { children?: string }) {
+    return <main role="status" className="flex min-h-dvh items-center justify-center bg-[var(--bg-deep)] px-5 font-sans text-sm text-[var(--text-muted)]">{children}</main>;
+}
+
+export default function ClientCullingGalleryRoute() {
     const { galleryId } = useParams({ from: '/culling/$galleryId' });
+    const navigate = useNavigate({ from: '/culling/$galleryId' });
+    const search = useSearch({ from: '/culling/$galleryId' });
+    const legacyEditedLink = search.view === 'edit-results' || search.view === 'selfie' && search.selfieSource === 'edited';
+
+    useEffect(() => {
+        if (!legacyEditedLink) return;
+        void navigate({
+            to: '/culling/$galleryId/edited',
+            params: { galleryId },
+            search: (current) => ({
+                folder: current.folder,
+                view: current.view === 'selfie' ? 'selfie' : undefined,
+                editedPage: current.editedPage,
+                selfiePage: current.selfiePage,
+            }),
+            replace: true,
+            resetScroll: false,
+        });
+    }, [galleryId, legacyEditedLink, navigate]);
+
+    return legacyEditedLink ? <RouteTransition /> : <ClientCullingGallery pathMode="selection" />;
+}
+
+export function EditedClientCullingGalleryRoute() {
+    return <ClientCullingGallery pathMode="edited" />;
+}
+
+function ClientCullingGallery({ pathMode }: { pathMode: 'selection' | 'edited' }) {
+    const { galleryId } = useParams({ from: '/culling/$galleryId' });
+    const navigate = useNavigate({ from: '/culling/$galleryId' });
     const metadata = useQuery({
         queryKey: ['public-edit-results-status', galleryId],
         queryFn: () => getEditResultsStatus(galleryId),
         staleTime: 60_000,
         retry: false,
     });
+    const weddingNeedsEditedPath = pathMode === 'selection' && metadata.data?.workflow === 'delivery_only';
+    useEffect(() => {
+        if (!weddingNeedsEditedPath) return;
+        void navigate({
+            to: '/culling/$galleryId/edited',
+            params: { galleryId },
+            search: (current) => ({
+                folder: current.folder,
+                view: current.view === 'selfie' ? 'selfie' : undefined,
+                editedPage: current.editedPage,
+                selfiePage: current.selfiePage,
+            }),
+            replace: true,
+            resetScroll: false,
+        });
+    }, [galleryId, navigate, weddingNeedsEditedPath]);
+
     if (!metadata.data) return <main style={readGalleryTheme(galleryId) === 'black' ? BLACK_THEME : WHITE_THEME} className="flex min-h-dvh flex-col items-center justify-center gap-4 bg-[var(--bg-deep)] px-5 font-sans text-center text-[var(--text-primary)]">
         {metadata.isPending ? <p role="status" className="inline-flex items-center gap-2 text-sm font-medium text-[var(--text-secondary)]"><Loader2 size={18} aria-hidden="true" className="animate-spin motion-reduce:animate-none" /> Loading gallery...</p> : <>
             <p role="alert" className="text-sm">{metadata.error?.message || 'Unable to load gallery details.'}</p>
             <button type="button" onClick={() => void metadata.refetch()} className="min-h-11 rounded-md border border-[var(--border)] px-4 text-sm hover:bg-[var(--bg-elevated)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)]">Retry</button>
         </>}
     </main>;
-    return metadata.data.workflow === 'delivery_only' ? <WeddingGallery key={galleryId} galleryId={galleryId} title={metadata.data.title} /> : <SelectionCullingGallery key={galleryId} title={metadata.data.title} />;
+    if (weddingNeedsEditedPath) return <RouteTransition />;
+    return metadata.data.workflow === 'delivery_only'
+        ? <WeddingGallery key={galleryId} galleryId={galleryId} title={metadata.data.title} />
+        : <SelectionCullingGallery key={galleryId} title={metadata.data.title} pathMode={pathMode} />;
 }
 
 function WeddingGallery({ galleryId, title }: { galleryId: string; title?: string }) {
-    const navigate = useNavigate({ from: '/culling/$galleryId' });
-    const { view } = useSearch({ from: '/culling/$galleryId' });
     const [theme, setTheme] = useState<GalleryTheme>(() => readGalleryTheme(galleryId));
     const [token, setToken] = useState(() => localStorage.getItem(`orbit:edit-results-token:${galleryId}`) || '');
-    useEffect(() => {
-        if (view !== 'edit-results') void navigate({ search: (current) => ({ ...current, view: 'edit-results' }), replace: true, resetScroll: false });
-    }, [navigate, view]);
     useEffect(() => {
         const previous = document.title;
         document.title = title ? `${title} | The Orbit Photo` : 'The Orbit Photo';
@@ -94,7 +147,7 @@ function WeddingGallery({ galleryId, title }: { galleryId: string; title?: strin
         else localStorage.removeItem(`orbit:edit-results-token:${galleryId}`);
         setToken(next);
     }, [galleryId]);
-    return <EditResultsGrid galleryId={galleryId} theme={theme} token={token} onToken={onToken} standalone deliveryOnly onToggleTheme={() => {
+    return <EditResultsGrid galleryId={galleryId} theme={theme} token={token} onToken={onToken} standalone deliveryOnly editedPath onToggleTheme={() => {
         setTheme((current) => {
             const next = current === 'black' ? 'white' : 'black';
             localStorage.setItem(galleryThemeKey(galleryId), next);
@@ -103,28 +156,27 @@ function WeddingGallery({ galleryId, title }: { galleryId: string; title?: strin
     }} />;
 }
 
-function SelectionCullingGallery({ title }: { title?: string }) {
+function SelectionCullingGallery({ title, pathMode }: { title?: string; pathMode: 'selection' | 'edited' }) {
     const { galleryId } = useParams({ from: '/culling/$galleryId' });
     const navigate = useNavigate({ from: '/culling/$galleryId' });
-    const { view: urlView, filter: urlFilter, page: urlPage } = useSearch({ from: '/culling/$galleryId' });
+    const { view: searchView, filter: searchFilter, page: searchPage, selfieSource, folder, editedPage, selfiePage } = useSearch({ from: '/culling/$galleryId' });
+    const urlView = (searchView ?? 'gallery') as GalleryView;
+    const urlFilter = searchFilter ?? 'none';
+    const urlPage = searchPage ?? 1;
     const queryClient = useQueryClient();
     const [theme, setTheme] = useState<GalleryTheme>(() => readGalleryTheme(galleryId));
     const [token, setToken] = useState(() => localStorage.getItem(tokenKey(galleryId)) || '');
     const editResultsStorageKey = `orbit:edit-results-token:${galleryId}`;
     const [editResultsToken, setEditResultsToken] = useState(() => localStorage.getItem(editResultsStorageKey) || '');
-    const [showEditResultsGate, setShowEditResultsGate] = useState(false);
     const [unlockedGallery, setUnlockedGallery] = useState<PublicGallery | null>(null);
     const [selectionDraft, setSelectionDraft] = useState(() => ({
-        selectedIds: new Set(readSelectionDraft(galleryId)),
+        selectedIds: new Set(hasPendingSelectionDraft(galleryId) ? readSelectionDraft(galleryId) : []),
         photoMetaById: readSelectedPhotoMetaDraft(galleryId),
     }));
     const [page, setPage] = useState(urlPage);
     const [activeTab, setActiveTab] = useState<GalleryView>(() => urlView as GalleryView);
-    const [downloadTarget, setDownloadTarget] = useState<HTMLDivElement | null>(null);
-    const [expiryTarget, setExpiryTarget] = useState<HTMLDivElement | null>(null);
-    const [editedHelpTarget, setEditedHelpTarget] = useState<HTMLDivElement | null>(null);
     const showSelected = activeTab === 'picked';
-    const [selectionTouched, setSelectionTouched] = useState(() => readSelectionDraft(galleryId).length > 0);
+    const [selectionTouched, setSelectionTouched] = useState(() => hasPendingSelectionDraft(galleryId));
     const [lightboxPhotoId, setLightboxPhotoId] = useState<string | null>(null);
     const [submittedCount, setSubmittedCount] = useState<number | null>(null);
     const [showTutorial, setShowTutorial] = useState(() => Boolean(token) && !localStorage.getItem(tutorialKey(galleryId)));
@@ -148,11 +200,11 @@ function SelectionCullingGallery({ title }: { title?: string }) {
     const [refineMode, setRefineMode] = useState<GalleryRefineMode>(urlFilter as GalleryRefineMode);
     const [faceFilteredPhotos, setFaceFilteredPhotos] = useState<GalleryPhoto[] | null>(null);
     const [faceFilterTotal, setFaceFilterTotal] = useState(0);
-    const [currentYear, setCurrentYear] = useState<number | null>(null);
     const selectedIds = selectionDraft.selectedIds;
     const submittedOnly = refineMode === 'submitted';
     const selectedPhotoMetaById = selectionDraft.photoMetaById;
-    const selectionViewActive = activeTab !== 'edit-results';
+    const editedContext = pathMode === 'edited' || activeTab === 'edit-results' || urlView === 'edit-results' || urlView === 'selfie' && selfieSource === 'edited';
+    const selectionViewActive = !editedContext;
 
     useEffect(() => {
         setPage(urlPage);
@@ -160,21 +212,35 @@ function SelectionCullingGallery({ title }: { title?: string }) {
         setActiveTab(urlView);
     }, [token, editResultsToken, urlFilter, urlPage, urlView]);
 
-    useEffect(() => {
-        setCurrentYear(new Date().getFullYear());
-    }, []);
-
-    const syncGalleryUrl = useCallback((next: { view?: GalleryView; filter?: GalleryRefineMode; page?: number }, replace = false) => {
+    const syncGalleryUrl = useCallback((next: { view?: GalleryView; filter?: GalleryRefineMode; page?: number; selfieSource?: 'selection' | 'edited' }, replace = false) => {
+        const targetView = next.view ?? urlView;
+        const editedTarget = next.view === 'edit-results' || next.selfieSource === 'edited' || pathMode === 'edited' && targetView === 'selfie';
+        if (editedTarget) {
+            void navigate({
+                to: '/culling/$galleryId/edited',
+                params: { galleryId },
+                search: (current) => ({
+                    folder: next.view === 'edit-results' ? current.folder : current.folder ?? folder,
+                    view: targetView === 'selfie' ? 'selfie' : undefined,
+                    editedPage: next.view === 'edit-results' ? current.editedPage : current.editedPage ?? editedPage,
+                    selfiePage: targetView === 'selfie' ? current.selfiePage ?? selfiePage : undefined,
+                }),
+                replace,
+            });
+            return;
+        }
         void navigate({
+            to: '/culling/$galleryId',
+            params: { galleryId },
             search: (current) => ({
-                ...current,
-                view: next.view ?? current.view,
-                filter: next.filter ?? current.filter,
+                view: targetView === 'gallery' ? undefined : targetView,
+                filter: next.filter === undefined ? current.filter : next.filter === 'submitted' ? 'submitted' : undefined,
                 page: next.page ?? current.page,
+                selfieSource: targetView === 'selfie' ? 'selection' : undefined,
             }),
             replace,
         });
-    }, [navigate]);
+    }, [editedPage, folder, galleryId, navigate, pathMode, selfiePage, urlView]);
     // Ref so the photos-cache effect can read current selection without adding it as a dep
     const selectedIdsRef = useRef(selectedIds);
     const photosQuery = useQuery({
@@ -205,15 +271,17 @@ function SelectionCullingGallery({ title }: { title?: string }) {
     const editResultsStatusQuery = useQuery({
         queryKey: ['public-edit-results-status', galleryId],
         queryFn: () => getEditResultsStatus(galleryId),
-        staleTime: 60_000,
+        staleTime: 10_000,
         retry: false,
+        refetchOnWindowFocus: true,
     });
     const faceSearchStatusQuery = useQuery({
         queryKey: ['public-gallery-face-search-status', galleryId, token],
         queryFn: ({ signal }) => getFaceSearchStatus(galleryId, token, signal),
         enabled: Boolean(token) && selectionViewActive,
         retry: false,
-        staleTime: 10_000,
+        staleTime: 0,
+        refetchOnMount: 'always',
         refetchInterval: (query) => query.state.error ? false : 30_000,
     });
     const photos = useMemo(() => photosQuery.data?.photos || [], [photosQuery.data?.photos]);
@@ -252,9 +320,21 @@ function SelectionCullingGallery({ title }: { title?: string }) {
                 return (selectionOrder.get(left.driveFileId) ?? 0) - (selectionOrder.get(right.driveFileId) ?? 0);
             });
     }, [knownPhotosById, selectedPhotoMetaMap, selectionList, submittedPhotos]);
-    const isFaceFilterActive = faceFilteredPhotos !== null && activeTab === 'selfie';
-    const faceSearchAvailable = faceSearchStatusQuery.data?.available === true;
-    const faceSearchControlVisible = faceSearchAvailable || faceFilteredPhotos !== null;
+    const faceSearchUnavailable = faceSearchStatusQuery.isError || faceSearchStatusQuery.data?.available === false;
+    const faceSearchAvailable = faceSearchStatusQuery.data?.available === true && !faceSearchStatusQuery.isError;
+    const faceSearchReady = faceSearchAvailable && faceSearchStatusQuery.isFetchedAfterMount;
+    const isFaceFilterActive = faceFilteredPhotos !== null && activeTab === 'selfie' && faceSearchReady;
+    const faceSearchControlVisible = faceSearchAvailable && faceSearchStatusQuery.isFetchedAfterMount;
+    useEffect(() => {
+        if (!faceSearchUnavailable) return;
+        setFaceFilteredPhotos(null);
+        setFaceFilterTotal(0);
+        setShowFaceSearch(false);
+        if (activeTab === 'selfie') {
+            setActiveTab('gallery');
+            syncGalleryUrl({ view: 'gallery' }, true);
+        }
+    }, [activeTab, faceSearchUnavailable, syncGalleryUrl]);
     const visiblePhotos = useMemo(() => {
         if (activeTab === 'picked') return pickedPhotos;
         if (activeTab !== 'gallery' && activeTab !== 'selfie') return photos;
@@ -272,6 +352,32 @@ function SelectionCullingGallery({ title }: { title?: string }) {
     const countdown = useSelectionCountdown(displayGallery?.selectionDeadlineAt, displayGallery?.serverTime);
     const galleryError = photosQuery.error as (Error & { code?: string; contactUrl?: string | null }) | null;
     const galleryLockCode = galleryError?.code === 'GALLERY_EXPIRED' || galleryError?.code === 'GALLERY_CLOSED' ? galleryError.code : null;
+    const statusData = editResultsStatusQuery.data;
+    const selectionUnavailable = statusData?.selectionAvailable === false
+        || countdown.isExpired
+        || Boolean(displayGallery?.isExpired)
+        || Boolean(galleryLockCode);
+    const editedAccessAvailable = Boolean(statusData?.available);
+    const preferEditedEntry = selectionUnavailable && editedAccessAvailable && !editedContext;
+    const bothAccessUnavailable = pathMode === 'selection' && Boolean(statusData && selectionUnavailable && !editedAccessAvailable);
+    const publicContactQuery = useQuery({
+        queryKey: ['public-gallery-contact', galleryId],
+        queryFn: () => getPublicGalleryContact(galleryId),
+        enabled: bothAccessUnavailable || (selectionUnavailable && editedAccessAvailable),
+        staleTime: 5 * 60_000,
+        retry: false,
+    });
+    const lockedContactUrl = useMemo(() => {
+        const settings = publicContactQuery.data;
+        if (!settings?.contactWhatsappUrl) return null;
+        let phone = settings.contactWhatsappUrl.replace(/\D/g, '');
+        if (phone.startsWith('0')) phone = `62${phone.slice(1)}`;
+        if (!phone) return null;
+        const message = (settings.message || 'Halo Kak Admin Orbit, saya memerlukan bantuan untuk membuka galeri.\n\nIni URL saya: {{gallery_url}}\nSaya client dari: {{gallery_title}}')
+            .replaceAll('{{gallery_url}}', window.location.href)
+            .replaceAll('{{gallery_title}}', displayGallery?.title || title || galleryId);
+        return `https://wa.me/${phone}?text=${encodeURIComponent(message)}`;
+    }, [displayGallery?.title, galleryId, publicContactQuery.data, title]);
     const galleryAvailable = activeTab === 'edit-results'
         ? Boolean(token)
         : Boolean(token && photosQuery.isSuccess && !countdown.isExpired && !displayGallery?.isExpired && !galleryLockCode);
@@ -447,14 +553,14 @@ function SelectionCullingGallery({ title }: { title?: string }) {
         return `https://wa.me/${phone}?text=${encodeURIComponent(text)}`;
     }, [displayGallery?.title, galleryId, requestSettings]);
     const hasUnsavedChanges = useMemo(() => {
-        if (!selectionTouched) return false;
+        if (!selectionTouched || !photosQuery.data) return false;
         const submittedSet = new Set(selectedDriveFileIds.length ? selectedDriveFileIds : submittedPhotos.map((photo) => photo.driveFileId));
         if (selectedCount !== submittedSet.size) return true;
         for (const id of effectiveSelectedIds) {
             if (!submittedSet.has(id)) return true;
         }
         return false;
-    }, [effectiveSelectedIds, selectedCount, selectedDriveFileIds, selectionTouched, submittedPhotos]);
+    }, [effectiveSelectedIds, photosQuery.data, selectedCount, selectedDriveFileIds, selectionTouched, submittedPhotos]);
     const reviewCanOpenRef = useRef(false);
     reviewCanOpenRef.current = galleryAvailable && hasUnsavedChanges && !isOverLimit && activeTab !== 'edit-results' && !showRequestMore && !showTutorial && !showFaceSearch;
 
@@ -463,22 +569,24 @@ function SelectionCullingGallery({ title }: { title?: string }) {
     }, []);
 
     useEffect(() => {
-        if (!hasUnsavedChanges) return;
+        if (!hasUnsavedChanges || !selectionViewActive) return;
         const handleBeforeUnload = (event: BeforeUnloadEvent) => {
             event.preventDefault();
             event.returnValue = '';
         };
         window.addEventListener('beforeunload', handleBeforeUnload);
         return () => window.removeEventListener('beforeunload', handleBeforeUnload);
-    }, [hasUnsavedChanges]);
+    }, [hasUnsavedChanges, selectionViewActive]);
 
     useEffect(() => {
-        if (!token) return;
-        fetch(`/api/public/galleries/${galleryId}/contact`)
+        if (!token || !selectionViewActive) return;
+        const controller = new AbortController();
+        fetch(`/api/public/galleries/${galleryId}/contact`, { signal: controller.signal })
             .then((response) => response.ok ? response.json() : null)
-            .then((settings: GalleryContactSettings | null) => setRequestSettings(settings))
-            .catch(() => setRequestSettings(null));
-    }, [galleryId, token]);
+            .then((settings: GalleryContactSettings | null) => { if (!controller.signal.aborted) setRequestSettings(settings); })
+            .catch(() => { if (!controller.signal.aborted) setRequestSettings(null); });
+        return () => controller.abort();
+    }, [galleryId, token, selectionViewActive]);
 
     useEffect(() => {
         localStorage.removeItem(`orbit_culling_notes_${galleryId}`);
@@ -552,7 +660,8 @@ function SelectionCullingGallery({ title }: { title?: string }) {
             setSubmittedCount(data.selectionCount);
             setSelectionTouched(false);
             setShowSubmitConfirm(false);
-            localStorage.setItem(draftKey(galleryId), JSON.stringify(selectionList));
+            localStorage.removeItem(draftKey(galleryId));
+            localStorage.removeItem(pendingDraftKey(galleryId));
             void queryClient.invalidateQueries({ queryKey: ['public-gallery-photos', galleryId, token] });
         },
     });
@@ -567,13 +676,20 @@ function SelectionCullingGallery({ title }: { title?: string }) {
     }, [submittedCount]);
 
     useEffect(() => {
-        localStorage.setItem(draftKey(galleryId), JSON.stringify(selectionList));
+        if (!photosQuery.data) return;
+        if (hasUnsavedChanges) {
+            localStorage.setItem(draftKey(galleryId), JSON.stringify(selectionList));
+            localStorage.setItem(pendingDraftKey(galleryId), '1');
+        } else {
+            localStorage.removeItem(draftKey(galleryId));
+            localStorage.removeItem(pendingDraftKey(galleryId));
+        }
         localStorage.setItem(selectedPhotoMetaKey(galleryId), JSON.stringify(pruneSelectedPhotoMeta(selectedPhotoMetaById, selectionList)));
-    }, [galleryId, selectedPhotoMetaById, selectionList]);
+    }, [galleryId, hasUnsavedChanges, photosQuery.data, selectedPhotoMetaById, selectionList]);
 
     useEffect(() => {
         const totalPages = photosQuery.data?.totalPages || 0;
-        if (showSelected || showTutorial || startup.preparing || !token || !photosQuery.data || page >= totalPages) return;
+        if (!selectionViewActive || showSelected || showTutorial || startup.preparing || !token || !photosQuery.data || page >= totalPages) return;
 
         const idle = window.setTimeout(() => {
             void queryClient.prefetchQuery({
@@ -584,7 +700,7 @@ function SelectionCullingGallery({ title }: { title?: string }) {
         }, 800);
 
         return () => window.clearTimeout(idle);
-    }, [galleryId, page, photosQuery.data, queryClient, showSelected, showTutorial, startup.preparing, token]);
+    }, [galleryId, page, photosQuery.data, queryClient, showSelected, showTutorial, startup.preparing, token, selectionViewActive]);
 
     const handleToggleSelection = useCallback((photo: GalleryPhoto) => {
         const driveFileId = photo.driveFileId;
@@ -662,10 +778,9 @@ function SelectionCullingGallery({ title }: { title?: string }) {
         if (nextToken) localStorage.setItem(editResultsStorageKey, nextToken);
         else localStorage.removeItem(editResultsStorageKey);
         setEditResultsToken(nextToken);
-        setShowEditResultsGate(!nextToken);
         setActiveTab('edit-results');
-        syncGalleryUrl({ view: 'edit-results' });
-    }, [editResultsStorageKey, syncGalleryUrl]);
+        if (!(urlView === 'selfie' && (pathMode === 'edited' || selfieSource === 'edited'))) syncGalleryUrl({ view: 'edit-results' });
+    }, [editResultsStorageKey, pathMode, syncGalleryUrl, urlView, selfieSource]);
 
     const submissionStatus: SubmissionStatus = submitMutation.isPending
         ? 'pending'
@@ -713,26 +828,37 @@ function SelectionCullingGallery({ title }: { title?: string }) {
             if (activeTab === 'selfie' || faceFilteredPhotos === null) setShowFaceSearch(true);
         }
         setActiveTab(view);
-        syncGalleryUrl({ view, ...((view === 'picked' || view === 'selfie') ? { filter: 'none' as const } : {}) });
+        syncGalleryUrl({ view, ...((view === 'picked' || view === 'selfie') ? { filter: 'none' as const } : {}), ...(view === 'selfie' ? { selfieSource: 'selection' as const } : {}) });
         setLightboxPhotoId(null);
         setPendingLightboxPageMove(null);
     };
 
-    if (!token && activeTab === 'edit-results' && (editResultsToken || showEditResultsGate || urlView === 'edit-results')) {
-        return <EditResultsGrid galleryId={galleryId} theme={theme} token={editResultsToken} onToken={updateEditResultsToken} onToggleTheme={toggleTheme} onViewChange={changeView} onRequestSelectionAccess={() => { setActiveTab('gallery'); syncGalleryUrl({ view: 'gallery' }); }} standalone />;
+    useEffect(() => {
+    if (!preferEditedEntry) return;
+        setActiveTab('edit-results');
+        syncGalleryUrl({ view: 'edit-results' }, true);
+    }, [preferEditedEntry, syncGalleryUrl]);
+
+    if (bothAccessUnavailable) {
+        return <GalleryLockedScreen title={title} expired={Boolean(statusData?.selectionExpired || countdown.isExpired || displayGallery?.isExpired || galleryLockCode === 'GALLERY_EXPIRED')} contactUrl={lockedContactUrl} theme={theme} onToggleTheme={toggleTheme} />;
+    }
+
+    if (preferEditedEntry) return <RouteTransition />;
+
+    if (editedContext || preferEditedEntry) {
+        return <EditResultsGrid galleryId={galleryId} theme={theme} token={editResultsToken} onToken={updateEditResultsToken} onToggleTheme={toggleTheme} onRequestSelectionAccess={selectionUnavailable ? undefined : () => { setActiveTab('gallery'); syncGalleryUrl({ view: 'gallery', selfieSource: 'selection' }); }} selectionUnavailable={selectionUnavailable} selectionContactUrl={lockedContactUrl} standalone editedPath />;
     }
 
     if (token && (countdown.isExpired || displayGallery?.isExpired || galleryLockCode)) {
-        if (activeTab === 'edit-results' && (editResultsToken || showEditResultsGate)) return <EditResultsGrid galleryId={galleryId} theme={theme} token={editResultsToken} onToken={updateEditResultsToken} onToggleTheme={toggleTheme} onViewChange={changeView} standalone />;
-        return <GalleryLockedScreen title={title} expired={countdown.isExpired || Boolean(displayGallery?.isExpired) || galleryLockCode === 'GALLERY_EXPIRED'} contactUrl={galleryError?.contactUrl || fallbackContactUrl} theme={theme} onToggleTheme={toggleTheme} hasEditResults={editResultsStatusQuery.data?.available || Boolean(displayGallery?.hasEditResults)} onAccessEditedPhotos={() => { setShowEditResultsGate(true); changeView('edit-results'); }} />;
+        return <GalleryLockedScreen title={title} expired={countdown.isExpired || Boolean(displayGallery?.isExpired) || galleryLockCode === 'GALLERY_EXPIRED'} contactUrl={galleryError?.contactUrl || fallbackContactUrl} theme={theme} onToggleTheme={toggleTheme} hasEditResults={editResultsStatusQuery.data?.available || Boolean(displayGallery?.hasEditResults)} onAccessEditedPhotos={() => { changeView('edit-results'); }} />;
     }
 
     return (
         <div style={theme === 'black' ? BLACK_THEME : WHITE_THEME} className="font-sans">
         {(!token || startup.preparing) && <div inert={startup.leaving} aria-hidden={startup.leaving} className="gallery-unlock-overlay fixed inset-0 z-[140] overflow-y-auto" data-leaving={startup.leaving}>
-            <PinGate galleryId={galleryId} title={title} theme={theme} onToggleTheme={toggleTheme} initialMode={urlView === 'edit-results' ? 'edited' : 'gallery'} editedSessionAvailable={Boolean(editResultsToken)} onBackToEdited={() => { setActiveTab('edit-results'); syncGalleryUrl({ view: 'edit-results' }); }} onEditResultsUnlocked={updateEditResultsToken} onUnlocked={(nextToken, nextGallery, submittedAt) => { startup.start(submittedAt); setActiveTab('gallery'); if (urlView === 'edit-results') syncGalleryUrl({ view: 'gallery' }); setToken(nextToken); setUnlockedGallery(nextGallery); setShowTutorial(!localStorage.getItem(tutorialKey(galleryId))); }} opening={startup.preparing} leaving={startup.leaving} preparationError={startup.preparing && photosQuery.isError ? 'Unable to load your gallery. Please try again.' : undefined} onRetry={() => void photosQuery.refetch()} />
+            <PinGate galleryId={galleryId} title={title} theme={theme} onToggleTheme={toggleTheme} initialMode="gallery" editedSessionAvailable={Boolean(editResultsToken)} onBackToEdited={() => { setActiveTab('edit-results'); syncGalleryUrl({ view: 'edit-results' }); }} onEditResultsUnlocked={updateEditResultsToken} onUnlocked={(nextToken, nextGallery, submittedAt) => { startup.start(submittedAt); setActiveTab('gallery'); setToken(nextToken); setUnlockedGallery(nextGallery); setShowTutorial(!localStorage.getItem(tutorialKey(galleryId))); }} opening={startup.preparing} leaving={startup.leaving} preparationError={startup.preparing && photosQuery.isError ? 'Unable to load your gallery. Please try again.' : undefined} onRetry={() => void photosQuery.refetch()} />
         </div>}
-        {token && (!startup.preparing || startup.leaving) && <main inert={startup.preparing || showTutorial} aria-hidden={startup.preparing || showTutorial} className={clsx('min-h-screen bg-[var(--bg-deep)] font-sans text-[var(--text-primary)]', activeTab === 'edit-results' && 'flex flex-col')}>
+        {token && (!startup.preparing || startup.leaving) && <main inert={startup.preparing || showTutorial} aria-hidden={startup.preparing || showTutorial} className="min-h-screen bg-[var(--bg-deep)] font-sans text-[var(--text-primary)]">
             <a href="#gallery-content" className="sr-only focus:not-sr-only focus:fixed focus:left-3 focus:top-3 focus:z-[100] focus:rounded-md focus:bg-[var(--accent)] focus:px-3 focus:py-2 focus:text-xs focus:font-semibold focus:text-[var(--bg-deep)]">
                 Skip to gallery
             </a>
@@ -740,13 +866,11 @@ function SelectionCullingGallery({ title }: { title?: string }) {
             <header data-testid="gallery-header" className="sticky top-0 z-40 h-20 select-none border-b border-[var(--border)] bg-[var(--bg-deep)] px-2.5 sm:px-8 lg:h-16">
                 <div className="mx-auto grid h-full max-w-[1600px] min-w-0 grid-cols-[auto_minmax(0,1fr)_auto] grid-rows-[2.75rem_1.5rem] items-center gap-x-2 py-1 lg:flex lg:py-0">
                     <OrbitLogo theme={theme} />
-                    <GalleryHeaderIdentity section={activeTab === 'edit-results' ? 'Edited Photos' : 'Photo Selection'} title={activeTab === 'edit-results' ? title : displayGallery?.title || title} />
+                    <GalleryHeaderIdentity section="Photo Selection" title={displayGallery?.title || title} />
                     <div className="col-start-3 row-start-1 flex shrink-0 items-center gap-1 sm:ml-2 sm:gap-2 lg:ml-auto lg:gap-0">
-                        {activeTab === 'edit-results' && <div ref={setExpiryTarget} className="flex min-w-0 items-center" />}
-                        {activeTab !== 'edit-results' && <div className="lg:pr-2"><CountdownLabel countdown={countdown} compact /></div>}
+                        <div className="lg:pr-2"><CountdownLabel countdown={countdown} compact /></div>
                         <div data-testid="header-utilities" className="flex items-center gap-2">
-                            {activeTab !== 'edit-results' && <button type="button" onClick={() => setShowTutorial(true)} title="How to Submit" aria-label="How to Submit" className="flex h-11 w-11 shrink-0 items-center justify-center px-2 text-[var(--text-secondary)] transition-[color,transform] duration-150 hover:text-[var(--text-primary)] active:scale-[0.97] motion-reduce:transition-none"><HelpCircle size={16} aria-hidden="true" /></button>}
-                            {activeTab === 'edit-results' && <div ref={setEditedHelpTarget} />}
+                            {<button type="button" onClick={() => setShowTutorial(true)} title="How to Submit" aria-label="How to Submit" className="flex h-11 w-11 shrink-0 items-center justify-center px-2 text-[var(--text-secondary)] transition-[color,transform] duration-150 hover:text-[var(--text-primary)] active:scale-[0.97] motion-reduce:transition-none"><HelpCircle size={16} aria-hidden="true" /></button>}
                             <ThemeToggle theme={theme} onToggle={toggleTheme} />
                         </div>
                     </div>
@@ -756,8 +880,8 @@ function SelectionCullingGallery({ title }: { title?: string }) {
             <div data-testid="gallery-toolbar" className="sticky top-20 z-30 select-none border-b border-[var(--border)] bg-[var(--bg-deep)] px-2.5 py-2 [touch-action:manipulation] sm:px-8 sm:py-2.5 lg:top-16">
                 <div data-testid="gallery-toolbar-inner" className="mx-auto flex max-w-[1600px] items-center gap-1 sm:gap-x-2">
                     <div ref={allPhotosMenuRef} className="relative flex w-[calc((100%-0.375rem)/2)] min-w-0 flex-none items-center gap-1 sm:w-auto sm:gap-2">
-                        <GalleryViewTabs value={activeTab === 'picked' ? 'gallery' : activeTab} galleryAvailable={galleryAvailable} galleryLabel={activeTab === 'picked' ? 'Picked' : submittedOnly ? 'Submitted' : 'All Photos'} editedAvailable={editResultsStatusQuery.data?.available ?? Boolean(displayGallery?.hasEditResults)} editedExpired={Boolean(editResultsStatusQuery.data?.isExpired)} selfieAvailable={faceSearchControlVisible} allPhotosMenuOpen={showRefine} allPhotosButtonRef={allPhotosButtonRef} onAllPhotos={activeTab === 'edit-results' ? () => changeView('gallery') : openAllPhotosMenu} onChange={changeView} />
-                        {showRefine && activeTab !== 'edit-results' && (
+                        <GalleryViewTabs value={activeTab === 'picked' ? 'gallery' : activeTab} galleryAvailable={galleryAvailable} galleryLabel={activeTab === 'picked' ? 'Picked' : submittedOnly ? 'Submitted' : 'All Photos'} editedAvailable={editResultsStatusQuery.data?.available ?? Boolean(displayGallery?.hasEditResults)} editedExpired={Boolean(editResultsStatusQuery.data?.isExpired)} selfieAvailable={faceSearchControlVisible} allPhotosMenuOpen={showRefine} allPhotosButtonRef={allPhotosButtonRef} onAllPhotos={openAllPhotosMenu} onChange={changeView} />
+                        {showRefine && (
                             <div ref={allPhotosDropdownRef} className="absolute left-0 top-[calc(100%+8px)] z-[80] w-[min(204px,calc(100vw-16px))] rounded-lg border border-[var(--border)] bg-[var(--bg-deep)] p-1.5 shadow-xl transition-[opacity,transform] duration-150 motion-reduce:transition-none" role="menu" aria-label="All Photos views">
                                 <button type="button" role="menuitemradio" aria-checked={refineMode === 'none' && activeTab === 'gallery'} onClick={() => chooseRefineMode('none')} className={clsx('flex min-h-11 w-full items-center justify-between gap-2 rounded-md px-2.5 text-[13px] font-medium', refineMode === 'none' && activeTab === 'gallery' ? 'bg-[var(--accent)] text-[var(--bg-deep)]' : 'text-[var(--text-secondary)] hover:bg-[var(--bg-card)]')}>
                                     <span className="flex items-center gap-2"><ImageIcon size={15} aria-hidden="true" />All Photos</span>{refineMode === 'none' && activeTab === 'gallery' && <Check size={14} aria-hidden="true" />}
@@ -774,42 +898,39 @@ function SelectionCullingGallery({ title }: { title?: string }) {
                     </div>
 
                     <div className="ml-auto flex min-w-0 shrink-0 items-center gap-1 sm:gap-2 lg:gap-0">
-                    {activeTab !== 'edit-results' && <div data-testid="selection-summary" className={clsx('inline-flex min-w-0 items-center gap-1 whitespace-nowrap text-xs text-[var(--text-secondary)] transition-transform duration-[320ms] ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none sm:gap-2 sm:text-sm lg:pr-2', requestMoreUrl && !shouldShowRequestMore && 'translate-x-[4rem] min-[390px]:translate-x-[4.75rem] sm:translate-x-20 md:translate-x-[10.5rem] lg:translate-x-44')}>
+                    {<div data-testid="selection-summary" className={clsx('inline-flex min-w-0 items-center gap-1 whitespace-nowrap text-xs text-[var(--text-secondary)] transition-transform duration-[320ms] ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none sm:gap-2 sm:text-sm lg:pr-2', requestMoreUrl && !shouldShowRequestMore && 'translate-x-[4rem] min-[390px]:translate-x-[4.75rem] sm:translate-x-20 md:translate-x-[10.5rem] lg:translate-x-44')}>
                         <span className="inline-flex items-center gap-1"><Images size={14} aria-hidden="true" className="shrink-0" /><strong className="tabular-nums text-[var(--text-primary)]">{selectedCount}{selectionLimit ? `/${selectionLimit}` : ''}</strong>{' '}<span className="hidden md:inline">selected</span></span>
                         <span className={clsx('hidden items-center gap-1 sm:inline-flex', isOverLimit && 'text-rose-400')}><ImagePlus size={14} aria-hidden="true" />{selectionLimit ? `${isOverLimit ? overLimitCount : remainingSelections} ${isOverLimit ? 'over' : 'left'}` : 'Unlimited'}</span>
                         <span data-testid="selection-count-announcement" aria-live="polite" className="sr-only">{selectedCount} selected{selectionLimit ? ` of ${selectionLimit}; ${isOverLimit ? `${overLimitCount} over limit` : `${remainingSelections} remaining`}` : ''}</span>
                         <span role="status" className="sr-only">{submissionStatusLabel(submissionStatus)}</span>
                     </div>}
-                    {activeTab !== 'edit-results' && requestMoreUrl && <div data-testid="request-more-group" aria-hidden={!shouldShowRequestMore} inert={!shouldShowRequestMore} className={clsx('w-[3.75rem] shrink-0 transition-[opacity,transform] duration-[280ms] ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none min-[390px]:w-[4.5rem] md:w-40 lg:w-44', shouldShowRequestMore ? 'translate-y-0 opacity-100' : 'pointer-events-none translate-y-1 opacity-0')}>
+                    {requestMoreUrl && <div data-testid="request-more-group" aria-hidden={!shouldShowRequestMore} inert={!shouldShowRequestMore} className={clsx('w-[3.75rem] shrink-0 transition-[opacity,transform] duration-[280ms] ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none min-[390px]:w-[4.5rem] md:w-40 lg:w-44', shouldShowRequestMore ? 'translate-y-0 opacity-100' : 'pointer-events-none translate-y-1 opacity-0')}>
                         <button type="button" aria-label="Request more editing slots" title="Request more editing slots" onClick={() => { setShowRequestMore(true); void photosQuery.refetch(); }} className="inline-flex h-11 w-full shrink-0 items-center justify-center gap-0.5 whitespace-nowrap rounded-md border border-[var(--border)] px-0.5 text-[11px] font-semibold text-[var(--text-secondary)] transition-colors hover:bg-[var(--bg-card)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)] min-[390px]:gap-1 min-[390px]:px-2 md:gap-2 md:px-3 md:text-sm lg:px-4 lg:text-[15px]"><Plus size={14} aria-hidden="true" /><span className="md:hidden">More</span><span className="hidden md:inline">Request More</span></button>
                     </div>}
-                        <div ref={setDownloadTarget} className={activeTab === 'edit-results' ? 'flex min-w-0 shrink-0 items-center justify-end' : 'hidden'} />
                     </div>
                 </div>
             </div>
 
-            <section id="gallery-content" tabIndex={-1} className={clsx('mx-auto w-full max-w-[1664px] px-2.5 pt-3 pb-10 outline-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)] sm:px-8 sm:pt-5 sm:pb-12 md:pt-6', activeTab === 'edit-results' ? 'flex-1 scroll-mt-44 sm:scroll-mt-28' : 'scroll-mt-44 lg:scroll-mt-36')}>
-                {activeTab !== 'edit-results' && limitMessage && (
+            <section id="gallery-content" tabIndex={-1} className="mx-auto w-full max-w-[1664px] scroll-mt-44 px-2.5 pt-3 pb-10 outline-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)] sm:px-8 sm:pt-5 sm:pb-12 md:pt-6 lg:scroll-mt-36">
+                {limitMessage && (
                     <div role="alert" className="mb-4 text-xs text-[var(--text-muted)] border border-[var(--border)] p-3 rounded-lg bg-[var(--bg-card)]">
                         {limitMessage} {requestMoreUrl && <button type="button" onClick={() => setShowRequestMore(true)} className="ml-1 font-semibold underline text-[var(--text-primary)]">Request more</button>}
                     </div>
                 )}
-                {activeTab !== 'edit-results' && submittedCount !== null && (
+                {submittedCount !== null && (
                     <div ref={submitSuccessRef} role="status" tabIndex={-1} aria-live="polite" className="mb-5 flex items-center gap-3 border border-[var(--border)] bg-[var(--bg-card)] px-4 py-3 text-sm text-[var(--text-primary)] outline-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)]">
                         <Check size={16} aria-hidden="true" />
                         Selection saved. {submittedCount} filenames submitted.
                     </div>
                 )}
-                {activeTab !== 'edit-results' && submitMutation.isError && !showSubmitConfirm && (
+                {submitMutation.isError && !showSubmitConfirm && (
                     <div ref={submitErrorRef} role="alert" tabIndex={-1} aria-live="assertive" className="mb-5 flex items-center gap-3 border border-[var(--border)] bg-[var(--bg-card)] px-4 py-3 text-sm text-[var(--text-primary)] outline-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)]">
                         <AlertCircle size={16} aria-hidden="true" />
                         {submitMutation.error instanceof Error ? submitMutation.error.message : 'Unable to submit selections.'}
                     </div>
                 )}
 
-                {activeTab === 'edit-results' ? (
-                    <EditResultsGrid galleryId={galleryId} theme={theme} token={editResultsToken} onToken={updateEditResultsToken} downloadTarget={downloadTarget} expiryTarget={expiryTarget} helpTarget={editedHelpTarget} />
-                ) : (submittedOnly ? submittedPhotosQuery.isLoading : photosQuery.isLoading) ? (
+                {(submittedOnly ? submittedPhotosQuery.isLoading : photosQuery.isLoading) ? (
                     <div role="status" aria-live="polite" className="flex min-h-[60vh] items-center justify-center gap-3 text-sm text-[var(--text-muted)]">
                         <Loader2 size={24} aria-hidden="true" className="animate-spin text-[var(--accent)]" />
                         <span>Loading photos…</span>
@@ -820,6 +941,11 @@ function SelectionCullingGallery({ title }: { title?: string }) {
                         <p className="font-display text-2xl text-[var(--text-primary)]">Gallery Session Expired</p>
                         <p className="mt-2 max-w-sm text-sm leading-6 text-[var(--text-muted)]">The gallery was reopened or your session expired. Enter the password again to continue.</p>
                         <button type="button" onClick={() => { localStorage.removeItem(tokenKey(galleryId)); setToken(''); }} className="mt-6 flex h-10 items-center justify-center gap-2 rounded-lg bg-[var(--accent)] px-5 text-[10px] font-black uppercase tracking-[0.14em] text-[var(--bg-deep)] transition-opacity hover:opacity-85"><Lock size={14} /> Enter password again</button>
+                    </div>
+                ) : activeTab === 'selfie' && !faceSearchReady ? (
+                    <div role="status" aria-live="polite" className="flex min-h-[60vh] items-center justify-center gap-3 text-sm text-[var(--text-muted)]">
+                        <Loader2 size={20} aria-hidden="true" className="animate-spin motion-reduce:animate-none" />
+                        <span>Checking selfie search…</span>
                     </div>
                 ) : !visiblePhotos.length ? (
                     <div className="flex min-h-[60vh] flex-col items-center justify-center text-center">
@@ -877,14 +1003,7 @@ function SelectionCullingGallery({ title }: { title?: string }) {
                 </div>
             </div>}
 
-            <footer className={clsx('border-t border-[var(--border)] px-4 py-4 font-sans text-xs leading-5 text-[var(--text-muted)] md:px-8', (showSelectionActionBar || activeTab === 'edit-results') && 'pb-[calc(5rem+env(safe-area-inset-bottom))] sm:pb-24')}>
-                <div className="mx-auto flex max-w-[1600px] items-center justify-between gap-2 sm:gap-3">
-                    <p className="min-w-0 whitespace-nowrap"><span className="sm:hidden">&copy; {currentYear ?? ''} The Orbit Photo</span><span className="hidden sm:inline">&copy; {currentYear ?? ''} The Orbit Photo. All rights reserved.</span></p>
-                    <a href="https://www.instagram.com/theorbitphoto/" target="_blank" rel="noreferrer" aria-label="@theorbitphoto on Instagram" className="inline-flex min-h-11 items-center gap-2 font-medium text-[var(--text-secondary)] transition-colors hover:text-[var(--text-primary)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)]">
-                        <Instagram size={16} aria-hidden="true" /> @theorbitphoto
-                    </a>
-                </div>
-            </footer>
+            <GalleryFooter className={clsx(showSelectionActionBar && 'pb-[calc(5rem+env(safe-area-inset-bottom))] sm:pb-24')} />
 
             <Lightbox
                 galleryId={galleryId}

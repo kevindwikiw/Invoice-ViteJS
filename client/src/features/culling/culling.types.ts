@@ -65,6 +65,7 @@ export interface GallerySummary {
 export interface GalleryDisplayPhoto {
     driveFileId: string;
     filename: string;
+    mimeType?: string;
     width?: number | null;
     height?: number | null;
     displayOrder: number;
@@ -137,6 +138,7 @@ export interface PublicGallery {
 }
 
 export interface EditResultPhoto extends GalleryDisplayPhoto {
+    sourceVersion?: string | null;
     folderId?: string | null;
     mimeType: string;
     thumbnailUrl: string;
@@ -151,6 +153,7 @@ export type PairingPhoto = { driveFileId: string; filename: string; thumbnailUrl
 export type EditResultPairing = { comparisonEnabled: boolean; comparisonPairs: EditResultPair[]; submitted: PairingPhoto[]; edited: PairingPhoto[] };
 
 export interface EditResults {
+    sourceVersion?: string | null;
     folders?: Array<{ id: string; parentId: string | null; name: string }>;
     photos: EditResultPhoto[];
     publishedAt: string;

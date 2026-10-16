@@ -25,7 +25,7 @@ async function refreshThumbnail(photo: SelectionImage, key: string, failedUrl?: 
     if (pending) return pending;
 
     const operation = (async () => {
-        const metadata = await getDrivePhotoMetadata(photo.driveFileId);
+        const metadata = await getDrivePhotoMetadata(photo.driveFileId, { timeoutMs: 5_000, maxAttempts: 1 });
         if (!metadata.thumbnailLink) throw new Error("Google Drive did not return a thumbnail for this photo.");
         // Old signed photo tokens retain their old URL. Repair storage without overwriting a later sync.
         await galleryRun(`UPDATE gallery_photos SET thumbnail_url = ?, web_view_url = ?
@@ -46,11 +46,14 @@ export async function fetchSelectionImage(photo: SelectionImage, width: 320 | 16
     const key = JSON.stringify([photo.galleryId, photo.driveFileId, photo.thumbnailUrl ?? null]);
     const thumbnail = cachedThumbnail(key) || photo.thumbnailUrl || undefined;
     if (thumbnail) {
-        try { return await fetchDriveFile(photo.driveFileId, thumbnail, width, width === 1600); }
-        catch { /* Refresh short-lived Drive links once, shared by thumbnail and preview requests. */ }
+        try { return await fetchDriveFile(photo.driveFileId, thumbnail, width, width === 1600, { timeoutMs: 5_000, maxAttempts: 1 }); }
+        catch (error) {
+            const status = typeof error === 'object' && error !== null && 'status' in error ? Number(error.status) : null;
+            if (status !== 401 && status !== 403 && status !== 404 && status !== 410) throw error;
+        }
     }
     const refreshed = await refreshThumbnail(photo, key, thumbnail);
-    try { return await fetchDriveFile(photo.driveFileId, refreshed, width, width === 1600); }
+    try { return await fetchDriveFile(photo.driveFileId, refreshed, width, width === 1600, { timeoutMs: 5_000, maxAttempts: 1 }); }
     catch (error) {
         if (refreshedThumbnails.get(key)?.url === refreshed) refreshedThumbnails.delete(key);
         throw error;

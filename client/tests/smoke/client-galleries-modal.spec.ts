@@ -122,7 +122,7 @@ test('Selection Events row keeps both statuses and client links independent', as
     await editedActions.getByRole('button', { name: `${gallery.title} Edited Photos client link actions` }).click();
     await expect(editedMenu.getByRole('link', { name: `Open edited Drive folder for ${gallery.title}` })).toHaveAttribute('href', /\/folders\/edited-folder$/);
     await expect(editedMenu.getByRole('button', { name: 'Copy Edited Photos link' })).toBeInViewport();
-    await expect(editedMenu.getByRole('link', { name: 'Open Edited Photos link' })).toHaveAttribute('href', /\?view=edit-results$/);
+    await expect(editedMenu.getByRole('link', { name: 'Open Edited Photos link' })).toHaveAttribute('href', /\/culling\/[^?]+\/edited$/);
     await expect(editedMenu.getByRole('link', { name: 'Open Photo Selection link' })).toHaveCount(0);
     await page.keyboard.press('Escape');
     await editedActions.getByRole('button', { name: `${gallery.title} Edited Photos maintenance actions` }).click();
@@ -647,7 +647,7 @@ test('edited results folder can be published with an admin-defined password', as
         } else await route.fulfill({ json: { gallery, photos: [], selections: [] } });
     });
     await page.route('**/api/galleries/7/edit-results/publish', (route) => {
-        expect(route.request().postDataJSON()).toEqual({ password: 'delivery-secret' });
+        expect(route.request().postDataJSON()).toEqual({ password: 'pass' });
         gallery = { ...gallery, hasEditResults: true, editResultsPhotoCount: 2, editResultsPublishedAt: '2026-10-01T00:00:00.000Z' };
         return route.fulfill({ status: 201, json: { publishedAt: gallery.editResultsPublishedAt, photoCount: 2 } });
     });
@@ -661,18 +661,18 @@ test('edited results folder can be published with an admin-defined password', as
     await dialog.getByRole('button', { name: 'Save Edited Photos' }).click();
     await expect.poll(() => gallery.editResultsFolderId).toBe('https://drive.google.com/drive/folders/edited-folder');
     await expect.poll(() => gallery.editResultsZipFileId).toBe('https://drive.google.com/file/d/edited-archive/view');
-    await dialog.getByLabel('Password for publication').fill('delivery-secret');
+    await dialog.getByLabel('Password for publication').fill('pass');
     await expect(dialog.getByLabel('Password for publication')).toHaveAttribute('type', 'password');
     await dialog.getByRole('button', { name: 'Show password', exact: true }).click();
     await expect(dialog.getByLabel('Password for publication')).toHaveAttribute('type', 'text');
-    await expect(dialog.getByLabel('Password for publication')).toHaveValue('delivery-secret');
+    await expect(dialog.getByLabel('Password for publication')).toHaveValue('pass');
     await dialog.getByRole('button', { name: 'Hide password', exact: true }).click();
     await expect(dialog.getByLabel('Password for publication')).toHaveAttribute('type', 'password');
     await dialog.getByRole('button', { name: 'Show password', exact: true }).click();
     await dialog.getByRole('button', { name: 'Save Edited Photos', exact: true }).click();
     await expect(dialog.getByLabel('Password for publication')).toHaveValue('');
     await expect(dialog.getByLabel('Password for publication')).toHaveAttribute('type', 'password');
-    await expect(dialog.getByText('2 edited photos published')).toBeVisible();
+    await expect(page.getByText('Published 2 edited items across 1 folders with your delivery password.')).toBeVisible();
 });
 
 test('admin actions explain save prerequisites and preserve drafts on API failures', async ({ page }) => {
@@ -694,7 +694,7 @@ test('admin actions explain save prerequisites and preserve drafts on API failur
     });
     await page.route('**/api/galleries/7/edit-results/publish', (route) => {
         publishes++;
-        expect(route.request().postDataJSON().password).toBe('delivery-secret');
+        expect(route.request().postDataJSON().password).toBe('pass');
         return route.fulfill({ status: 400, json: { error: 'Edited folder cannot be read. Check Drive sharing.' } });
     });
     await page.route('**/api/galleries/7/sync', (route) => { syncs++; return route.fulfill({ status: 500, json: { error: 'Drive sync unavailable.' } }); });
@@ -710,7 +710,7 @@ test('admin actions explain save prerequisites and preserve drafts on API failur
     await dialog.getByRole('button', { name: 'Save Photo Selection' }).click();
     await expect(dialog.getByRole('alert')).toHaveText('Unable to update client PIN.');
     await dialog.getByRole('tab', { name: 'Edited Photos', exact: true }).click();
-    await dialog.getByLabel('Password for publication').fill('delivery-secret');
+    await dialog.getByLabel('Password for publication').fill('pass');
     failSave = false;
     await dialog.getByRole('button', { name: 'Save Edited Photos', exact: true }).click();
     await expect(dialog.getByRole('alert')).toHaveText('Republish failed. Edited folder cannot be read. Check Drive sharing.');
@@ -725,7 +725,7 @@ test('admin actions explain save prerequisites and preserve drafts on API failur
     await expect(dialog.getByRole('alert')).toHaveText('Sync failed. Drive sync unavailable.');
     await dialog.getByRole('tab', { name: 'Edited Photos', exact: true }).click();
     await expect(dialog.getByText('Unsaved changes', { exact: true })).toBeVisible();
-    await expect(dialog.getByLabel('Password for publication')).toHaveValue('delivery-secret');
+    await expect(dialog.getByLabel('Password for publication')).toHaveValue('pass');
     await expect(dialog.getByLabel('Edited photos Drive folder')).toHaveValue('new-edited-folder');
     await dialog.getByRole('button', { name: 'Save Edited Photos' }).click();
     await expect(dialog.getByRole('alert')).toHaveText('Republish failed. Edited folder cannot be read. Check Drive sharing.');
@@ -745,14 +745,17 @@ test('publishing validates the folder and password before sending a request', as
     await page.getByText(gallery.title, { exact: true }).click();
     const dialog = page.getByRole('dialog');
     await dialog.getByRole('tab', { name: 'Edited Photos' }).click();
-    await dialog.getByLabel('Password for publication').fill('delivery-secret');
+    await dialog.getByLabel('Password for publication').fill('pass');
     await dialog.getByRole('button', { name: 'Save Edited Photos' }).click();
     await expect(dialog.getByRole('alert')).toContainText('Add an Edited photos Drive folder');
     await dialog.getByLabel('Edited photos Drive folder').fill('edited-folder');
     await dialog.getByLabel('Password for publication').fill('short');
     await dialog.getByRole('button', { name: 'Save Edited Photos' }).click();
-    await expect(dialog.getByRole('alert')).toContainText(/6 characters|lengthen/i);
-    expect(publishes).toBe(0);
+    await expect(dialog.getByLabel('Password for publication')).toHaveAttribute('maxlength', '4');
+    await dialog.getByLabel('Password for publication').fill('12345');
+    await expect(dialog.getByLabel('Password for publication')).toHaveValue('1234');
+    await dialog.getByRole('button', { name: 'Save Edited Photos' }).click();
+    await expect.poll(() => publishes).toBe(1);
 });
 
 test('comparison pairing auto-pairs equal counts without a confirmation step', async ({ page }) => {

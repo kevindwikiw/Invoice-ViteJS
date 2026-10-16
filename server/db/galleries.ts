@@ -165,6 +165,7 @@ const GALLERY_SCHEMA = [
     `CREATE TABLE IF NOT EXISTS face_index_jobs (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         gallery_id INTEGER NOT NULL REFERENCES galleries(id) ON DELETE CASCADE,
+        source_scope TEXT NOT NULL DEFAULT 'selection' CHECK(source_scope IN ('selection', 'edited')),
         status TEXT NOT NULL DEFAULT 'queued' CHECK(status IN ('queued', 'running', 'completed', 'failed', 'cancelled')),
         model_version TEXT NOT NULL,
         source_version TEXT NOT NULL DEFAULT '',
@@ -180,6 +181,7 @@ const GALLERY_SCHEMA = [
     `CREATE TABLE IF NOT EXISTS face_embeddings (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         gallery_id INTEGER NOT NULL REFERENCES galleries(id) ON DELETE CASCADE,
+        source_scope TEXT NOT NULL DEFAULT 'selection' CHECK(source_scope IN ('selection', 'edited')),
         drive_file_id TEXT NOT NULL,
         face_index INTEGER NOT NULL DEFAULT 0,
         embedding TEXT NOT NULL,
@@ -188,16 +190,17 @@ const GALLERY_SCHEMA = [
         model_version TEXT NOT NULL,
         created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
         updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-        UNIQUE(gallery_id, drive_file_id, face_index, model_version)
+        UNIQUE(gallery_id, source_scope, drive_file_id, face_index, model_version)
     )`,
     "CREATE INDEX IF NOT EXISTS idx_face_embeddings_gallery_file ON face_embeddings(gallery_id, drive_file_id)",
     `CREATE TABLE IF NOT EXISTS face_index_photos (
         gallery_id INTEGER NOT NULL REFERENCES galleries(id) ON DELETE CASCADE,
+        source_scope TEXT NOT NULL DEFAULT 'selection' CHECK(source_scope IN ('selection', 'edited')),
         drive_file_id TEXT NOT NULL,
         source_version TEXT NOT NULL,
         model_version TEXT NOT NULL,
         is_solo INTEGER NOT NULL DEFAULT 0,
-        PRIMARY KEY (gallery_id, drive_file_id, model_version)
+        PRIMARY KEY (gallery_id, source_scope, drive_file_id, model_version)
     )`,
     `CREATE TABLE IF NOT EXISTS gallery_edit_requests (id INTEGER PRIMARY KEY AUTOINCREMENT, gallery_id INTEGER NOT NULL REFERENCES galleries(id) ON DELETE CASCADE, requested_additional_count INTEGER NOT NULL, pricing_mode TEXT NOT NULL, package_id INTEGER, unit_price INTEGER, quoted_total INTEGER, status TEXT NOT NULL DEFAULT 'pending', client_note TEXT, admin_note TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)`,
     "CREATE INDEX IF NOT EXISTS idx_gallery_selections_gallery ON gallery_selections(gallery_id, selected_filename)",
@@ -257,10 +260,16 @@ const GALLERY_REQUIRED_COLUMNS: Array<readonly [string, string]> = [
     ["access_version", "INTEGER NOT NULL DEFAULT 1"],
     ["face_source_version", "TEXT"],
     ["face_source_revision", "INTEGER NOT NULL DEFAULT 0"],
+    ["edited_face_source_version", "TEXT"],
+    ["edited_face_source_revision", "INTEGER NOT NULL DEFAULT 0"],
 ];
 
 const FACE_SOURCE_SCHEMA = [
+    "CREATE INDEX IF NOT EXISTS idx_face_jobs_scope_source ON face_index_jobs(gallery_id, source_scope, model_version, source_version, id)",
     "CREATE INDEX IF NOT EXISTS idx_face_jobs_source ON face_index_jobs(gallery_id, model_version, source_version, id)",
+    "CREATE INDEX IF NOT EXISTS idx_face_jobs_scope_status ON face_index_jobs(gallery_id, source_scope, model_version, status, id DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_face_embeddings_scope_model ON face_embeddings(gallery_id, source_scope, model_version, drive_file_id, source_version)",
+    "CREATE INDEX IF NOT EXISTS idx_face_photos_scope_model ON face_index_photos(gallery_id, source_scope, model_version, drive_file_id, source_version, is_solo)",
     `CREATE TRIGGER IF NOT EXISTS face_source_insert AFTER INSERT ON gallery_photos BEGIN
         UPDATE galleries SET face_source_revision = face_source_revision + 1, face_source_version = NULL WHERE id = NEW.gallery_id;
     END`,
@@ -274,6 +283,17 @@ const FACE_SOURCE_SCHEMA = [
     BEGIN
         UPDATE galleries SET face_source_revision = face_source_revision + 1, face_source_version = NULL WHERE id IN (OLD.gallery_id, NEW.gallery_id);
     END`,
+    `CREATE TRIGGER IF NOT EXISTS edited_face_source_insert AFTER INSERT ON gallery_edit_result_photos BEGIN
+        UPDATE galleries SET edited_face_source_revision = edited_face_source_revision + 1, edited_face_source_version = NULL WHERE id = NEW.gallery_id;
+    END`,
+    `CREATE TRIGGER IF NOT EXISTS edited_face_source_delete AFTER DELETE ON gallery_edit_result_photos BEGIN
+        UPDATE galleries SET edited_face_source_revision = edited_face_source_revision + 1, edited_face_source_version = NULL WHERE id = OLD.gallery_id;
+    END`,
+    `CREATE TRIGGER IF NOT EXISTS edited_face_source_update AFTER UPDATE ON gallery_edit_result_photos
+    WHEN OLD.gallery_id IS NOT NEW.gallery_id OR OLD.drive_file_id IS NOT NEW.drive_file_id OR OLD.source_version IS NOT NEW.source_version
+    BEGIN
+        UPDATE galleries SET edited_face_source_revision = edited_face_source_revision + 1, edited_face_source_version = NULL WHERE id IN (OLD.gallery_id, NEW.gallery_id);
+    END`,
 ];
 
 const GALLERY_SELECTION_REQUIRED_COLUMNS: Array<readonly [string, string]> = [
@@ -286,15 +306,44 @@ const GALLERY_PHOTO_REQUIRED_COLUMNS: Array<readonly [string, string]> = [
 
 const FACE_INDEX_JOB_REQUIRED_COLUMNS: Array<readonly [string, string]> = [
     ["source_version", "TEXT NOT NULL DEFAULT ''"],
+    ["source_scope", "TEXT NOT NULL DEFAULT 'selection'"],
 ];
 
 const FACE_INDEX_PHOTO_REQUIRED_COLUMNS: Array<readonly [string, string]> = [
     ["is_solo", "INTEGER NOT NULL DEFAULT 0"],
+    ["source_scope", "TEXT NOT NULL DEFAULT 'selection'"],
 ];
 
-const EDIT_RESULT_REQUIRED_COLUMNS: Array<readonly [string, string]> = [["before_photo", "TEXT"], ["folder_id", "TEXT"]];
+const FACE_EMBEDDING_REQUIRED_COLUMNS: Array<readonly [string, string]> = [["source_scope", "TEXT NOT NULL DEFAULT 'selection'"]];
 
-type GalleryTableWithMigrations = "galleries" | "gallery_selections" | "gallery_photos" | "face_index_jobs" | "face_index_photos" | "gallery_edit_result_photos";
+const EDIT_RESULT_REQUIRED_COLUMNS: Array<readonly [string, string]> = [["before_photo", "TEXT"], ["folder_id", "TEXT"], ["source_version", "TEXT NOT NULL DEFAULT ''"]];
+
+async function migrateFaceScopes(): Promise<void> {
+    for (const table of ['face_embeddings', 'face_index_photos'] as const) {
+        const query = `SELECT sql FROM sqlite_master WHERE type = 'table' AND name = '${table}'`;
+        const sql = galleryTurso
+            ? String((await galleryTurso.execute(query)).rows[0]?.sql || '')
+            : (await one<{ sql: string }>(query))?.sql || '';
+        if (/\(gallery_id,\s*source_scope,/.test(sql)) continue;
+        const definition = GALLERY_SCHEMA.find((statement) => statement.startsWith(`CREATE TABLE IF NOT EXISTS ${table} (`))!;
+        const columns = table === 'face_embeddings'
+            ? 'id, gallery_id, source_scope, drive_file_id, face_index, embedding, bounding_box, source_version, model_version, created_at, updated_at'
+            : 'gallery_id, source_scope, drive_file_id, source_version, model_version, is_solo';
+        const statements = [
+            definition.replace(`IF NOT EXISTS ${table}`, `${table}_scoped`),
+            `INSERT INTO ${table}_scoped (${columns}) SELECT ${columns} FROM ${table}`,
+            `DROP TABLE ${table}`,
+            `ALTER TABLE ${table}_scoped RENAME TO ${table}`,
+        ];
+        if (galleryTurso) await galleryTurso.batch(statements, 'write');
+        else sqlite!.transaction(() => { for (const statement of statements) sqlite!.run(statement); })();
+    }
+    const index = 'CREATE INDEX IF NOT EXISTS idx_face_embeddings_gallery_file ON face_embeddings(gallery_id, drive_file_id)';
+    if (galleryTurso) await galleryTurso.execute(index);
+    else await run(index);
+}
+
+type GalleryTableWithMigrations = "galleries" | "gallery_selections" | "gallery_photos" | "face_index_jobs" | "face_index_photos" | "face_embeddings" | "gallery_edit_result_photos";
 
 async function ensureTursoColumns(tableName: GalleryTableWithMigrations, columns: Array<readonly [string, string]>): Promise<void> {
     if (!galleryTurso) return;
@@ -330,7 +379,9 @@ async function initializeGalleryStorage(): Promise<void> {
         await ensureTursoColumns("gallery_photos", GALLERY_PHOTO_REQUIRED_COLUMNS);
         await ensureTursoColumns("face_index_jobs", FACE_INDEX_JOB_REQUIRED_COLUMNS);
         await ensureTursoColumns("face_index_photos", FACE_INDEX_PHOTO_REQUIRED_COLUMNS);
+        await ensureTursoColumns("face_embeddings", FACE_EMBEDDING_REQUIRED_COLUMNS);
         await ensureTursoColumns("gallery_edit_result_photos", EDIT_RESULT_REQUIRED_COLUMNS);
+        await migrateFaceScopes();
         await galleryTurso.batch(FACE_SOURCE_SCHEMA, "write");
         const counterBackfill = await galleryTurso.execute({
             sql: "SELECT value FROM gallery_settings WHERE key = ?",
@@ -397,7 +448,9 @@ async function initializeGalleryStorage(): Promise<void> {
     await ensureSqliteColumns("gallery_photos", GALLERY_PHOTO_REQUIRED_COLUMNS);
     await ensureSqliteColumns("face_index_jobs", FACE_INDEX_JOB_REQUIRED_COLUMNS);
     await ensureSqliteColumns("face_index_photos", FACE_INDEX_PHOTO_REQUIRED_COLUMNS);
+    await ensureSqliteColumns("face_embeddings", FACE_EMBEDDING_REQUIRED_COLUMNS);
     await ensureSqliteColumns("gallery_edit_result_photos", EDIT_RESULT_REQUIRED_COLUMNS);
+    await migrateFaceScopes();
     for (const query of FACE_SOURCE_SCHEMA) await run(query);
     const counterBackfill = await one<{ value: string }>("SELECT value FROM gallery_settings WHERE key = ?", [GALLERY_COUNTER_BACKFILL_KEY]);
     if (!counterBackfill) {

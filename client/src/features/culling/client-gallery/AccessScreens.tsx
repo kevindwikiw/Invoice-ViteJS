@@ -1,12 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery } from '@tanstack/react-query';
-import { Download, Loader2, Lock, MessageCircle } from 'lucide-react';
+import { Download, FolderOpen, Images, Loader2, Lock, MessageCircle } from 'lucide-react';
 
 import { getEditResultsStatus, verifyEditResultsPassword, verifyGalleryPin } from '../culling.public';
 import type { PublicGallery } from '../culling.types';
 
 import { BLACK_THEME, WHITE_THEME } from './constants';
 import { OrbitLogo, ThemeToggle } from './GalleryChrome';
+import { GalleryFooter } from './GalleryFooter';
 import { GalleryPasswordField } from './GalleryPasswordField';
 import { tokenKey } from './storage';
 import type { GalleryTheme } from './types';
@@ -86,8 +87,14 @@ export function PinGate({
             const galleryError = mutationError as Error & { code?: string; contactUrl?: string | null; status?: number };
             setError(galleryError.status === 401 ? 'Incorrect password. Check it and try again.' : mutationError instanceof Error ? mutationError.message : 'Unable to unlock gallery.');
             if (galleryError.code === 'GALLERY_CLOSED' || galleryError.code === 'GALLERY_EXPIRED') {
-                setContactUrl(galleryError.contactUrl || null);
-                setLockCode(galleryError.code);
+                if (editResultsStatus.data?.available) {
+                    setMode('edited');
+                    setPin('');
+                    setError('Photo Selection is no longer available. Enter your Edited Photos password.');
+                } else {
+                    setContactUrl(galleryError.contactUrl || null);
+                    setLockCode(galleryError.code);
+                }
             }
             if (galleryError.status === 429) {
                 setIsRateLimited(true);
@@ -123,7 +130,7 @@ export function PinGate({
                         event.preventDefault();
                         if (opening || verifyMutation.isPending || verifyEdited.isPending) return;
                         if (mode === 'gallery' && pin.trim().length < 4) { setError('Enter at least 4 characters.'); return; }
-                        if (mode === 'edited' && editResultsPassword.trim().length < 6) { setError('Enter at least 6 characters.'); return; }
+                        if (mode === 'edited' && !editResultsPassword.trim()) { setError('Enter your password.'); return; }
                         setError('');
                         setContactUrl(null);
                         setIsRateLimited(false);
@@ -136,8 +143,12 @@ export function PinGate({
                     <div className="mb-7 flex justify-center"><OrbitLogo theme={theme} /></div>
                     <div className="gallery-unlock-content">
                     <div inert={showPinLoading} aria-busy={showPinLoading || verifyEdited.isPending} className="gallery-unlock-fields"><div>
-                    <h1 className="font-display text-[26px] font-medium leading-tight text-[var(--text-primary)] [text-wrap:balance]">{mode === 'gallery' && (isExpired || isClosed || isRateLimited) ? isExpired ? 'Selection Closed' : isClosed ? 'Gallery Locked' : 'Access Locked' : 'Enter Password'}</h1>
-                    {mode === 'edited' || (!isClosed && !isRateLimited) ? <p className="mt-2 text-xs text-[var(--text-muted)]">{mode === 'edited' ? 'Edited Photos' : 'Photo Selection'}</p> : null}
+                    <div className="mb-3 flex items-center justify-center gap-2 text-[10px] font-semibold uppercase tracking-[0.12em] text-[var(--text-muted)]">
+                        {mode === 'edited' ? <FolderOpen size={14} aria-hidden="true" /> : <Images size={14} aria-hidden="true" />}
+                        <span>{mode === 'edited' ? 'Edited Gallery' : 'Photo Selection'}</span>
+                    </div>
+                    <h1 className="font-display text-[26px] font-medium leading-tight text-[var(--text-primary)] [text-wrap:balance]">{mode === 'edited' ? 'View Your Edited Photos' : mode === 'gallery' && (isExpired || isClosed || isRateLimited) ? isExpired ? 'Selection Closed' : isClosed ? 'Gallery Locked' : 'Access Locked' : 'Enter Password'}</h1>
+                    {!isClosed && !isRateLimited && <p className="mx-auto mt-2 max-w-xs text-xs leading-5 text-[var(--text-muted)]">{mode === 'edited' ? 'Enter your password to view and download your finished gallery.' : 'Choose your favorites to submit for editing.'}</p>}
                     
                     {mode === 'gallery' && !isClosed && !isRateLimited && (
                         <div className="mt-7"><GalleryPasswordField key="selection" label="Photo Selection password" name="selectionPassword" value={pin} onChange={(value) => { setPin(value); if (error) setError(''); }} error={error} /></div>
@@ -180,6 +191,7 @@ export function PinGate({
                 </form>
                 </div>
             </section>
+            <GalleryFooter />
         </main>
     );
 }
@@ -212,6 +224,7 @@ export function GalleryLockedScreen({
                     <p className="mx-auto mt-6 max-w-xs text-xs leading-5 text-[var(--text-muted)]">{expired ? 'The selection deadline has ended. Please contact the admin if you need more time.' : 'This gallery is currently locked. Please contact the admin to unlock access.'}</p>
                 </div>
             </section>
+            <GalleryFooter />
         </main>
     );
 }

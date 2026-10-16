@@ -20,6 +20,7 @@ mock.module('../lib/google-drive', () => ({
     hasAnyoneViewerFolderAccess: async () => true,
     getDrivePhotoMetadata: async (id: string) => { metadataCalls.push(id); if (missing.has(id)) throw new Error('missing'); if (restricted.has(id)) return { ...drivePhoto(id), canDownload: false }; return id === 'archive' ? { ...drivePhoto(id), name: 'backup.zip', mimeType: 'application/zip', canDownload: true } : drivePhoto(id); },
     fetchDriveFile: async (id: string, thumbnail?: string, width?: number) => { assert.ok(thumbnail); fetched.push({ id, width, thumbnail }); if (missing.has(id)) throw new Error('missing'); return new Response('image', { headers: { 'content-type': 'image/jpeg' } }); },
+    fetchDriveVideo: async () => new Response('video', { headers: { 'content-type': 'video/mp4' } }),
 }));
 const { sqlite } = await import('../db/runtime');
 sqlite!.exec('CREATE TABLE user_permissions (user_id INTEGER, permission_key TEXT, effect TEXT)');
@@ -67,11 +68,11 @@ const pairs = [{ editedDriveFileId: 'color', beforeDriveFileId: 'before-a' }, { 
 assert.equal(validComparisonPairs(pairs, new Set(['color', 'bw']), new Set(['before-a'])).length, 2);
 assert.equal((await request('/admin/1', 'PATCH', { comparisonEnabled: true, comparisonPairs: pairs })).status, 200);
 assert.equal((await one<{ n: number }>('SELECT COUNT(*) as n FROM gallery_edit_result_photos'))!.n, 0);
-const publish = await request('/admin/1/edit-results/publish', 'POST', { password: 'delivery-pass' });
+const publish = await request('/admin/1/edit-results/publish', 'POST', { password: 'edit' });
 assert.equal(publish.status, 201, await publish.clone().text());
 assert.equal((await json(publish)).comparisonCount, 2);
 assert.deepEqual(metadataCalls, ['before-a']);
-const login = async () => (await json(await request('/public/gallery/edit-results/verify', 'POST', { password: 'delivery-pass' }))).token;
+const login = async () => (await json(await request('/public/gallery/edit-results/verify', 'POST', { password: 'edit' }))).token;
 let token = await login();
 const listing = () => request(`/public/gallery/edit-results?token=${token}`);
 assert.equal((await request('/public/gallery/edit-results?token=bad')).status, 401);
@@ -105,7 +106,7 @@ assert.equal((await json(await request('/public/gallery/edit-results/photos/colo
 
 // Publish a ZIP snapshot. Later draft changes must not affect its resolver.
 await request('/admin/1', 'PATCH', { editResultsZipFileId: 'archive' });
-assert.equal((await request('/admin/1/edit-results/publish', 'POST', { password: 'delivery-pass' })).status, 201);
+assert.equal((await request('/admin/1/edit-results/publish', 'POST', { password: 'edit' })).status, 201);
 assert.equal((await listing()).status, 401);
 token = await login();
 const withArchive = await json(await listing());
@@ -136,19 +137,19 @@ const clearedComparisons = await json(await request('/admin/1', 'PATCH', { compa
 assert.equal(clearedComparisons.comparisonCount, 0);
 assert.equal((await request(beforePath)).status, 404);
 await run('DELETE FROM gallery_selections WHERE gallery_id = 1');
-await request('/admin/1/edit-results/publish', 'POST', { password: 'delivery-pass' });
+await request('/admin/1/edit-results/publish', 'POST', { password: 'edit' });
 assert.equal((await request(beforePath)).status, 401);
 token = await login();
 assert.equal((await json(await listing())).photos[0]!.comparison, null);
 await run("INSERT INTO gallery_selections (gallery_id, selected_drive_file_id, selected_filename) VALUES (1, 'before-a', 'before-a.jpg')");
 await request('/admin/1', 'PATCH', { comparisonPairs: pairs });
 missing.add('before-a');
-const omitted = await json(await request('/admin/1/edit-results/publish', 'POST', { password: 'delivery-pass' }));
+const omitted = await json(await request('/admin/1/edit-results/publish', 'POST', { password: 'edit' }));
 assert.equal(omitted.comparisonCount, 0);
 assert.equal(omitted.warnings.length, 1);
 missing.clear();
 edited = [drivePhoto('bw'), drivePhoto('color')];
-await request('/admin/1/edit-results/publish', 'POST', { password: 'delivery-pass' });
+await request('/admin/1/edit-results/publish', 'POST', { password: 'edit' });
 token = await login();
 assert.ok((await json(await listing())).photos.every((p) => p.comparison));
 // Gallery tokens must not grant edited access, even when signed by the same key.
@@ -169,7 +170,7 @@ assert.equal((await request('/admin/1/edit-results/pairing/edited/bw/thumbnail')
 const nestedPairResponse = await request('/admin/1', 'PATCH', { comparisonPairs: [{ editedDriveFileId: 'bw', beforeDriveFileId: 'before-a' }] });
 assert.equal(nestedPairResponse.status, 400);
 assert.match((await nestedPairResponse.json() as any).error, /root folder/);
-const nestedPublish = await request('/admin/1/edit-results/publish', 'POST', { password: 'delivery-pass' });
+const nestedPublish = await request('/admin/1/edit-results/publish', 'POST', { password: 'edit' });
 assert.equal(nestedPublish.status, 201);
 assert.equal((await json(nestedPublish)).comparisonCount, 1);
 assert.equal((await listing()).status, 401);
@@ -183,7 +184,7 @@ treeFails = true;
 const previousError = console.error;
 console.error = () => {};
 try {
-    assert.equal((await request('/admin/1/edit-results/publish', 'POST', { password: 'delivery-pass' })).status, 502);
+    assert.equal((await request('/admin/1/edit-results/publish', 'POST', { password: 'edit' })).status, 502);
 } finally { console.error = previousError; }
 const afterFailure = await (await listing()).json() as any;
 assert.deepEqual(afterFailure.photos, nested.photos);
@@ -201,7 +202,7 @@ for (const status of ['closed', 'draft']) {
     assert.equal((await listing()).status, 403);
     assert.equal((await json(await listing())).archive, undefined);
     assert.equal((await request(`/public/gallery/edit-results/photos/color/download-url?token=${token}`)).status, 403);
-    assert.equal((await request('/public/gallery/edit-results/verify', 'POST', { password: 'delivery-pass' })).status, 403);
+    assert.equal((await request('/public/gallery/edit-results/verify', 'POST', { password: 'edit' })).status, 403);
     for (const variant of ['thumbnail', 'preview', 'before/thumbnail', 'before/preview']) {
         assert.equal((await request(`/public/gallery/edit-results/photos/color/${variant}?token=${token}`)).status, 403);
     }
@@ -317,8 +318,8 @@ const initialSync = await request('/admin/3/edit-results/sync', 'POST');
 assert.equal(initialSync.status, 200);
 assert.equal((await initialSync.json() as any).published, false);
 assert.equal((await one<{ n: number }>('SELECT COUNT(*) as n FROM gallery_edit_result_photos WHERE gallery_id = 3'))!.n, 0);
-assert.equal((await request('/admin/3/edit-results/publish', 'POST', { password: 'same-password' })).status, 201);
-const syncToken = (await json(await request('/public/sync-test/edit-results/verify', 'POST', { password: 'same-password' }))).token;
+assert.equal((await request('/admin/3/edit-results/publish', 'POST', { password: 'same' })).status, 201);
+const syncToken = (await json(await request('/public/sync-test/edit-results/verify', 'POST', { password: 'same' }))).token;
 const syncListing = () => request(`/public/sync-test/edit-results?token=${syncToken}`);
 const beforeSync = await one<any>('SELECT edit_results_key_hash, edit_results_published_at, edit_results_expires_at, edit_results_version FROM galleries WHERE id = 3');
 const saveNewFolder = await request('/admin/3', 'PATCH', { editResultsFolderId: 'new-edited', editResultsZipFileId: 'not-a-zip' });
@@ -343,5 +344,5 @@ assert.deepEqual(afterSync.photos.map((photo) => photo.driveFileId), ['new-edite
 assert.equal((afterSync as any).folders.length, 1);
 assert.equal(afterSync.archive?.filename, 'backup.zip');
 assert.equal((await request(`/public/sync-test/edit-results/photos/old-edited-photo/download-url?token=${syncToken}`)).status, 404);
-assert.equal((await request('/public/sync-test/edit-results/verify', 'POST', { password: 'same-password' })).status, 200);
+assert.equal((await request('/public/sync-test/edit-results/verify', 'POST', { password: 'same' })).status, 200);
 sqlite!.close();

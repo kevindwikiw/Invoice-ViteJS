@@ -1,9 +1,11 @@
 # Marketing Implementation Status
 
-Last Updated: 2026-10-06
+Last Updated: 2026-10-14
 
 ## Application Maintenance
 
+- 2026-10-14: Implemented Selfie search for Edited Photos and Wedding. Selection and Edited indexes have independent source scopes, versioned snapshots, callback validation, and delivery-token access. Publish/Sync prepares Edited indexes in the background; Unpublish removes only Edited indexes. Client search covers all folders with per-photo downloads and retains the previous folder/page when returning to Edited.
+- Validation for this change: 34 focused backend tests and 45 distinct Chromium scenarios passed, including legacy schema upgrades, index/token isolation, PIN and Selection regressions, expiry, retry, concurrent Sync during search, browser history, and 320px/390px/desktop light/dark screenshots. Client/server typechecks and client production build passed. Drive/worker integration used mocks; no production deployment or live Turso migration was performed.
 - 2026-10-06: Added immutable Prewedding selection/delivery and Wedding delivery-only workflows to the existing client/Hono application. Existing galleries retain selection behavior; Wedding uses the existing Edited password, Drive folder tree, and download flow.
 - This maintenance does not advance a marketing ticket or change the marketing architecture. No deployment was performed.
 - Validation: 41 server tests, 74 focused Chromium tests, client/server typechecks, and client production build pass. Browser coverage includes 320px, 390px, and desktop; legacy Selfie and removed Publish/Unpublish button scenarios remain outside this focused run. Live Drive-folder integration still needs a manual smoke test.

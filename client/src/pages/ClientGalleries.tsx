@@ -100,6 +100,7 @@ const compactUnitInputShellClass = unitInputShellClass;
 const unitInputClass = 'h-full min-w-0 border-0 bg-transparent px-3.5 text-sm tabular-nums text-[var(--text-primary)] outline-none';
 const unitInputSuffixClass = 'flex h-full items-center justify-center border-l border-[var(--border)] px-2 text-[11px] font-medium text-[var(--text-muted)]';
 const publicUrl = (gallery: GallerySummary) => `${window.location.origin}/culling/${gallery.publicKey || gallery.id}`;
+const publicEditedUrl = (gallery: GallerySummary) => `${publicUrl(gallery)}/edited`;
 const driveUrl = (gallery: GallerySummary) => (gallery.driveFolderId?.startsWith('http') ? gallery.driveFolderId : `https://drive.google.com/drive/folders/${gallery.driveFolderId || ''}`);
 const editedFolderUrl = (gallery: GallerySummary) => gallery.editResultsFolderId ? (gallery.editResultsFolderId.startsWith('http') ? gallery.editResultsFolderId : `https://drive.google.com/drive/folders/${gallery.editResultsFolderId}`) : null;
 const parseIdr = (value: FormDataEntryValue | null) => Number(String(value || '').replace(/\D/g, '')) || 0;
@@ -378,7 +379,7 @@ function ClientLinkMenu({ gallery, mode, direction = 'up' }: { gallery: GalleryS
   const { addToast } = useToast();
   const [open, setOpen] = useState(false);
   const area = mode === 'selection' ? 'Photo Selection' : 'Edited Photos';
-  const url = publicUrl(gallery) + (mode === 'edited' ? '?view=edit-results' : '');
+  const url = mode === 'edited' ? publicEditedUrl(gallery) : publicUrl(gallery);
   const folderUrl = mode === 'selection' ? gallery.driveFolderId ? driveUrl(gallery) : null : editedFolderUrl(gallery);
   const menuHeight = folderUrl ? 132 : 92;
   const { ref, triggerRef, menuRef, position, markKeyboardOpen } = useAnchoredMenu(open, () => setOpen(false), 240, menuHeight, direction);
@@ -609,7 +610,7 @@ function GalleryTable({
             <tr>
               <th className="px-7 py-3.5">Gallery</th>
               <th className="text-center">Status</th>
-              <th className="text-center">Photos</th>
+              <th className="text-center">Items</th>
               <th className="text-center">Access ends</th>
               <th className="text-center">Published</th>
               <th className="px-7 text-center">Actions</th>
@@ -938,6 +939,7 @@ function GalleryDetailEditor({ data, close, initialMode, focusSelectionDuration 
   };
   const changeDraftStatus = (nextStatus: GalleryStatus) => {
     if (draftStatus === nextStatus) return;
+    if (mode === 'selection' && nextStatus === 'open' && data.isExpired) setRestartSelectionWindow(true);
     setDraftStatus(nextStatus);
     const form = document.getElementById(mode === 'edited' ? 'edit-delivery-form' : 'edit-gallery-form');
     const nextDirty = form instanceof HTMLFormElement
@@ -999,7 +1001,7 @@ function GalleryDetailEditor({ data, close, initialMode, focusSelectionDuration 
   const editSync = useMutation({
     mutationFn: syncEditResults,
     onSuccess: (result) => {
-      addToast(result.published ? `Published snapshot updated with ${result.photoCount} edited photos. Access settings unchanged.` : `${result.photoCount} edited photos found. Publish to make them available to clients.`, 'success');
+      addToast(result.published ? `Published snapshot updated with ${result.photoCount} edited items. Access settings unchanged.` : `${result.photoCount} edited items found. Publish to make them available to clients.`, 'success');
       setPublishWarnings(result.warnings || []);
       if (result.published) setEditedSyncPending(false);
       void qc.invalidateQueries({ queryKey: ['galleries'] });
@@ -1015,7 +1017,7 @@ function GalleryDetailEditor({ data, close, initialMode, focusSelectionDuration 
     onSuccess: (result) => {
       setEditResultsPassword('');
       setShowEditResultsPassword(false);
-      addToast(`Published ${result.photoCount} edited photos across ${(result.folderCount ?? 0) + 1} folders with your delivery password.`, 'success');
+      addToast(`Published ${result.photoCount} edited items across ${(result.folderCount ?? 0) + 1} folders with your delivery password.`, 'success');
       setPublishWarnings(result.warnings || []);
       setEditedStatus('open');
       setDirty(false);
@@ -1043,7 +1045,7 @@ function GalleryDetailEditor({ data, close, initialMode, focusSelectionDuration 
   const discountRules = data.addon?.discountRules;
   const addonEstimatedTotal = calculateAddonQuote(addonDraftLimit, addonUnitPrice, discountRules).total;
   const submittedCount = Number(data.selectionCount || 0);
-  const link = publicUrl(data) + (mode === 'edited' ? '?view=edit-results' : '');
+  const link = mode === 'edited' ? publicEditedUrl(data) : publicUrl(data);
   const sourceDriveUrl = driveUrl(data);
   return (
     <Modal title={pairsOpen ? 'Manage Pairs' : data.title} close={close} busy={busy} beforeClose={() => {
@@ -1089,7 +1091,7 @@ function GalleryDetailEditor({ data, close, initialMode, focusSelectionDuration 
           </div>}
           <div hidden={mode !== 'edited'}>
             <p className="text-xs text-[var(--text-muted)]">
-              {data.hasEditResults ? `${data.editResultsPhotoCount || 0} edited photos published` : 'Edited Photos not published'}
+              {data.hasEditResults ? `${data.editResultsPhotoCount || 0} edited items published` : 'Edited Photos not published'}
             </p>
             {editedSyncPending && <p role="status" className="mt-1 text-xs font-medium text-[var(--text-primary)]">Folder saved. Sync to replace the photos clients see.</p>}
             <p className={clsx('mt-1.5 inline-flex items-center gap-1.5 text-[10px] font-semibold', data.hasEditResults && data.editResultsExpiresAt && Date.parse(data.editResultsExpiresAt) <= Date.now() ? 'text-[var(--text-primary)]' : 'text-[var(--text-secondary)]')}>
@@ -1228,7 +1230,10 @@ function GalleryDetailEditor({ data, close, initialMode, focusSelectionDuration 
                     <input id="edit-selection-password" name="pin" type={showSelectionPassword ? 'text' : 'password'} minLength={4} maxLength={64} autoComplete="new-password" autoCapitalize="none" spellCheck={false} onChange={(event) => setPendingPin(Boolean(event.currentTarget.value))} aria-describedby="client-pin-save-status" placeholder="New password" style={{ paddingRight: 48 }} className={inputClass} />
                     <button type="button" aria-label={showSelectionPassword ? 'Hide Photo Selection password' : 'Show Photo Selection password'} aria-pressed={showSelectionPassword} onClick={() => setShowSelectionPassword((current) => !current)} className="absolute right-1.5 top-1.5 flex h-8 w-8 items-center justify-center rounded-md text-[var(--text-muted)] transition-colors hover:bg-[var(--bg-elevated)] hover:text-[var(--text-primary)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)]">{showSelectionPassword ? <EyeOff size={15} aria-hidden="true" className="text-[var(--accent)]" /> : <Eye size={15} aria-hidden="true" />}</button>
                   </div>
-                  <span id="client-pin-save-status" role="status" className="block text-xs leading-5 text-[var(--text-muted)]">{pendingPin ? 'New password not saved. Save Photo Selection to activate it.' : 'Leave blank to keep the current password.'}</span>
+                  <span id="client-pin-save-status" role="status" className="block text-xs leading-5 text-[var(--text-muted)]">
+                    {pendingPin && <span className="block">New password not saved. Save Photo Selection to activate it.</span>}
+                    <span className="block">Leave blank to keep the current password.</span>
+                  </span>
                 </div>
                 <Field label="Master limit (0 = Unlimited)" title="Master selection limit (0 = Unlimited)">
                   <input name="master-limit" type="number" min="0" max="500" value={masterLimit || ''} onChange={(event) => setMasterLimit(Math.min(500, Math.max(0, Number(event.currentTarget.value) || 0)))} placeholder="Unlimited" className={inputClass} />
@@ -1292,12 +1297,12 @@ function GalleryDetailEditor({ data, close, initialMode, focusSelectionDuration 
                 <div className="min-w-0 space-y-2">
                   <label htmlFor="edit-results-publish-password" className="block text-[11px] font-semibold text-[var(--text-secondary)]">Password for publication</label>
                   <div className="relative">
-                    <input id="edit-results-publish-password" name="editResultsPassword" type={showEditResultsPassword ? 'text' : 'password'} value={editResultsPassword} onChange={(event) => { const form = event.currentTarget.form; setEditResultsPassword(event.currentTarget.value.slice(0, 64)); setActionError(''); if (form) syncFormDirty(editedFormChanged(form, event.currentTarget.value)); }} minLength={6} maxLength={64} autoComplete="new-password" autoCapitalize="none" spellCheck={false} placeholder={data.hasEditResults ? 'New password' : 'Minimum 6 characters'} aria-describedby="edit-results-publish-help" style={{ paddingRight: 48 }} className={inputClass} />
+                    <input id="edit-results-publish-password" name="editResultsPassword" type={showEditResultsPassword ? 'text' : 'password'} value={editResultsPassword} onChange={(event) => { const form = event.currentTarget.form; setEditResultsPassword(event.currentTarget.value.slice(0, 4)); setActionError(''); if (form) syncFormDirty(editedFormChanged(form, event.currentTarget.value)); }} maxLength={4} autoComplete="new-password" autoCapitalize="none" spellCheck={false} placeholder={data.hasEditResults ? 'New password' : 'Up to 4 characters'} aria-describedby="edit-results-publish-help" style={{ paddingRight: 48 }} className={inputClass} />
                     <button type="button" aria-label={showEditResultsPassword ? 'Hide password' : 'Show password'} title={showEditResultsPassword ? 'Hide password' : 'Show password'} aria-controls="edit-results-publish-password" onClick={() => setShowEditResultsPassword((current) => !current)} className="absolute right-1.5 top-1.5 flex h-8 w-8 items-center justify-center rounded-md text-[var(--text-muted)] transition-colors hover:bg-[var(--bg-elevated)] hover:text-[var(--text-primary)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)] disabled:opacity-45">
                       {showEditResultsPassword ? <EyeOff size={15} aria-hidden="true" className="text-[var(--accent)]" /> : <Eye size={15} aria-hidden="true" />}
                     </button>
                   </div>
-                  <p id="edit-results-publish-help" className="text-xs leading-5 text-[var(--text-muted)]">{editResultsPassword ? 'New password entered. Save Edited Photos to activate.' : 'Leave blank to keep the current password.'}</p>
+                  <p id="edit-results-publish-help" className="text-xs leading-5 text-[var(--text-muted)]">{editResultsPassword ? 'New password entered. Save Edited Photos to activate.' : 'Maximum 4 characters. Leave blank to keep the current password.'}</p>
                 </div>
                 <div className="min-w-0 space-y-4">
                   <Field label="Download access duration">

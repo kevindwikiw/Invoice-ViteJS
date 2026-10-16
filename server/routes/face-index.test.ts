@@ -106,7 +106,7 @@ beforeEach(async () => {
         if (String(input).endsWith("/v1/search")) return Response.json({ matches: [{ driveFileId: "a" }, { driveFileId: "b" }] });
         return Response.json({ accepted: true });
     });
-    for (const table of ["face_index_photos", "face_embeddings", "face_index_jobs", "gallery_selections", "gallery_photos", "galleries"]) await galleryRun(`DELETE FROM ${table}`);
+    for (const table of ["face_index_photos", "face_embeddings", "face_index_jobs", "gallery_edit_result_photos", "gallery_edit_result_folders", "gallery_selections", "gallery_photos", "galleries"]) await galleryRun(`DELETE FROM ${table}`);
     await galleryRun("INSERT INTO galleries (id, title, drive_folder_id, pin_hash) VALUES (1, 'test', 'folder', 'hash')");
     await addPhoto("a");
 });
@@ -117,7 +117,7 @@ async function addPhoto(fileId: string, version = "v1") {
 
 async function complete(job: NonNullable<Awaited<ReturnType<typeof currentJob>>>, embeddings: any[] = [], soloFiles: string[] = []) {
     const photos = await galleryAll<{ driveFileId: string; sourceVersion: string; createdAt: string; width: number | null; height: number | null }>(
-        'SELECT drive_file_id as "driveFileId", source_version as "sourceVersion", created_at as "createdAt", width, height FROM gallery_photos WHERE gallery_id = 1',
+        `SELECT drive_file_id as "driveFileId", source_version as "sourceVersion", ${job.sourceScope === 'edited' ? "''" : 'created_at'} as "createdAt", width, height FROM ${job.sourceScope === 'edited' ? 'gallery_edit_result_photos' : 'gallery_photos'} WHERE gallery_id = 1`,
     );
     const indexedPhotos = photos.map((photo) => ({ driveFileId: photo.driveFileId, sourceVersion: facePhotoVersion(photo), isSolo: soloFiles.includes(photo.driveFileId) }));
     return faceIndexRouter.request(`/callbacks/jobs/${job.id}/complete`, {
@@ -140,6 +140,46 @@ test("empty faces is a valid index; repeat sync and title edits reuse it", async
     expect((await createOrReuseJob(1))?.id).toBe(job.id);
     expect(dispatched).toHaveLength(1);
     expect((await publicFaceSearchStatus(1)).status).toBe("ready");
+});
+
+test('Selection and Edited indexes with the same file ID publish independently and expose isolated snapshots', async () => {
+    await galleryRun("INSERT INTO gallery_edit_result_photos (gallery_id, drive_file_id, filename, mime_type, web_content_link, source_version) VALUES (1, 'a', 'edited.jpg', 'image/jpeg', 'https://drive.test/a', 'edited-v1')");
+    const selection = (await createOrReuseJob(1))!;
+    const edited = (await createOrReuseJob(1, true, 'edited'))!;
+    expect(edited.sourceScope).toBe('edited');
+    const selectionFace = { driveFileId: 'a', faceIndex: 0, sourceVersion: 'v1', embedding: Array(128).fill(0.1) };
+    const editedFace = { ...selectionFace, sourceVersion: 'edited-v1', embedding: Array(128).fill(0.2) };
+    expect((await complete(edited, [editedFace], ['a'])).status).toBe(200);
+    expect((await complete(selection, [selectionFace])).status).toBe(200);
+    expect((await publicFaceSearchStatus(1)).status).toBe('ready');
+    expect((await publicFaceSearchStatus(1, 'edited')).status).toBe('ready');
+    const snapshot = async (id: number) => (await faceIndexRouter.request(`/indexes/${id}`, { headers: { 'x-face-worker-token': 'test-internal' } })).json() as Promise<any>;
+    expect((await snapshot(selection.id)).embeddings).toMatchObject([{ embedding: selectionFace.embedding, isSolo: false }]);
+    expect((await snapshot(edited.id)).embeddings).toMatchObject([{ embedding: editedFace.embedding, isSolo: true }]);
+    expect(await galleryAll('SELECT source_scope FROM face_embeddings ORDER BY source_scope')).toEqual([{ source_scope: 'edited' }, { source_scope: 'selection' }]);
+});
+
+test('concurrent Edited indexing deduplicates work while Selection remains independent', async () => {
+    await galleryRun("INSERT INTO gallery_edit_result_photos (gallery_id, drive_file_id, filename, mime_type, web_content_link, source_version) VALUES (1, 'a', 'edited.jpg', 'image/jpeg', 'https://drive.test/a', 'edited-v1')");
+    const [one, two, selection] = await Promise.all([createOrReuseJob(1, true, 'edited'), createOrReuseJob(1, true, 'edited'), createOrReuseJob(1)]);
+    expect(one!.id).toBe(two!.id);
+    expect(one!.id).not.toBe(selection!.id);
+    expect(dispatched).toHaveLength(2);
+    expect(dispatched.find((job) => job.jobId === one!.id).photos[0].sourceVersion).toBe('edited-v1');
+});
+
+test('an Edited source change rejects its old callback without invalidating Selection', async () => {
+    const selection = (await createOrReuseJob(1))!;
+    await complete(selection);
+    await galleryRun("INSERT INTO gallery_edit_result_photos (gallery_id, drive_file_id, filename, mime_type, web_content_link, source_version) VALUES (1, 'a', 'edited.jpg', 'image/jpeg', 'https://drive.test/a', 'edited-v1')");
+    const edited = (await createOrReuseJob(1, true, 'edited'))!;
+    await galleryRun("UPDATE gallery_edit_result_photos SET source_version = 'edited-v2' WHERE gallery_id = 1");
+    expect((await complete(edited)).status).toBe(409);
+    expect((await publicFaceSearchStatus(1)).status).toBe('ready');
+    expect((await publicFaceSearchStatus(1, 'edited')).status).toBe('not_indexed');
+    const next = (await createOrReuseJob(1, true, 'edited'))!;
+    expect((await complete(next)).status).toBe(200);
+    expect((await currentJob(1))!.id).toBe(selection.id);
 });
 
 test("incremental jobs reuse both faces and no-face results; changed files are scanned", async () => {

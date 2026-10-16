@@ -23,6 +23,8 @@ for (const legacy of [true, false]) {
                 db.exec(\`INSERT INTO face_index_jobs (gallery_id, model_version, status, total, processed) VALUES (1, 'old-model', 'completed', 3, 3)\`);
                 db.exec(\`CREATE TABLE face_index_photos (gallery_id INTEGER NOT NULL, drive_file_id TEXT NOT NULL, source_version TEXT NOT NULL, model_version TEXT NOT NULL, PRIMARY KEY (gallery_id, drive_file_id, model_version))\`);
                 db.exec(\`INSERT INTO face_index_photos (gallery_id, drive_file_id, source_version, model_version) VALUES (1, 'legacy-photo', 'v1', 'old-model')\`);
+                db.exec(\`CREATE TABLE face_embeddings (id INTEGER PRIMARY KEY AUTOINCREMENT, gallery_id INTEGER NOT NULL, drive_file_id TEXT NOT NULL, face_index INTEGER NOT NULL DEFAULT 0, embedding TEXT NOT NULL, bounding_box TEXT, source_version TEXT NOT NULL, model_version TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, UNIQUE(gallery_id, drive_file_id, face_index, model_version))\`);
+                db.exec(\`INSERT INTO face_embeddings (gallery_id, drive_file_id, embedding, source_version, model_version) VALUES (1, 'legacy-photo', '[0.1]', 'v1', 'old-model')\`);
             }
             const { ensureGalleryStorage, galleryRun } = await import('./db/galleries');
             const { remainingRateLimit, hitRateLimit, resetRateLimitKey, resetRateLimitSuffixes } = await import('./db/rate-limit');
@@ -48,6 +50,12 @@ for (const legacy of [true, false]) {
                     { status: 'completed', total: 3, processed: 3, source_version: '' });
                 assert.deepEqual(db.query('SELECT drive_file_id, is_solo FROM face_index_photos').get(),
                     { drive_file_id: 'legacy-photo', is_solo: 0 });
+                assert.deepEqual(db.query('SELECT source_scope, embedding FROM face_embeddings').get(), { source_scope: 'selection', embedding: '[0.1]' });
+                assert.equal(db.query('SELECT source_scope FROM face_index_photos').get().source_scope, 'selection');
+                assert.equal(db.query('SELECT source_scope FROM face_index_jobs').get().source_scope, 'selection');
+                db.exec(\`INSERT INTO face_index_photos (gallery_id, source_scope, drive_file_id, source_version, model_version) VALUES (1, 'edited', 'legacy-photo', 'v2', 'old-model')\`);
+                db.exec(\`INSERT INTO face_embeddings (gallery_id, source_scope, drive_file_id, embedding, source_version, model_version) VALUES (1, 'edited', 'legacy-photo', '[0.2]', 'v2', 'old-model')\`);
+                assert.equal(db.query('SELECT COUNT(*) as n FROM face_embeddings').get().n, 2);
                 assert.equal(await remainingRateLimit('login:test', 2, 1000), 0);
                 assert.equal((await hitRateLimit('login:test', 1000, 2, 1000)).allowed, false);
                 assert.equal((await hitRateLimit('login:test', 1000, 2, 2000)).count, 1);

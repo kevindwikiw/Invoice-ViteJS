@@ -252,19 +252,19 @@ function TutorialSamplePreview({ galleryId, token, slot, version, onSettled }: {
         return () => window.clearTimeout(timer);
     }, [incomingSettled, slot]);
 
-    return <div className="relative">
+    return <div className="relative max-sm:h-full max-sm:min-h-0">
         {[visibleSlot, ...(switching ? [slot] : [])].map((sampleSlot) => {
             const incoming = switching && sampleSlot === slot;
             return <div
                 key={sampleSlot}
                 aria-hidden={incoming ? !incomingSettled : switching}
                 inert={incoming ? !incomingSettled : switching}
-                className={clsx(incoming ? 'absolute inset-0 z-10' : 'relative', 'transition-opacity duration-[180ms] ease-out motion-reduce:transition-none', incoming && !incomingSettled ? 'opacity-0' : 'opacity-100')}
+                className={clsx(incoming ? 'absolute inset-0 z-10' : 'relative max-sm:h-full max-sm:min-h-0', 'transition-opacity duration-[180ms] ease-out motion-reduce:transition-none', incoming && !incomingSettled ? 'opacity-0' : 'opacity-100')}
             >
                 <ComparisonSlider
                     beforeUrl={cullingTutorialImageUrl(galleryId, token, sampleSlot, 'before', version)}
                     afterUrl={cullingTutorialImageUrl(galleryId, token, sampleSlot, 'after', version)}
-                    frameClass="max-sm:h-[min(56dvh,28rem)] sm:h-[min(52dvh,28rem)]"
+                    frameClass="max-sm:flex-1 max-sm:min-h-0 sm:h-[min(42dvh,28rem)]"
                     onLoading={incoming ? () => setSettledSlot(null) : () => setVisibleSettled(false)}
                     onSettled={incoming ? () => setSettledSlot((current) => current === sampleSlot ? current : sampleSlot) : (result) => { setVisibleSettled(true); onSettled?.(result); }}
                 />
@@ -363,18 +363,18 @@ export function TutorialModal({ galleryId, token, tutorialSampleSlots, tutorialS
                     ))}
                 </nav>
 
-                <div ref={scrollAreaRef} data-testid="tutorial-scroll-area" className="min-h-0 flex-1 touch-pan-y overflow-y-auto overscroll-contain px-3 py-4 [-webkit-overflow-scrolling:touch] sm:px-5 sm:py-5">
+                <div ref={scrollAreaRef} data-testid="tutorial-scroll-area" className={clsx('min-h-0 flex-1 px-3 sm:px-5', activeStep.id === 'confidence' ? 'overflow-hidden py-2 sm:py-5' : 'touch-pan-y overflow-y-auto overscroll-contain py-4 [-webkit-overflow-scrolling:touch] sm:py-5')}>
                     {activeStep.id === 'confidence' && (
-                        <div data-testid="tutorial-confidence-step">
-                            <div className="flex items-center justify-between gap-3">
+                        <div data-testid="tutorial-confidence-step" className="max-sm:flex max-sm:h-full max-sm:min-h-0 max-sm:flex-col">
+                            <div className="flex shrink-0 items-center justify-between gap-3">
                                 <p className="text-[13px] font-medium text-[var(--text-secondary)]">Sample {sampleIndex + 1} of {tutorialSampleSlots.length}</p>
                             </div>
-                            <div className="mt-2">
+                            <div className="mt-2 min-h-0 max-sm:flex-1">
                                 <TutorialSamplePreview galleryId={galleryId} token={token} slot={activeSampleSlot} version={tutorialSampleVersion} onSettled={onInitialMediaSettled} />
                             </div>
-                            <p className="mx-auto mt-3 max-w-md text-center text-[13px] leading-5 text-[var(--text-secondary)]">The photos you submit become your edited gallery.</p>
+                            <p className="mx-auto mt-2 max-w-md shrink-0 text-center text-[13px] leading-5 text-[var(--text-secondary)]">Select your favorites, then submit them for editing.</p>
                             {tutorialSampleSlots.length > 1 && (
-                                <div className="mt-2 flex items-center justify-center" aria-label="Tutorial samples">
+                                <div className="mt-2 flex shrink-0 items-center justify-center" aria-label="Tutorial samples">
                                     {tutorialSampleSlots.map((slot, index) => (
                                         <button key={slot} type="button" onClick={() => setSampleIndex(index)} aria-label={`View sample ${index + 1}`} aria-current={sampleIndex === index ? 'true' : undefined} className="flex h-11 w-11 items-center justify-center rounded-md focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)]"><span aria-hidden="true" className={clsx('h-1.5 rounded-full transition-[width,background-color] motion-reduce:transition-none', sampleIndex === index ? 'w-5 bg-[var(--accent)]' : 'w-1.5 bg-[var(--border)] hover:bg-[var(--text-muted)]')} /></button>
                                     ))}

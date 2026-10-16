@@ -15,6 +15,7 @@ for (const width of [320, 390, 1280]) {
         const metadataReady = new Promise<void>((resolve) => { releaseMetadata = resolve; });
         await page.route(`**/api/public/galleries/${id}/**`, async (route) => {
             const path = new URL(route.request().url()).pathname;
+            if (path.endsWith('/edit-results/face-search/status')) return route.fulfill({ json: { available: false, status: 'unavailable', total: 0, processed: 0 } });
             if (path.endsWith('/edit-results/status')) {
                 await metadataReady;
                 return route.fulfill({ json: { workflow: 'delivery_only', title: weddingClientTitle, available: true, status: 'open', photoCount: 55 } });
@@ -38,7 +39,7 @@ for (const width of [320, 390, 1280]) {
         releaseMetadata();
         const password = page.getByLabel('Edited photos password', { exact: true });
         await expect(password).toBeVisible();
-        await expect(page).toHaveURL(/view=edit-results/);
+        await expect(page).toHaveURL(new RegExp(`/culling/${id}/edited$`));
         await password.fill('wrong-password');
         await page.getByRole('button', { name: 'Unlock Edited Photos' }).click();
         await expect(page.getByRole('alert')).toContainText('Invalid edited photos password');
@@ -74,7 +75,8 @@ for (const width of [320, 390, 1280]) {
         await page.reload();
         await expect(grid.locator('img')).toHaveCount(1);
         await expect(page).toHaveURL(/folder=ceremony/);
-        for (const name of ['All Photos', 'Submit', 'Selfie', 'Request More', 'Back to gallery']) await expect(page.getByRole('button', { name, exact: true })).toHaveCount(0);
+        for (const name of ['All Photos', 'Submit', 'Request More', 'Back to gallery']) await expect(page.getByRole('button', { name, exact: true })).toHaveCount(0);
+        await expect(page.getByRole('button', { name: 'Selfie', exact: true })).toBeDisabled();
         await expect(page.getByText('Before / After', { exact: true })).toHaveCount(0);
         await page.getByRole('button', { name: 'Download All (.zip)' }).click();
         await expect(page.getByRole('alert')).toContainText('Check Drive sharing and retry');
@@ -165,7 +167,7 @@ for (const width of [320, 390, 1280]) {
         await page.keyboard.press('ArrowRight');
         await expect(dialog.getByRole('tab', { name: 'Edited Photos', exact: true })).toBeFocused();
         await dialog.getByLabel('Gallery title').fill('Alya & Rafi Wedding Updated');
-        await dialog.getByLabel('Password for publication').fill('delivery-password');
+        await dialog.getByLabel('Password for publication').fill('pass');
         await dialog.getByRole('button', { name: 'open', exact: true }).click();
         await expect(save).toBeEnabled();
         await save.click();
@@ -267,6 +269,7 @@ test('Wedding expired token restores the edited gate without opening a stored se
     const selectionRequests: string[] = [];
     await page.route(`**/api/public/galleries/${id}/**`, (route) => {
         const url = new URL(route.request().url());
+        if (url.pathname.endsWith('/edit-results/face-search/status')) return route.fulfill({ json: { available: false, status: 'unavailable', total: 0, processed: 0 } });
         if (url.pathname.endsWith('/edit-results/status')) return route.fulfill({ json: { workflow: 'delivery_only', available: true, photoCount: 55, title: 'Wedding' } });
         if (url.pathname.endsWith('/edit-results/verify')) return route.fulfill({ json: { token: 'fresh-token', expiresAt: null } });
         if (url.pathname.endsWith('/edit-results')) return url.searchParams.get('token') === 'expired-token'

@@ -58,6 +58,20 @@ async function installSession(page: Page, id = galleryId) {
     }));
 }
 
+async function mockEntryStatus(page: Page, id: string, selectionAvailable: boolean, editedAvailable: boolean) {
+    await page.route(`**/api/public/galleries/${id}/edit-results/status`, (route) => route.fulfill({ json: {
+        workflow: 'selection_delivery',
+        title: 'Access Matrix Gallery',
+        available: editedAvailable,
+        photoCount: editedAvailable ? 1 : 0,
+        status: editedAvailable ? 'open' : 'closed',
+        isExpired: false,
+        selectionAvailable,
+        selectionStatus: selectionAvailable ? 'open' : 'closed',
+        selectionExpired: !selectionAvailable,
+    } }));
+}
+
 async function mockFaceSearchAvailable(page: Page, id: string, status: 'not_indexed' | 'ready' = 'not_indexed') {
     await page.unroute('**/face-search/status');
     await page.route(`**/api/public/galleries/${id}/face-search/status`, (route) => route.fulfill({
@@ -151,6 +165,7 @@ test('Edited Photos does not poll closed selection endpoints in the background',
     await page.addInitScript(({ galleryKey, galleryToken }) => {
         localStorage.setItem(`orbit_culling_token_${galleryKey}`, galleryToken);
         localStorage.setItem(`orbit:edit-results-token:${galleryKey}`, 'edited-session-token');
+        localStorage.setItem(`orbit:edit-results-guide:${galleryKey}`, 'seen');
         localStorage.setItem(`orbit_culling_tutorial_${galleryKey}`, '1');
     }, { galleryKey: id, galleryToken: token });
     await page.route(`**/api/public/galleries/${id}/edit-results/status`, (route) => route.fulfill({ json: {
@@ -1027,6 +1042,7 @@ test('keeps PIN header branding and theme toggle in place after unlock', async (
         await page.setViewportSize({ width, height: width === 320 ? 640 : 900 });
         await page.goto(`/culling/${id}`);
         await expect(page.getByRole('heading', { name: 'Enter Password' })).toBeVisible();
+        await expect(page.getByTestId('gallery-footer').getByRole('link', { name: '@theorbitphoto on Instagram' })).toBeVisible();
         if (width === 320) await page.getByRole('button', { name: 'Switch to white mode' }).click();
         if (width === 390) await page.getByRole('button', { name: 'Switch to black mode' }).click();
         const gateHeader = page.locator('.gallery-unlock-overlay').getByTestId('gallery-header');
@@ -1132,6 +1148,79 @@ test('returns from PIN loading to the password form when verification fails', as
     await expect(page.getByRole('heading', { name: 'Enter Password' })).toBeVisible();
     await expect(page.getByRole('alert')).toContainText('Incorrect password');
     await expect(page.locator('.gallery-unlock-spinner')).toHaveCount(0);
+});
+
+test('access entry keeps Selection as the simple default when both areas are open', async ({ page }) => {
+    const id = 'access-both-open';
+    await mockEntryStatus(page, id, true, true);
+    await page.goto(`/culling/${id}`);
+
+    await expect(page.getByLabel('Photo Selection password', { exact: true })).toBeVisible();
+    await expect(page.getByTestId('gallery-toolbar')).toHaveCount(0);
+    await page.getByRole('button', { name: 'Use Edited Photos password' }).click();
+    await expect(page.getByLabel('Edited photos password', { exact: true })).toBeVisible();
+    await expect(page.getByTestId('gallery-toolbar')).toHaveCount(0);
+});
+
+test('access entry only offers Selection when Edited Photos is unavailable', async ({ page }) => {
+    const id = 'access-selection-only';
+    await mockEntryStatus(page, id, true, false);
+    await page.goto(`/culling/${id}`);
+
+    await expect(page.getByLabel('Photo Selection password', { exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Use Edited Photos password' })).toHaveCount(0);
+    await expect(page.getByTestId('gallery-toolbar')).toHaveCount(0);
+});
+
+test('closed Selection opens Edited password directly and preserves Edited view after login', async ({ page }) => {
+    const id = 'access-edited-only';
+    await mockEntryStatus(page, id, false, true);
+    await page.addInitScript((galleryKey) => localStorage.setItem(`orbit:edit-results-guide:${galleryKey}`, 'seen'), id);
+    await page.route(`**/api/public/galleries/${id}/edit-results/verify`, (route) => route.fulfill({ json: { token: 'edited-session-token', expiresAt: null, expiresIn: null } }));
+    await page.route(`**/api/public/galleries/${id}/edit-results?*`, (route) => route.fulfill({ json: { title: 'Access Matrix Gallery', photos: [], folders: [], archive: null } }));
+    await page.goto(`/culling/${id}`);
+
+    await expect(page.getByLabel('Edited photos password', { exact: true })).toBeVisible();
+    await expect(page.getByLabel('Photo Selection password', { exact: true })).toHaveCount(0);
+    await expect(page.getByTestId('gallery-toolbar')).toHaveCount(0);
+
+    await page.getByLabel('Edited photos password', { exact: true }).fill('edited-password');
+    await page.getByRole('button', { name: 'Unlock Edited Photos' }).click();
+    await expect(page).toHaveURL(new RegExp(`/culling/${id}/edited$`));
+    await expect(page.getByRole('navigation', { name: 'Gallery views' }).getByRole('button', { name: 'Edited Photos', exact: true })).toBeVisible();
+    await expect(page.getByLabel('Photo Selection password', { exact: true })).toHaveCount(0);
+});
+
+test('an invalid Edited session returns to an empty Edited password gate, not Selection', async ({ page }) => {
+    const id = 'access-edited-session-expired';
+    await mockEntryStatus(page, id, false, true);
+    await page.addInitScript((galleryKey) => {
+        localStorage.setItem(`orbit:edit-results-token:${galleryKey}`, 'expired-edited-token');
+        localStorage.setItem(`orbit:edit-results-guide:${galleryKey}`, 'seen');
+    }, id);
+    await page.route(`**/api/public/galleries/${id}/edit-results?*`, (route) => route.fulfill({ status: 401, json: { error: 'Edited Photos access expired.' } }));
+    await page.goto(`/culling/${id}?view=edit-results`);
+
+    const editedPassword = page.getByLabel('Edited photos password', { exact: true });
+    await expect(editedPassword).toBeVisible();
+    await expect(editedPassword).toHaveValue('');
+    await expect(page.getByLabel('Photo Selection password', { exact: true })).toHaveCount(0);
+    await expect(page.getByTestId('gallery-toolbar')).toHaveCount(0);
+});
+
+test('shows a contact-only screen when Selection and Edited Photos are both closed', async ({ page }) => {
+    const id = 'access-both-closed';
+    await mockEntryStatus(page, id, false, false);
+    await page.route(`**/api/public/galleries/${id}/contact`, (route) => route.fulfill({ json: {
+        contactWhatsappUrl: '081234567890',
+        message: 'Help {{gallery_title}} at {{gallery_url}}',
+    } }));
+    await page.goto(`/culling/${id}`);
+
+    await expect(page.getByRole('heading', { name: 'Selection Closed' })).toBeVisible();
+    await expect(page.getByRole('link', { name: 'Contact admin on WhatsApp' })).toHaveAttribute('href', /wa\.me\/6281234567890/);
+    await expect(page.getByLabel('Photo Selection password', { exact: true })).toHaveCount(0);
+    await expect(page.getByLabel('Edited photos password', { exact: true })).toHaveCount(0);
 });
 
 for (const scenario of ['ready', 'slow', 'failed', 'no-samples', 'data-error', 'saved-session', 'reduced-motion', 'thumbnail-slow'] as const) {
@@ -1349,6 +1438,7 @@ test('shows the before and edited tutorial slider with pointer and keyboard cont
     await expect(handle).toHaveAttribute('aria-valuenow', '50');
     const mediaSlot = page.getByTestId('tutorial-media-slot');
     const initialMediaSlotBox = await mediaSlot.boundingBox();
+    expect(initialMediaSlotBox?.height ?? 0).toBeGreaterThan(440);
     const slider = page.getByTestId('tutorial-before-after-slider');
     await expect.poll(async () => {
         const box = await slider.boundingBox();
@@ -1389,7 +1479,7 @@ test('shows the before and edited tutorial slider with pointer and keyboard cont
     const portraitMediaSlotBox = await mediaSlot.boundingBox();
     expect(portraitMediaSlotBox?.width).toBeCloseTo(initialMediaSlotBox?.width ?? 0, 0);
     expect(portraitMediaSlotBox?.height).toBeCloseTo(initialMediaSlotBox?.height ?? 0, 0);
-    expect(portraitSliderBox?.height ?? 0).toBeGreaterThan((sliderBox?.height ?? 0) * 1.35);
+    expect(portraitSliderBox?.height ?? 0).toBeLessThanOrEqual(portraitMediaSlotBox?.height ?? 0);
     await page.getByRole('button', { name: 'Next sample' }).click();
     await expect(page.getByText('Sample 3 of 3')).toBeVisible();
     await expect.poll(() => tutorialRequests.size).toBe(6);
@@ -1413,7 +1503,7 @@ test('shows the before and edited tutorial slider with pointer and keyboard cont
     const desktopFooterBox = await page.getByTestId('tutorial-footer').boundingBox();
     expect(desktopPanelBox?.width).toBeCloseTo(672, 0);
     expect(desktopPanelBox?.height).toBeCloseTo(868, 0);
-    expect(desktopMediaSlotBox?.height).toBeCloseTo(448, 0);
+    expect(desktopMediaSlotBox?.height).toBeCloseTo(378, 0);
     expect((desktopFooterBox?.y ?? 0) + (desktopFooterBox?.height ?? 0)).toBeLessThanOrEqual(900);
     await page.getByRole('button', { name: 'Previous' }).click();
     await expect(page.getByText('Sample 2 of 3')).toBeVisible();
@@ -1423,7 +1513,7 @@ test('shows the before and edited tutorial slider with pointer and keyboard cont
         return (box?.width ?? 0) / (box?.height ?? 1);
     }).toBeCloseTo(1067 / 1600, 1);
     const desktopPortraitSliderBox = await slider.boundingBox();
-    expect(desktopPortraitSliderBox?.height ?? 0).toBeGreaterThanOrEqual((portraitSliderBox?.height ?? 0) - 1);
+    expect(desktopPortraitSliderBox?.height ?? 0).toBeLessThan(portraitSliderBox?.height ?? 0);
     await page.getByRole('button', { name: 'Next sample' }).click();
     await expect(page.getByText('Sample 3 of 3')).toBeVisible();
     await expect(page.getByTestId('tutorial-before-after-slider')).toHaveCount(1);
@@ -1434,12 +1524,12 @@ test('shows the before and edited tutorial slider with pointer and keyboard cont
     expect(compactPanelBox).not.toBeNull();
     expect(compactPanelBox?.height).toBeCloseTo(552, 0);
     expect((compactFooterBox?.y ?? 0) + (compactFooterBox?.height ?? 0)).toBeLessThanOrEqual(568);
-    const scrollMetrics = await page.getByTestId('tutorial-scroll-area').evaluate((element) => {
-        element.scrollTop = element.scrollHeight;
-        return { clientHeight: element.clientHeight, scrollHeight: element.scrollHeight, scrollTop: element.scrollTop };
-    });
-    expect(scrollMetrics.scrollHeight).toBeGreaterThan(scrollMetrics.clientHeight);
-    expect(scrollMetrics.scrollTop).toBeGreaterThan(0);
+    await expect(page.getByTestId('tutorial-scroll-area')).toHaveCSS('overflow-y', 'hidden');
+    await expect(page.getByRole('button', { name: 'How to Submit', exact: true }).last()).toBeInViewport();
+    const compactMediaBox = await page.getByTestId('tutorial-media-slot').boundingBox();
+    const compactDotsBox = await page.getByRole('button', { name: 'View sample 3' }).boundingBox();
+    expect((compactMediaBox?.height ?? 0)).toBeLessThanOrEqual(568 * 0.34 + 1);
+    expect((compactDotsBox?.y ?? 0) + (compactDotsBox?.height ?? 0)).toBeLessThanOrEqual((compactFooterBox?.y ?? 0) + 1);
 
     await page.getByRole('button', { name: 'How to Submit', exact: true }).last().click();
     await expect(page.getByTestId('tutorial-submit-step')).toBeVisible();
@@ -1920,6 +2010,7 @@ for (const theme of ['black', 'white'] as const) {
 }
 
 test('hides selfie filtering offline and reveals its mobile label when the worker recovers', async ({ page }) => {
+    await page.clock.install();
     const id = 'face-worker-offline-gallery';
     await page.setViewportSize({ width: 320, height: 740 });
     await installSession(page, id);
@@ -1942,12 +2033,15 @@ test('hides selfie filtering offline and reveals its mobile label when the worke
     }));
     await page.route(`**/api/public/galleries/${id}/photos/*/thumbnail?*`, (route) => fulfillImage(route, 320, 320));
 
-    await page.goto(`/culling/${id}`);
+    await page.goto(`/culling/${id}?view=selfie&selfieSource=selection`);
     await expect.poll(() => statusRequests).toBeGreaterThan(0);
-    await expect(selfieTab(page)).toBeDisabled();
+    await expect(page).not.toHaveURL(/view=selfie/);
+    await expect(selfieTab(page)).toHaveCount(0);
     await expect(page.getByRole('button', { name: /^Open photo-/ })).toHaveCount(1);
+    await expect(page.getByRole('heading', { name: 'Find Your Photos' })).toHaveCount(0);
     ready = true;
     const filter = selfieTab(page);
+    await page.clock.fastForward(31_000);
     await expect(filter).toBeEnabled({ timeout: 8_000 });
     await expect(filter).toHaveAttribute('title', 'Selfie');
     for (const width of [320, 390]) {

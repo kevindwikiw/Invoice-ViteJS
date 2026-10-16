@@ -9,6 +9,14 @@ export function draftKey(galleryId: string): string {
     return `orbit_culling_selected_${galleryId}`;
 }
 
+export function pendingDraftKey(galleryId: string): string {
+    return `orbit_culling_pending_selection_${galleryId}`;
+}
+
+export function hasPendingSelectionDraft(galleryId: string): boolean {
+    return localStorage.getItem(pendingDraftKey(galleryId)) === '1';
+}
+
 export function selectedPhotoMetaKey(galleryId: string): string {
     return `orbit_culling_selected_photo_meta_${galleryId}`;
 }

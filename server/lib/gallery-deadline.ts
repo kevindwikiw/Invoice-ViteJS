@@ -66,6 +66,6 @@ export function resolveGalleryDeadlineUpdate(input: ResolveGalleryDeadlineUpdate
     return {
         selectionDurationHours,
         selectionDeadlineAt,
-        status: existingExpired && input.durationWasProvided ? "closed" : input.nextStatus,
+        status: input.nextStatus,
     };
 }

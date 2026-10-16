@@ -2,6 +2,38 @@ import { expect, test } from '@playwright/test';
 
 const editedTestImage = '<svg xmlns="http://www.w3.org/2000/svg" width="400" height="300"><rect width="400" height="300" fill="#78877f"/></svg>';
 
+test('Edited password gate has Orbit branding and a responsive footer', async ({ page }) => {
+    const id = 'edited-gate-branding';
+    await page.route(`**/api/public/galleries/${id}/edit-results/status`, (route) => route.fulfill({ json: { available: true, title: 'Vira & Mus Prewedding' } }));
+    await page.route(`**/api/public/galleries/${id}/edit-results/verify`, (route) => route.fulfill({ json: { token: 'short-password-token', expiresAt: null, expiresIn: null } }));
+    await page.route(`**/api/public/galleries/${id}/edit-results?*`, (route) => route.fulfill({ json: { photos: [], folders: [], archive: null, expiresAt: null } }));
+    await page.setViewportSize({ width: 320, height: 800 });
+    await page.goto(`/culling/${id}?view=edit-results`);
+    await expect(page).toHaveURL(new RegExp(`/culling/${id}/edited$`));
+    const card = page.getByTestId('edited-access-card');
+    await expect(card.getByRole('img', { name: 'Orbit Logo' })).toBeVisible();
+    await expect(card.getByRole('heading', { name: 'View Your Edited Photos' })).toBeVisible();
+    await expect(card.getByText('Edited Gallery')).toBeVisible();
+    await expect(card.getByText('Enter your password to view and download your finished gallery.')).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Use Photo Selection password' })).toBeVisible();
+    const footer = page.getByTestId('gallery-footer');
+    await expect(footer.getByRole('link', { name: '@theorbitphoto on Instagram' })).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await page.getByRole('button', { name: 'Switch to white mode' }).click();
+    await expect(page.getByRole('button', { name: 'Switch to black mode' })).toBeVisible();
+
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await expect(card).toBeVisible();
+    await expect(footer).toBeVisible();
+    const cardBox = await card.boundingBox();
+    const footerBox = await footer.boundingBox();
+    expect(cardBox && footerBox && footerBox.y >= cardBox.y + cardBox.height).toBe(true);
+
+    await page.getByLabel('Edited photos password', { exact: true }).fill('a1');
+    await page.getByRole('button', { name: 'Unlock Edited Photos' }).click();
+    await expect(page.getByText('No edited photos are available.')).toBeVisible();
+});
+
 for (const state of ['closed', 'expired', 'draft'] as const) {
     test(`edited ${state} access does not ask for a password`, async ({ page }) => {
         await page.route('**/api/public/galleries/closed-edited/**', (route) => {
@@ -10,6 +42,7 @@ for (const state of ['closed', 'expired', 'draft'] as const) {
             return route.fulfill({ status: 403, json: { error: 'Access closed', code: state === 'expired' ? 'EDIT_RESULTS_EXPIRED' : 'EDIT_RESULTS_CLOSED' } });
         });
         await page.goto('/culling/closed-edited?view=edit-results');
+        await expect(page).toHaveURL(/\/culling\/closed-edited\/edited$/);
         await expect(page.getByRole('heading', { name: state === 'expired' ? 'Edited Photos access expired' : 'Edited Photos unavailable', exact: true })).toBeVisible();
         await expect(page.getByLabel('Edited photos password', { exact: true })).toHaveCount(0);
         await expect(page.getByRole('button', { name: 'Download All (.zip)' })).toHaveCount(0);
@@ -38,14 +71,15 @@ for (const access of ['edited-only', 'expired', 'closed', 'invalid', 'open'] as 
             return route.fulfill({ json: {} });
         });
         await page.goto(`/culling/${id}?view=edit-results&page=3&filter=submitted`);
+        await expect(page).toHaveURL(`/culling/${id}/edited`);
         await expect(page.getByText('No edited photos are available.')).toBeVisible();
         const allPhotos = page.getByRole('navigation', { name: 'Gallery views' }).getByRole('button').first();
         if (access === 'open') {
             const selectionView = page.getByRole('button', { name: 'Submitted', exact: true });
             await expect(selectionView).toBeEnabled();
             await selectionView.click();
-            await expect(page).toHaveURL(/page=3/);
             await expect(page).toHaveURL(/filter=submitted/);
+            await expect(page).not.toHaveURL(/page=3/);
             await expect(page.getByText('No Submitted Photos')).toBeVisible();
         } else if (access === 'edited-only' || access === 'invalid') {
             await expect(allPhotos).toBeEnabled();

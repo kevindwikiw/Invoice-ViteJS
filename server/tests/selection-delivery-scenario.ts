@@ -28,6 +28,7 @@ mock.module('../db/galleries', () => ({
 const imageCalls: Array<{ id: string; url?: string; width?: number }> = [];
 const metadataCalls: string[] = [];
 let failMetadata = true;
+let failDriveTransient = false;
 let expireRepairedThumbnail = false;
 let releaseMetadata!: () => void;
 let metadataStarted!: () => void;
@@ -48,10 +49,12 @@ mock.module('../lib/google-drive', () => ({
     },
     fetchDriveFile: async (id: string, url?: string, width?: number) => {
         imageCalls.push({ id, url, width });
-        if (url?.includes('/expired/')) throw new Error('Expired thumbnail');
-        if (expireRepairedThumbnail && url === 'https://images.test/fresh/stale') throw new Error('Refreshed link expired');
+        if (id === 'healthy' && failDriveTransient) throw Object.assign(new Error('Temporary Drive gateway timeout'), { status: 504 });
+        if (url?.includes('/expired/')) throw Object.assign(new Error('Expired thumbnail'), { status: 404 });
+        if (expireRepairedThumbnail && url === 'https://images.test/fresh/stale') throw Object.assign(new Error('Refreshed link expired'), { status: 404 });
         return new Response(url ? 'thumbnail' : 'large-original', { headers: { 'content-type': 'image/jpeg' } });
     },
+    fetchDriveVideo: async () => new Response('video', { headers: { 'content-type': 'video/mp4' } }),
 }));
 
 const { publicGalleriesRouter } = await import('../routes/galleries');
@@ -101,6 +104,9 @@ assert.equal((await one<{ url: string }>("SELECT thumbnail_url as url FROM galle
 const metadataBeforeLegacy = metadataCalls.length;
 assert.equal((await app.request(`/public/selection/photos/stale/thumbnail?token=${token}`)).status, 200);
 assert.equal(metadataCalls.length, metadataBeforeLegacy, 'Session-only requests must reuse repaired database metadata');
+failDriveTransient = true;
+assert.equal((await image('healthy')).status, 502, 'Transient thumbnail failures should fail quickly for a client retry');
+failDriveTransient = false;
 await image('healthy');
 assert.equal(metadataCalls.includes('healthy'), false);
 

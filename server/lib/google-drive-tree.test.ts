@@ -1,6 +1,6 @@
 import { expect, spyOn, test } from 'bun:test';
 import { generateKeyPairSync } from 'node:crypto';
-import { fetchDriveFile, listDrivePhotoTree } from './google-drive';
+import { fetchDriveFile, fetchDriveVideo, listDrivePhotoTree, listDrivePhotos } from './google-drive';
 
 test('Drive tree follows pagination and folders, ignores shortcuts, and rejects partial reads', async () => {
     const originalConfig = process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
@@ -8,15 +8,26 @@ test('Drive tree follows pagination and folders, ignores shortcuts, and rejects 
     process.env.GOOGLE_SERVICE_ACCOUNT_JSON = JSON.stringify({ client_email: 'test@example.test', private_key: privateKey.export({ type: 'pkcs8', format: 'pem' }) });
     const folder = (id: string) => ({ id, name: id, mimeType: 'application/vnd.google-apps.folder' });
     const photo = (id: string) => ({ id, name: `${id}.jpg`, mimeType: 'image/jpeg' });
+    const video = (id: string) => ({ id, name: `${id}.mp4`, mimeType: 'video/mp4' });
     let mode = 'normal';
     let secondPageRead = false;
     let thumbnailAttempts = 0;
     let tokenIssues = 0;
+    let videoRange = '';
+    let hangVideoResponse = false;
     const fetchMock = spyOn(globalThis, 'fetch').mockImplementation(Object.assign(async (input: string | URL | Request, init?: RequestInit) => {
         const url = new URL(String(input));
         if (url.hostname === 'oauth2.googleapis.com') {
             tokenIssues += 1;
             return Response.json({ access_token: tokenIssues > 1 ? 'refreshed' : 'test', expires_in: 3600 });
+        }
+        if (url.pathname.endsWith('/files/video-id')) {
+            videoRange = new Headers(init?.headers).get('Range') || '';
+            if (hangVideoResponse) return await new Promise<Response>((_resolve, reject) => {
+                init?.signal?.addEventListener('abort', () => reject(init.signal?.reason), { once: true });
+            });
+            if (videoRange === 'bytes=99-100') return new Response(null, { status: 416, headers: { 'Content-Range': 'bytes */10', 'Accept-Ranges': 'bytes' } });
+            return new Response(new ReadableStream({ start(controller) { controller.enqueue(new Uint8Array([1, 2])); controller.close(); } }), { status: 206, headers: { 'Content-Range': 'bytes 2-3/10', 'Accept-Ranges': 'bytes', 'Content-Type': 'video/mp4' } });
         }
         if (url.hostname === 'lh3.googleusercontent.com') {
             thumbnailAttempts += 1;
@@ -28,12 +39,18 @@ test('Drive tree follows pagination and folders, ignores shortcuts, and rejects 
         }
         if (url.pathname.endsWith('/files')) {
             expect(url.searchParams.get('q')).toContain('trashed = false');
+            if (url.searchParams.get('q')?.startsWith("'selection'")) {
+                expect(url.searchParams.get('q')).not.toContain("mimeType contains 'video/'");
+                return Response.json({ files: [photo('selection-image')] });
+            }
             expect(url.searchParams.get('q')).toContain('application/vnd.google-apps.folder');
+            expect(url.searchParams.get('q')).toContain("mimeType contains 'video/'");
             if (mode === 'incomplete') return Response.json({ incompleteSearch: true });
             if (url.searchParams.get('q')?.startsWith("'root'")) {
+                if (mode === 'video-only') return Response.json({ files: [video('only-video')] });
                 if (url.searchParams.get('pageToken') === 'next') {
                     secondPageRead = true;
-                    return Response.json({ files: [photo('root-photo'), folder('child')] });
+                    return Response.json({ files: [photo('root-photo'), video('root-video'), folder('child')] });
                 }
                 return Response.json({ files: [folder('child'), { id: 'shortcut', mimeType: 'application/vnd.google-apps.shortcut' }, { id: 'pdf', mimeType: 'application/pdf' }], nextPageToken: 'next' });
             }
@@ -46,11 +63,23 @@ test('Drive tree follows pagination and folders, ignores shortcuts, and rejects 
     }, { preconnect: globalThis.fetch.preconnect }));
     try {
         const tree = await listDrivePhotoTree('root');
+        expect((await listDrivePhotos('selection')).map((item) => item.mimeType)).toEqual(['image/jpeg']);
         expect(secondPageRead).toBe(true);
         expect(tree.folders).toEqual([{ id: 'child', name: 'child', parentId: null }, { id: 'nested', name: 'nested', parentId: 'child' }]);
         expect(tree.photos.map(({ id, folderId }) => ({ id, folderId }))).toEqual([
-            { id: 'root-photo', folderId: null }, { id: 'child-photo', folderId: 'child' }, { id: 'nested-photo', folderId: 'nested' },
+            { id: 'root-photo', folderId: null }, { id: 'root-video', folderId: null }, { id: 'child-photo', folderId: 'child' }, { id: 'nested-photo', folderId: 'nested' },
         ]);
+        const rangedVideo = await fetchDriveVideo('video-id', 'bytes=2-3');
+        expect(rangedVideo.status).toBe(206);
+        expect(rangedVideo.headers.get('Content-Range')).toBe('bytes 2-3/10');
+        expect(videoRange).toBe('bytes=2-3');
+        expect((await fetchDriveVideo('video-id', 'bytes=99-100')).status).toBe(416);
+        hangVideoResponse = true;
+        await expect(fetchDriveVideo('video-id', undefined, 5)).rejects.toThrow('Google Drive response timed out.');
+        hangVideoResponse = false;
+        mode = 'video-only';
+        const videoOnlyTree = await listDrivePhotoTree('root');
+        expect(videoOnlyTree.photos.map((item) => item.mimeType)).toEqual(['video/mp4']);
         mode = 'denied';
         await expect(listDrivePhotoTree('root')).rejects.toThrow('Permission denied');
         mode = 'incomplete';

@@ -1,7 +1,7 @@
 // File: src/features/culling/culling.public.ts
 
 import { apiFetch, apiUrl } from '../../lib/api';
-import type { EditResults, GalleryWorkflow, PublicGallery, PublicGalleryPhotoManifest, PublicGalleryPhotos, DiscountRule } from './culling.types';
+import type { EditResultPhoto, EditResults, GalleryWorkflow, PublicGallery, PublicGalleryPhotoManifest, PublicGalleryPhotos, DiscountRule } from './culling.types';
 
 // 1. Fungsi penangkap error (digunakan oleh public dan admin)
 export class GalleryApiError extends Error {
@@ -52,9 +52,15 @@ export async function verifyGalleryPin(id: string, pin: string): Promise<{ token
     return response.json();
 }
 
-export async function getEditResultsStatus(id: string): Promise<{ workflow?: GalleryWorkflow; title?: string; available: boolean; photoCount: number; status?: 'draft' | 'open' | 'closed'; isExpired?: boolean }> {
+export async function getEditResultsStatus(id: string): Promise<{ workflow?: GalleryWorkflow; title?: string; available: boolean; photoCount: number; status?: 'draft' | 'open' | 'closed'; isExpired?: boolean; selectionAvailable?: boolean; selectionStatus?: 'draft' | 'open' | 'closed'; selectionExpired?: boolean }> {
     const response = await apiFetch(`/public/galleries/${encodeURIComponent(id)}/edit-results/status`);
     if (!response.ok) throw await parseError(response, 'Unable to check edited photos.');
+    return response.json();
+}
+
+export async function getPublicGalleryContact(id: string): Promise<{ contactWhatsappUrl?: string | null; message?: string | null }> {
+    const response = await apiFetch(`/public/galleries/${encodeURIComponent(id)}/contact`);
+    if (!response.ok) throw await parseError(response, 'Unable to load gallery contact details.');
     return response.json();
 }
 
@@ -82,16 +88,21 @@ export async function getEditResults(id: string, token: string): Promise<EditRes
             downloadResolveUrl: data.archive.downloadResolveUrl || editResultArchiveResolveUrl(id, token),
         } : null,
         folders: data.folders ?? [],
-        photos: data.photos.map((photo) => ({
-            ...photo,
-            downloadResolveUrl: photo.downloadResolveUrl || editResultDownloadResolveUrl(id, photo.driveFileId, token),
-            thumbnailUrl: editResultImageUrl(id, photo.driveFileId, token, 'thumbnail'),
-            previewUrl: editResultImageUrl(id, photo.driveFileId, token, 'preview'),
-            comparison: photo.comparison ? {
-                thumbnailUrl: editResultImageUrl(id, photo.driveFileId, token, 'before/thumbnail'),
-                previewUrl: editResultImageUrl(id, photo.driveFileId, token, 'before/preview'),
-            } : null,
-        })),
+        photos: data.photos.map((photo) => normalizeEditResultPhoto(id, token, photo)),
+    };
+}
+
+export function normalizeEditResultPhoto(id: string, token: string, photo: EditResultPhoto): EditResultPhoto {
+    if (!photo || typeof photo.driveFileId !== 'string' || !photo.driveFileId.trim()) throw new Error('Edited photo data is incomplete. Retry to reload the gallery.');
+    return {
+        ...photo,
+        downloadResolveUrl: photo.downloadResolveUrl || editResultDownloadResolveUrl(id, photo.driveFileId, token),
+        thumbnailUrl: editResultImageUrl(id, photo.driveFileId, token, 'thumbnail', photo.sourceVersion),
+        previewUrl: editResultImageUrl(id, photo.driveFileId, token, 'preview', photo.sourceVersion),
+        comparison: photo.comparison ? {
+            thumbnailUrl: editResultImageUrl(id, photo.driveFileId, token, 'before/thumbnail'),
+            previewUrl: editResultImageUrl(id, photo.driveFileId, token, 'before/preview'),
+        } : null,
     };
 }
 
@@ -115,9 +126,15 @@ export async function resolveEditResultDownload(resolveUrl: string): Promise<{ d
     return { downloadUrl: data.downloadUrl, filename: data.filename };
 }
 
-function editResultImageUrl(galleryId: string, driveFileId: string, token: string, variant: 'thumbnail' | 'preview' | 'before/thumbnail' | 'before/preview'): string {
+function editResultImageUrl(galleryId: string, driveFileId: string, token: string, variant: 'thumbnail' | 'preview' | 'before/thumbnail' | 'before/preview', version?: string | null): string {
     const params = new URLSearchParams({ token });
+    if (version) params.set('v', version);
     return apiUrl(`/public/galleries/${encodeURIComponent(galleryId)}/edit-results/photos/${encodeURIComponent(driveFileId)}/${variant}?${params.toString()}`);
+}
+
+export function editResultVideoUrl(galleryId: string, driveFileId: string, token: string): string {
+    const params = new URLSearchParams({ token });
+    return apiUrl(`/public/galleries/${encodeURIComponent(galleryId)}/edit-results/photos/${encodeURIComponent(driveFileId)}/video?${params.toString()}`);
 }
 
 export async function getPublicGalleryPhotos(id: string, token: string, page = 1, pageSize = 60, includeSelectedPhotos = false, includeSelections = false): Promise<PublicGalleryPhotos> {

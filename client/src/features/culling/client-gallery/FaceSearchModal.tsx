@@ -2,18 +2,20 @@ import { useEffect, useRef, useState } from 'react';
 import { Camera, Check, Loader2, RefreshCcw, ScanFace, SlidersHorizontal, Upload } from 'lucide-react';
 import clsx from 'clsx';
 import { GalleryModal } from '../../../components/GalleryModal';
-import type { GalleryPhoto } from '../culling.types';
-import { getFaceSearchStatus, runFaceSearch, type FaceSearchProgress, type FaceSearchSensitivity } from './face-search';
+import type { EditResultPhoto, GalleryPhoto } from '../culling.types';
+import { getFaceSearchStatus, runFaceSearch, type FaceSearchProgress, type FaceSearchSensitivity, type FaceSearchSource } from './face-search';
 import { BLACK_THEME, WHITE_THEME } from './constants';
 import type { GalleryTheme } from './types';
 
-type FaceSearchModalProps = {
+type FaceSearchModalProps<T> = {
     theme: GalleryTheme;
     galleryId: string;
     token: string;
+    source?: FaceSearchSource;
     activeCount: number;
     activeTotal: number;
-    onApply: (photos: GalleryPhoto[], total: number) => void;
+    onApply: (photos: T[], total: number, sourceVersion?: string, signal?: AbortSignal) => void | Promise<void>;
+    onAccessError?: () => void;
     onReset: () => void;
     onClose: () => void;
 };
@@ -44,7 +46,7 @@ function waitForPoll(milliseconds: number, signal: AbortSignal): Promise<void> {
     });
 }
 
-export function FaceSearchModal({ theme, galleryId, token, activeCount, activeTotal, onApply, onReset, onClose }: FaceSearchModalProps) {
+export function FaceSearchModal<T extends GalleryPhoto | EditResultPhoto = GalleryPhoto>({ theme, galleryId, token, source = 'selection', activeCount, activeTotal, onApply, onReset, onClose, onAccessError }: FaceSearchModalProps<T>) {
     const [selfie, setSelfie] = useState<{ file: File; url: string } | null>(null);
     const [sensitivity, setSensitivity] = useState<FaceSearchSensitivity>('balanced');
     const [soloOnly, setSoloOnly] = useState(false);
@@ -72,8 +74,8 @@ export function FaceSearchModal({ theme, galleryId, token, activeCount, activeTo
         setIsScanning(true);
         setProgress(null);
         try {
-            const search = () => runFaceSearch({
-                galleryId, token, selfieFile: file, sensitivity: mode, soloOnly: solo, signal: controller.signal,
+            const search = () => runFaceSearch<T>({
+                galleryId, token, source, selfieFile: file, sensitivity: mode, soloOnly: solo, signal: controller.signal,
                 onProgress: (next) => { if (!controller.signal.aborted) setProgress(next); },
             });
             let found = await search();
@@ -83,7 +85,7 @@ export function FaceSearchModal({ theme, galleryId, token, activeCount, activeTo
                     const elapsed = Date.now() - startedAt;
                     if (elapsed >= 120_000) throw new Error('Face search is still being prepared. Please try again in a moment.');
                     await waitForPoll(elapsed < 30_000 ? 2_000 : 5_000, controller.signal);
-                    const status = await getFaceSearchStatus(galleryId, token, controller.signal);
+                    const status = await getFaceSearchStatus(galleryId, token, controller.signal, source);
                     if (!status.available || status.status === 'unavailable') throw new Error('Face search is temporarily unavailable.');
                     setProgress({ phase: 'worker', processed: status.processed, total: status.total, matches: 0 });
                     if (status.status === 'failed') throw new Error('We could not prepare this gallery for face search. Please try again.');
@@ -92,10 +94,13 @@ export function FaceSearchModal({ theme, galleryId, token, activeCount, activeTo
             }
             if (controller.signal.aborted || abortRef.current !== controller) return;
             if (found.status !== 'complete') throw new Error('Face search is still being prepared.');
+            await onApply(found.matches.map((match) => match.photo), found.total, found.sourceVersion, controller.signal);
+            if (controller.signal.aborted || abortRef.current !== controller) return;
             setResult({ count: found.matches.length, total: found.total });
-            onApply(found.matches.map((match) => match.photo), found.total);
         } catch (searchError) {
             if (controller.signal.aborted || abortRef.current !== controller) return;
+            const status = (searchError as { status?: number })?.status;
+            if (status === 401 || status === 403) onAccessError?.();
             setError(searchError instanceof Error ? searchError.message : 'Unable to search. Please try another selfie.');
         } finally {
             if (abortRef.current === controller) {
@@ -178,7 +183,7 @@ export function FaceSearchModal({ theme, galleryId, token, activeCount, activeTo
 
                 {isScanning && (
                     <div role="status" aria-live="polite" className="space-y-3 border-t border-[var(--border)] pt-4">
-                        <p className="flex items-center gap-2 text-sm text-[var(--text-secondary)]"><Loader2 size={16} className="shrink-0 animate-spin" /> {phaseLabel(progress)}</p>
+                        <p className="flex items-center gap-2 text-sm text-[var(--text-secondary)]"><Loader2 size={16} className="shrink-0 animate-spin motion-reduce:animate-none" /> {phaseLabel(progress)}</p>
                         {progress?.total ? <progress aria-label="Photo search progress" max={100} value={percent} className="h-1.5 w-full accent-[var(--accent)]" /> : null}
                     </div>
                 )}
@@ -188,7 +193,7 @@ export function FaceSearchModal({ theme, galleryId, token, activeCount, activeTo
                         <p className="mt-1.5 text-xs leading-5 text-[var(--text-muted)]">{shownResult.count ? `From ${shownResult.total} gallery photos.` : 'Try a clearer, front-facing selfie or a wider match.'}</p>
                     </div>
                 )}
-                {error && <p role="alert" className="text-sm leading-5 text-rose-500">{error}</p>}
+                {error && <><p role="alert" className="text-sm leading-5 text-rose-500">{error}</p>{selfie && !isScanning && <button type="button" onClick={() => void runSearch(selfie.file)} className={`${secondaryButton} w-full`}><RefreshCcw size={14} /> Retry search</button>}</>}
 
                 <details className="border-t border-[var(--border)] pt-4">
                     <summary className="cursor-pointer text-xs font-semibold text-[var(--text-secondary)]"><SlidersHorizontal size={13} className="mx-1 inline" /> Match options</summary>
@@ -214,7 +219,7 @@ export function FaceSearchModal({ theme, galleryId, token, activeCount, activeTo
                             <span className="mt-1 block text-[11px] leading-4 text-[var(--text-muted)]">Show matches where no other face was detected.</span>
                         </span>
                     </label>
-                    {selfie && !isScanning && <button type="button" onClick={() => void runSearch(selfie.file)} className={`${secondaryButton} mt-3 w-full`}><RefreshCcw size={14} /> Search again</button>}
+                    {selfie && !isScanning && !error && <button type="button" onClick={() => void runSearch(selfie.file)} className={`${secondaryButton} mt-3 w-full`}><RefreshCcw size={14} /> Search again</button>}
                 </details>
             </div>
         </GalleryModal>

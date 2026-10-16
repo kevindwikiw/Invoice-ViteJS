@@ -151,7 +151,7 @@ app.use("/*", cors({
     },
     credentials: true,
     allowMethods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allowHeaders: ["Content-Type", "Authorization", "x-gallery-token"],
+    allowHeaders: ["Content-Type", "Authorization", "x-gallery-token", "x-edit-results-token"],
 }));
 
 app.get("/api/health", (c) => c.json({ ok: true, service: "invoice-api" }));
@@ -164,6 +164,7 @@ app.route("/api/public/feedback", publicFeedbackRoutes);
 app.use("/api/public/galleries/:id/verify", galleryPinRateLimiter);
 app.use("/api/public/galleries/:id/edit-results/verify", galleryEditResultsRateLimiter);
 app.use("/api/public/galleries/:id/face-search", faceSearchRateLimiter);
+app.use("/api/public/galleries/:id/edit-results/face-search", faceSearchRateLimiter);
 app.route("/api/public/galleries", publicGalleriesRouter);
 
 app.use("/api/internal/face-index/jobs", authMiddleware);
@@ -248,5 +249,6 @@ console.log(`CORS allowed origins: ${allowedOrigins.join(", ")}`);
 export default {
     hostname: "0.0.0.0",
     port,
+    idleTimeout: 45,
     fetch: app.fetch,
 };

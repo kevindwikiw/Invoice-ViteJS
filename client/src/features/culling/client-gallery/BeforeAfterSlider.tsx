@@ -129,8 +129,8 @@ export function BeforeAfterSlider({ beforeUrl, beforePlaceholderUrl, afterUrl, t
     };
 
     return (
-        <div className={testId === 'delivery' ? 'h-full w-full' : undefined}>
-            <div ref={mediaSlotRef} data-testid={`${testId}-media-slot`} className={clsx('relative flex w-full items-center justify-center overflow-hidden', isTutorial ? 'bg-[var(--bg-elevated)]' : 'bg-black', frameClass)}>
+        <div className={testId === 'delivery' ? 'h-full w-full' : isTutorial ? 'max-sm:flex max-sm:h-full max-sm:min-h-0 max-sm:w-full max-sm:flex-col' : undefined}>
+            <div ref={mediaSlotRef} data-testid={`${testId}-media-slot`} className={clsx('relative flex w-full items-center justify-center overflow-hidden', isTutorial && 'max-sm:min-h-0 max-sm:flex-1', isTutorial ? 'bg-[var(--bg-elevated)]' : 'bg-black', frameClass)}>
                 <div
                     ref={stageRef}
                     data-testid={`${testId}-before-after-slider`}

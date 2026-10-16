@@ -18,6 +18,7 @@ function LightboxView<T extends GalleryDisplayPhoto>({
     selectedIds,
     mode = 'selection',
     getPreviewUrl,
+    getVideoUrl,
     getThumbnailUrl,
     getDownloadUrl,
     getComparison,
@@ -40,6 +41,7 @@ function LightboxView<T extends GalleryDisplayPhoto>({
     selectedIds?: Set<string>;
     mode?: 'selection' | 'delivery';
     getPreviewUrl?: (photo: T) => string;
+    getVideoUrl?: (photo: T) => string;
     getThumbnailUrl?: (photo: T) => string;
     getDownloadUrl?: (photo: T) => string;
     getComparison?: (photo: T) => { thumbnailUrl: string; previewUrl: string } | null | undefined;
@@ -61,10 +63,13 @@ function LightboxView<T extends GalleryDisplayPhoto>({
     const currentUrl = photo ? previewUrlFor(photo) : '';
     const placeholderUrl = photo ? (getThumbnailUrl ? getThumbnailUrl(photo) : galleryThumbnailUrl(galleryId, photo.driveFileId, token, photo.photoToken)) : '';
     const displayLabel = photo ? displayPhotoLabel(photo, photoDisplayIndex(photo, displayStartIndex + currentIndex)) : '';
+    const isVideo = Boolean(photo?.mimeType?.toLowerCase().startsWith('video/'));
+    const videoUrl = photo && isVideo ? getVideoUrl?.(photo) : undefined;
     const [loadedUrl, setLoadedUrl] = useState('');
     const [failedUrl, setFailedUrl] = useState('');
+    const [videoFailedFor, setVideoFailedFor] = useState<string | null>(null);
     const [comparisonEnabled, setComparisonEnabled] = useState(false);
-    const comparison = photo && mode === 'delivery' ? getComparison?.(photo) : null;
+    const comparison = photo && !isVideo && mode === 'delivery' ? getComparison?.(photo) : null;
     useEffect(() => {
         // Also reset when a tab change closes the lightbox from its parent.
         // eslint-disable-next-line react-hooks/set-state-in-effect
@@ -74,7 +79,7 @@ function LightboxView<T extends GalleryDisplayPhoto>({
     const swipeStartXRef = useRef<number | null>(null);
     const dialogRef = useRef<HTMLDivElement>(null);
     const closeButtonRef = useRef<HTMLButtonElement>(null);
-    const currentImageReady = Boolean(currentUrl) && (loadedUrl === currentUrl || isPreviewImageReady(currentUrl));
+    const currentImageReady = isVideo || (Boolean(currentUrl) && (loadedUrl === currentUrl || isPreviewImageReady(currentUrl)));
     const canMovePrevious = currentIndex > 0 || hasPreviousPage;
     const canMoveNext = currentIndex >= 0 && (currentIndex < photos.length - 1 || hasNextPage);
     const displayPosition = displayStartIndex + currentIndex + 1;
@@ -111,11 +116,11 @@ function LightboxView<T extends GalleryDisplayPhoto>({
         const nextUrl = previewUrlFor(nextPhoto);
         moveRequestRef.current += 1;
         onMove(nextPhoto.driveFileId);
-        void preloadPreviewImage(nextUrl, 'high').catch(() => undefined);
+        if (!nextPhoto.mimeType?.toLowerCase().startsWith('video/')) void preloadPreviewImage(nextUrl, 'high').catch(() => undefined);
     }, [currentIndex, previewUrlFor, hasNextPage, hasPreviousPage, onMove, onNextPage, onPreviousPage, photos]);
 
     useEffect(() => {
-        if (!currentUrl || isPreviewImageReady(currentUrl)) return;
+        if (isVideo || !currentUrl || isPreviewImageReady(currentUrl)) return;
 
         let active = true;
         void preloadPreviewImage(currentUrl, 'high')
@@ -129,7 +134,7 @@ function LightboxView<T extends GalleryDisplayPhoto>({
         return () => {
             active = false;
         };
-    }, [currentUrl]);
+    }, [currentUrl, isVideo]);
 
     useEffect(() => {
         if (currentIndex < 0 || !canPrefetchPreview()) return;
@@ -140,7 +145,7 @@ function LightboxView<T extends GalleryDisplayPhoto>({
         neighborOffsets.forEach((offset, index) => {
             const neighborIndex = currentIndex + offset;
             const neighbor = photos[neighborIndex];
-            if (!neighbor) return;
+            if (!neighbor || neighbor.mimeType?.toLowerCase().startsWith('video/')) return;
             const neighborUrl = previewUrlFor(neighbor);
             if (isPreviewImageReady(neighborUrl)) return;
 
@@ -161,7 +166,7 @@ function LightboxView<T extends GalleryDisplayPhoto>({
         const frame = requestAnimationFrame(() => closeButtonRef.current?.focus({ preventScroll: true }));
         const trapFocus = (event: KeyboardEvent) => {
             if (event.key !== 'Tab' || !dialogRef.current) return;
-            const focusable = [...dialogRef.current.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), [tabindex="0"]')].filter((element) => element.getClientRects().length > 0);
+            const focusable = [...dialogRef.current.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), video[controls], [tabindex="0"]')].filter((element) => element.getClientRects().length > 0);
             const first = focusable[0];
             const last = focusable.at(-1);
             if (!first || !last) { event.preventDefault(); dialogRef.current.focus(); return; }
@@ -186,7 +191,7 @@ function LightboxView<T extends GalleryDisplayPhoto>({
             }
 
             const target = event.target;
-            if (event.defaultPrevented || (target instanceof Element && target.closest('[role="slider"]'))) return;
+            if (event.defaultPrevented || target instanceof HTMLMediaElement || (target instanceof Element && target.closest('[role="slider"]'))) return;
             if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || (target instanceof HTMLElement && target.isContentEditable)) return;
 
             if (event.key === 'ArrowLeft') requestMove(currentIndex - 1);
@@ -247,16 +252,26 @@ function LightboxView<T extends GalleryDisplayPhoto>({
                     <button type="button" disabled={!canMoveNext} aria-label="Next photo" onClick={() => requestMove(currentIndex + 1)} className="absolute right-1 top-1/2 z-30 flex h-11 w-11 -translate-y-1/2 items-center justify-center rounded-full border border-white/20 bg-black/40 text-white backdrop-blur transition-opacity focus-visible:outline focus-visible:outline-2 focus-visible:outline-white disabled:opacity-25 sm:right-4">
                         <ChevronRight size={18} aria-hidden="true" />
                     </button>
-                    {failedUrl === currentUrl && (
+                    {!isVideo && failedUrl === currentUrl && (
                         <div className="absolute flex flex-col items-center text-white/60">
                             <ImageOff size={26} />
                             <span className="mt-2 text-[10px] font-bold uppercase tracking-[0.14em]">Failed to load preview</span>
                         </div>
                     )}
-                    {comparisonEnabled && comparison && <div className="absolute inset-y-2 left-10 right-10 z-20 sm:inset-y-5 sm:left-16 sm:right-16">
+                    {!isVideo && comparisonEnabled && comparison && <div className="absolute inset-y-2 left-10 right-10 z-20 sm:inset-y-5 sm:left-16 sm:right-16">
                         <BeforeAfterSlider key={`${photo.driveFileId}-${comparison.previewUrl}`} testId="delivery" beforeUrl={comparison.previewUrl} beforePlaceholderUrl={comparison.thumbnailUrl} afterUrl={currentUrl} fallbackUrl={currentUrl} frameClass="h-full" aspectRatio={photo.width && photo.height ? photo.width / photo.height : undefined} />
                     </div>}
-                    <img 
+                    {isVideo ? (videoFailedFor === photo.driveFileId ? <div role="status" className="z-10 flex max-w-sm flex-col items-center gap-3 px-6 text-center text-sm text-white/80"><ImageOff size={28} /><p>This video format cannot be played in this browser.</p><p className="text-xs text-white/55">Download the original file to watch it.</p></div> : <video
+                        key={photo.driveFileId}
+                        data-testid="gallery-lightbox-video"
+                        src={videoUrl}
+                        poster={placeholderUrl || undefined}
+                        controls
+                        playsInline
+                        preload="metadata"
+                        onError={() => setVideoFailedFor(photo.driveFileId)}
+                        className="z-10 block max-h-full max-w-full object-contain"
+                    />) : <img
                         data-testid="gallery-lightbox-image"
                         key={currentUrl}
                         src={currentUrl}
@@ -273,7 +288,7 @@ function LightboxView<T extends GalleryDisplayPhoto>({
                         }}
                         onDragStart={(event) => event.preventDefault()}
                         onError={() => setFailedUrl(currentUrl)}
-                    />
+                    />}
                 </div>
                 
                 <footer data-testid="gallery-lightbox-footer" className="relative z-20 flex shrink-0 flex-col gap-2 border-t border-white/10 bg-black/80 px-3 py-3 backdrop-blur sm:flex-row sm:items-center sm:justify-between sm:gap-3 sm:px-5 sm:py-4">

@@ -40,11 +40,26 @@ describe("gallery selection deadlines", () => {
         })).toEqual({ selectionDurationHours: 72, selectionDeadlineAt: deadline, status: "open" });
     });
 
-    test("keeps an expired gallery closed after its duration is renewed", () => {
+    test("opens an expired gallery when its duration is renewed and Open is selected", () => {
         expect(resolveGalleryDeadlineUpdate({
             existingDurationHours: 72,
             existingDeadlineAt: "2026-09-02T03:00:00.000Z",
             nextStatus: "open",
+            durationWasProvided: true,
+            requestedDurationHours: 168,
+            now: Date.parse("2026-09-03T03:00:00.000Z"),
+        })).toEqual({
+            selectionDurationHours: 168,
+            selectionDeadlineAt: "2026-09-10T03:00:00.000Z",
+            status: "open",
+        });
+    });
+
+    test("keeps an expired gallery closed when its duration is renewed but Closed remains selected", () => {
+        expect(resolveGalleryDeadlineUpdate({
+            existingDurationHours: 72,
+            existingDeadlineAt: "2026-09-02T03:00:00.000Z",
+            nextStatus: "closed",
             durationWasProvided: true,
             requestedDurationHours: 168,
             now: Date.parse("2026-09-03T03:00:00.000Z"),

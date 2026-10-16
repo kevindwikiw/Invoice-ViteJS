@@ -149,42 +149,56 @@ async function discardResponse(response: Response): Promise<void> {
     catch { /* The response may already be closed. */ }
 }
 
-async function fetchDriveGet(url: string, input: { accept?: string; timeoutMs?: number } = {}): Promise<Response> {
+async function fetchDriveGet(url: string, input: { accept?: string; timeoutMs?: number; responseTimeoutMs?: number; maxAttempts?: number; range?: string } = {}): Promise<Response> {
     let lastError: unknown;
     let refreshedToken = false;
-    for (let attempt = 0; attempt < 3; attempt++) {
+    const maxAttempts = Math.max(1, input.maxAttempts ?? 3);
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
         try {
             const token = await getDriveAccessToken(refreshedToken);
             refreshedToken = false;
-            const response = await fetch(url, {
-                headers: {
-                    Authorization: `Bearer ${token}`,
-                    ...(input.accept ? { Accept: input.accept } : {}),
-                },
-                signal: AbortSignal.timeout(input.timeoutMs || 30_000),
-            });
+            const responseController = input.responseTimeoutMs ? new AbortController() : undefined;
+            const responseTimeout = responseController
+                ? setTimeout(() => responseController.abort(new Error("Google Drive response timed out.")), input.responseTimeoutMs)
+                : undefined;
+            let response: Response;
+            try {
+                response = await fetch(url, {
+                    headers: {
+                        Authorization: `Bearer ${token}`,
+                        ...(input.accept ? { Accept: input.accept } : {}),
+                        ...(input.range ? { Range: input.range } : {}),
+                    },
+                    ...(responseController
+                        ? { signal: responseController.signal }
+                        : input.timeoutMs === 0 ? {} : { signal: AbortSignal.timeout(input.timeoutMs || 30_000) }),
+                });
+            } finally {
+                if (responseTimeout) clearTimeout(responseTimeout);
+            }
             if (response.ok) return response;
-            if (response.status === 401 && attempt < 2) {
+            if (response.status === 401 && attempt < maxAttempts - 1) {
                 await discardResponse(response);
                 refreshedToken = true;
                 continue;
             }
-            if (!DRIVE_RETRY_STATUSES.has(response.status) || attempt === 2) return response;
+            if (!DRIVE_RETRY_STATUSES.has(response.status) || attempt === maxAttempts - 1) return response;
             const delay = driveRetryDelay(response, attempt);
             await discardResponse(response);
             await Bun.sleep(delay);
         } catch (error) {
             lastError = error;
-            if (attempt === 2) throw error;
+            if (attempt === maxAttempts - 1) throw error;
             await Bun.sleep(driveRetryDelay(null, attempt));
         }
     }
     throw lastError instanceof Error ? lastError : new Error("Unable to reach Google Drive.");
 }
 
-function driveSearchQuery(folderId: string, includeFolders = false): string {
+function driveSearchQuery(folderId: string, includeFolders = false, includeVideos = false): string {
     const safeFolderId = folderId.replace(/'/g, "\\'");
-    return `'${safeFolderId}' in parents and trashed = false and (mimeType contains 'image/'${includeFolders ? " or mimeType = 'application/vnd.google-apps.folder'" : ''})`;
+    const mediaTypes = ["mimeType contains 'image/'", ...(includeVideos ? ["mimeType contains 'video/'"] : []), ...(includeFolders ? ["mimeType = 'application/vnd.google-apps.folder'"] : [])];
+    return `'${safeFolderId}' in parents and trashed = false and (${mediaTypes.join(' or ')})`;
 }
 
 export async function listDrivePhotos(folderId: string): Promise<DrivePhoto[]> {
@@ -197,7 +211,7 @@ async function listDriveEntries(folderId: string, includeFolders = false): Promi
 
     do {
         const params = new URLSearchParams({
-            q: driveSearchQuery(folderId, includeFolders),
+            q: driveSearchQuery(folderId, includeFolders, includeFolders),
             pageSize: "1000",
             orderBy: "name_natural",
             fields: "nextPageToken,incompleteSearch,files(id,name,mimeType,thumbnailLink,webViewLink,webContentLink,resourceKey,copyRequiresWriterPermission,size,md5Checksum,modifiedTime,imageMediaMetadata(width,height))",
@@ -260,18 +274,23 @@ export async function listDrivePhotoTree(rootId: string): Promise<{ folders: Dri
                 visited.add(entry.id);
                 folders.push({ id: entry.id, parentId, name: entry.name });
                 queue.push({ id: entry.id, depth: folder.depth + 1 });
-            } else if (entry.mimeType.startsWith('image/') && !fileIds.has(entry.id)) {
+            } else if ((entry.mimeType.startsWith('image/') || entry.mimeType.startsWith('video/')) && !fileIds.has(entry.id)) {
                 fileIds.add(entry.id);
                 photos.push({ ...entry, folderId: parentId });
-                if (photos.length > 100_000) throw new Error('Edited folder tree contains too many photos.');
+                if (photos.length > 100_000) throw new Error('Edited folder tree contains too many media items.');
             }
         }
     }
     return { folders, photos };
 }
 
-export async function getDrivePhotoMetadata(fileId: string): Promise<DrivePhoto> {
-    const response = await fetchDriveGet(`${DRIVE_API_BASE}/files/${encodeURIComponent(fileId)}?supportsAllDrives=true&fields=id,name,mimeType,thumbnailLink,webViewLink,webContentLink,resourceKey,copyRequiresWriterPermission,capabilities(canDownload),downloadRestrictions(effectiveDownloadRestrictionWithContext),size,imageMediaMetadata(width,height)`);
+export async function fetchDriveVideo(fileId: string, range?: string, responseTimeoutMs = 15_000): Promise<Response> {
+    const url = `${DRIVE_API_BASE}/files/${encodeURIComponent(fileId)}?alt=media&supportsAllDrives=true`;
+    return fetchDriveGet(url, { accept: 'video/*,*/*;q=0.8', range, timeoutMs: 0, responseTimeoutMs, maxAttempts: 2 });
+}
+
+export async function getDrivePhotoMetadata(fileId: string, requestOptions: { timeoutMs?: number; maxAttempts?: number } = {}): Promise<DrivePhoto> {
+    const response = await fetchDriveGet(`${DRIVE_API_BASE}/files/${encodeURIComponent(fileId)}?supportsAllDrives=true&fields=id,name,mimeType,thumbnailLink,webViewLink,webContentLink,resourceKey,copyRequiresWriterPermission,capabilities(canDownload),downloadRestrictions(effectiveDownloadRestrictionWithContext),size,imageMediaMetadata(width,height)`, requestOptions);
     const data = await response.json().catch(() => ({})) as DrivePhoto & {
         error?: { message?: string };
         capabilities?: { canDownload?: boolean };
@@ -312,20 +331,25 @@ function resizedThumbnailUrl(thumbnailLink: string, width: number, preferWebp = 
     return thumbnailLink.replace(/=s\d+(?:-[^?]*)?$/, resize);
 }
 
-export async function fetchDriveFile(fileId: string, thumbnailLink?: string, width?: number, preserveAspectRatio = false): Promise<Response> {
+export async function fetchDriveFile(fileId: string, thumbnailLink?: string, width?: number, preserveAspectRatio = false, requestOptions: { timeoutMs?: number; maxAttempts?: number } = {}): Promise<Response> {
     const url = thumbnailLink
         ? resizedThumbnailUrl(thumbnailLink, width || 320, true, preserveAspectRatio)
         : `${DRIVE_API_BASE}/files/${encodeURIComponent(fileId)}?alt=media&supportsAllDrives=true`;
-    let response = await fetchDriveGet(url, { accept: "image/webp,image/*;q=0.8,*/*;q=0.5", timeoutMs: 10_000 });
+    let response = await fetchDriveGet(url, { accept: "image/webp,image/*;q=0.8,*/*;q=0.5", timeoutMs: requestOptions.timeoutMs ?? 10_000, maxAttempts: requestOptions.maxAttempts });
+
+    if (!response.ok && requestOptions.maxAttempts === 1 && (response.status === 429 || response.status >= 500)) {
+        const message = await response.text().catch(() => "");
+        throw Object.assign(new Error(message || `Google Drive thumbnail is temporarily unavailable (${response.status}).`), { status: response.status });
+    }
 
     if (!response.ok && thumbnailLink && response.status !== 404 && response.status !== 410) {
         await discardResponse(response);
-        response = await fetchDriveGet(resizedThumbnailUrl(thumbnailLink, width || 320, false, preserveAspectRatio), { accept: "image/*;q=0.8,*/*;q=0.5", timeoutMs: 10_000 });
+        response = await fetchDriveGet(resizedThumbnailUrl(thumbnailLink, width || 320, false, preserveAspectRatio), { accept: "image/*;q=0.8,*/*;q=0.5", timeoutMs: requestOptions.timeoutMs ?? 10_000, maxAttempts: requestOptions.maxAttempts });
     }
 
     if (!response.ok) {
         const message = await response.text().catch(() => "");
-        throw new Error(message || `Unable to fetch Google Drive file (${response.status}).`);
+        throw Object.assign(new Error(message || `Unable to fetch Google Drive file (${response.status}).`), { status: response.status });
     }
     return response;
 }
