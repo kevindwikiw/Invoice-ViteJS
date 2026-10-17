@@ -1,9 +1,11 @@
 # Marketing Implementation Status
 
-Last Updated: 2026-10-14
+Last Updated: 2026-10-16
 
 ## Application Maintenance
 
+- 2026-10-16: Separated Edited Photos folder ZIP jobs into `archive_worker:app` with its own Ubuntu service, virtualenv, service user, environment, and listener at `127.0.0.1:8089`. Selfie remains on `8088` and no longer registers ZIP routes. Hono uses independent `FACE_ARCHIVE_WORKER_*` settings; HTTPS proxy routes archive requests to ZIP and browser downloads avoid Fly.
+- Validation for this change: 43 Python tests and two Hono lifecycle/configuration scenarios passed, including real Uvicorn process stop/restart isolation, ZIP ticket/expiry/limits, missing archive configuration, and no ML imports in ZIP. Server/client typechecks and client production build passed. Ubuntu systemd, live HTTPS proxy, Google Drive, and Fly deployment were not exercised; installation/configuration instructions are in the worker README.
 - 2026-10-14: Implemented Selfie search for Edited Photos and Wedding. Selection and Edited indexes have independent source scopes, versioned snapshots, callback validation, and delivery-token access. Publish/Sync prepares Edited indexes in the background; Unpublish removes only Edited indexes. Client search covers all folders with per-photo downloads and retains the previous folder/page when returning to Edited.
 - Validation for this change: 34 focused backend tests and 45 distinct Chromium scenarios passed, including legacy schema upgrades, index/token isolation, PIN and Selection regressions, expiry, retry, concurrent Sync during search, browser history, and 320px/390px/desktop light/dark screenshots. Client/server typechecks and client production build passed. Drive/worker integration used mocks; no production deployment or live Turso migration was performed.
 - 2026-10-06: Added immutable Prewedding selection/delivery and Wedding delivery-only workflows to the existing client/Hono application. Existing galleries retain selection behavior; Wedding uses the existing Edited password, Drive folder tree, and download flow.

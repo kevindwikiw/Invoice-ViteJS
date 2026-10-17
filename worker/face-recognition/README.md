@@ -167,7 +167,7 @@ Archive limits can be adjusted in `/etc/orbit-archive-worker.env`:
 | `FACE_ARCHIVE_WORKER_MAX_PHOTOS` | 2,000 | Maximum images in one folder job |
 | `FACE_ARCHIVE_WORKER_MAX_ACTIVE` | 4 | Maximum queued and running archive jobs |
 | `FACE_ARCHIVE_WORKER_CONCURRENCY` | 1 | ZIP jobs processed at once |
-| `FACE_ARCHIVE_WORKER_TTL_SECONDS` | 43,200 | Time a completed ZIP stays downloadable |
+| `FACE_ARCHIVE_WORKER_TTL_SECONDS` | 21,600 | Time a completed ZIP stays downloadable (6 hours) |
 | `FACE_ARCHIVE_WORKER_DIR` | `<worker>/archives` | Dedicated temporary archive storage |
 
 Temporary staging holds at most one source photo beside the growing ZIP. The

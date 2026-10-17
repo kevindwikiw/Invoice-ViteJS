@@ -57,10 +57,12 @@ import {
   downloadGallerySelectionsXlsx,
   getGalleryContact,
   getGalleryDetail,
+  getEditArchivePreparation,
   listGalleries,
   publishEditResults,
   resetGalleryEditResultsLock,
   resetGalleryPinLock,
+  retryEditArchivePreparation,
   saveGalleryContact,
   syncGallery,
   syncEditResults,
@@ -908,6 +910,17 @@ function GalleryDetailEditor({ data, close, initialMode, focusSelectionDuration 
   const [editAccessPreset, setEditAccessPreset] = useState(() => initialEditDuration === null ? 'unlimited' : [24, 72, 168, 336].includes(Number(initialEditDuration || 168)) ? String(initialEditDuration || 168) : 'custom');
   const [editCustomDays, setEditCustomDays] = useState(() => Math.max(1, Math.round(Number(initialEditDuration || 168) / 24)));
   const [publishWarnings, setPublishWarnings] = useState<string[]>([]);
+  const archivePreparation = useQuery({
+    queryKey: ['edit-archive-preparation', data.id],
+    queryFn: () => getEditArchivePreparation(data.id),
+    enabled: mode === 'edited' && editedStatus === 'open',
+    refetchInterval: (query) => query.state.data?.ready || query.state.data?.enabled === false ? false : 5000,
+  });
+  const retryArchivePreparation = useMutation({
+    mutationFn: () => retryEditArchivePreparation(data.id),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ['edit-archive-preparation', data.id] }),
+    onError: (error) => reportActionError('ZIP preparation', error),
+  });
   const markDirty = () => { setDirty(true); setSaved(false); setSaveError(''); setActionError(''); };
   const syncFormDirty = (nextDirty: boolean) => {
     setFeedback((current) => ({ ...current, [mode]: { ...current[mode], dirty: nextDirty, saved: nextDirty ? false : current[mode].saved, saveError: '', actionError: '' } }));
@@ -1007,6 +1020,7 @@ function GalleryDetailEditor({ data, close, initialMode, focusSelectionDuration 
       void qc.invalidateQueries({ queryKey: ['galleries'] });
       void qc.invalidateQueries({ queryKey: ['gallery-detail', data.id] });
       void qc.invalidateQueries({ queryKey: ['public-edit-results'] });
+      void qc.invalidateQueries({ queryKey: ['edit-archive-preparation', data.id] });
     },
     onError: (error) => reportActionError('Edited Photos sync', error),
   });
@@ -1025,6 +1039,7 @@ function GalleryDetailEditor({ data, close, initialMode, focusSelectionDuration 
       setEditedSyncPending(false);
       qc.invalidateQueries({ queryKey: ['galleries'] });
       qc.invalidateQueries({ queryKey: ['gallery-detail', data.id] });
+      void qc.invalidateQueries({ queryKey: ['edit-archive-preparation', data.id] });
     },
     onError: (error) => {
       setDirty(true);
@@ -1289,7 +1304,7 @@ function GalleryDetailEditor({ data, close, initialMode, focusSelectionDuration 
               <div className="min-w-0 space-y-2">
                 <div className="flex items-baseline justify-between gap-2">
                   <label htmlFor="editResultsZipFileId" className="block text-[11px] font-semibold text-[var(--text-secondary)]">Edited Photos ZIP <span className="font-normal text-[var(--text-muted)]">(optional)</span></label>
-                  <span id="edited-zip-help" className="text-[10px] text-[var(--text-muted)]">Used for the client's Download All Photos button</span>
+                  <span id="edited-zip-help" className="text-[10px] text-[var(--text-muted)]">Legacy full-gallery ZIP</span>
                 </div>
                 <input id="editResultsZipFileId" form="edit-delivery-form" name="editResultsZipFileId" defaultValue={data.editResultsZipFileId || ''} placeholder="Google Drive ZIP file URL or ID" aria-describedby="edited-zip-help" className={inputClass} />
               </div>
@@ -1356,6 +1371,10 @@ function GalleryDetailEditor({ data, close, initialMode, focusSelectionDuration 
             </fieldset>
              </form>
             {publishWarnings.map((warning) => <p key={warning} role="status" className="mb-3 text-sm text-amber-600 dark:text-amber-400">{warning}</p>)}
+            {mode === 'edited' && archivePreparation.data?.enabled && <div role="status" className="flex flex-wrap items-center justify-between gap-2 border-t border-[var(--border)] py-3 text-xs text-[var(--text-secondary)]">
+              <span>{archivePreparation.data.available === false ? 'ZIP preparation unavailable' : archivePreparation.data.ready ? `ZIPs ready (${archivePreparation.data.completed}/${archivePreparation.data.total})` : `Preparing ZIPs (${archivePreparation.data.completed}/${archivePreparation.data.total})${archivePreparation.data.failed ? `, ${archivePreparation.data.failed} failed` : ''}`}</span>
+              {(archivePreparation.data.failed || archivePreparation.data.missing || archivePreparation.data.available === false) ? <button type="button" disabled={retryArchivePreparation.isPending} onClick={() => retryArchivePreparation.mutate()} className="inline-flex min-h-9 items-center gap-2 text-xs font-semibold text-[var(--text-primary)] hover:text-[var(--accent)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)] disabled:opacity-50"><RefreshCw size={14} aria-hidden="true" className={retryArchivePreparation.isPending ? 'animate-spin' : undefined} />Retry ZIP preparation</button> : null}
+            </div>}
           </section>
           <div hidden={mode !== 'edited'} className="flex flex-wrap items-center justify-between gap-3 border-t border-[var(--border)] pt-4">
             <div><h3 className="text-sm font-semibold">Edited Photos access</h3><p className="mt-1 text-xs text-[var(--text-muted)]">Unlock failed password attempts without changing the published password.</p></div>

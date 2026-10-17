@@ -5,7 +5,7 @@ import { Link, useNavigate, useSearch } from '@tanstack/react-router';
 import { AlertCircle, ArrowLeft, Check, ChevronLeft, ChevronRight, ChevronUp, Clock3, Download, Folder, FolderOpen, HelpCircle, Loader2, Lock, MessageCircle, RotateCcw, ScanFace, X } from 'lucide-react';
 import clsx from 'clsx';
 
-import { editResultVideoUrl, getEditFolderArchiveJob, getEditResults, getEditResultsStatus, resolveEditResultDownload, startEditFolderArchive, startEditGalleryArchive, verifyEditResultsPassword } from '../culling.public';
+import { editResultVideoUrl, getEditFolderArchiveJob, getEditResults, getEditResultsStatus, resolveEditResultDownload, startEditFolderArchive, startEditGalleryArchive, verifyEditResultsPassword, type EditFolderArchiveScope } from '../culling.public';
 import type { EditResultPhoto } from '../culling.types';
 import { BLACK_THEME, GALLERY_PAGE_SIZE, WHITE_THEME } from './constants';
 import { GalleryHeaderIdentity, GalleryViewTabs, OrbitLogo, ThemeToggle, type GalleryView } from './GalleryChrome';
@@ -41,10 +41,11 @@ const prefetchPhoto = (photo: EditResultPhoto) => {
     if (canPrefetchPreview()) void preloadPreviewImage(photo.previewUrl, 'low').catch(() => undefined);
 };
 
-function ArchiveDownloadAction({ pending, progress, onDownload }: { pending: boolean; progress?: string; onDownload: () => void }) {
-    return <><button type="button" disabled={pending} aria-busy={pending} onClick={onDownload} title={pending ? `Preparing ZIP${progress ? ` (${progress})` : ''}` : 'Download all photos as ZIP'} aria-label={pending ? `Preparing ZIP${progress ? `, ${progress}` : ''}` : 'Download All Photos'} className="inline-flex h-11 w-36 shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-md border border-[var(--border)] bg-[var(--accent)] px-2 text-xs font-semibold text-[var(--bg-deep)] transition-[opacity,transform] duration-150 hover:opacity-90 active:scale-[0.97] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)] disabled:opacity-60 motion-reduce:transition-none min-[390px]:w-40 sm:w-[210px] sm:gap-2 sm:px-4 sm:text-[13px]">
+function ArchiveDownloadAction({ folder, pending, progress, onDownload }: { folder: boolean; pending: boolean; progress?: string; onDownload: () => void }) {
+    const label = folder ? 'Download Folder Photos' : 'Download All Photos';
+    return <><button type="button" disabled={pending} aria-busy={pending} onClick={onDownload} title={pending ? `Preparing ZIP${progress ? ` (${progress})` : ''}` : `${label} as ZIP`} aria-label={pending ? `Preparing ZIP${progress ? `, ${progress}` : ''}` : label} className="inline-flex h-11 w-36 shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-md border border-[var(--border)] bg-[var(--accent)] px-2 text-xs font-semibold text-[var(--bg-deep)] transition-[opacity,transform] duration-150 hover:opacity-90 active:scale-[0.97] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)] disabled:opacity-60 motion-reduce:transition-none min-[390px]:w-40 sm:w-[210px] sm:gap-2 sm:px-4 sm:text-[13px]">
             {pending ? <Loader2 size={14} aria-hidden="true" className="animate-spin motion-reduce:animate-none" /> : <Download size={13} aria-hidden="true" />}
-            {pending ? <><span className="sm:hidden">Preparing…</span><span className="hidden sm:inline">Preparing download…</span></> : <span>Download All Photos</span>}
+            {pending ? <><span className="sm:hidden">Preparing…</span><span className="hidden sm:inline">Preparing download…</span></> : folder ? <><span className="sm:hidden">Folder Photos</span><span className="hidden sm:inline">{label}</span></> : <span>{label}</span>}
         </button><span role="status" aria-live="polite" className="sr-only">{pending ? 'Preparing ZIP download' : ''}</span></>;
 }
 
@@ -102,7 +103,8 @@ export function EditResultsGrid({
     const [navigation, setNavigation] = useState({ galleryId, token, folderId: requestedFolder ?? null, selfie: isSelfieView, page: viewPage, photoId: null as string | null });
     const [pendingDownload, setPendingDownload] = useState<string | null>(null);
     const [downloadError, setDownloadError] = useState('');
-    const [folderArchiveTarget, setFolderArchiveTarget] = useState<{ folderId: string; name: string; jobId: string } | null>(null);
+    const [folderArchiveTarget, setFolderArchiveTarget] = useState<{ folderId: string; name: string; scope: EditFolderArchiveScope; jobId: string } | null>(null);
+    const autoDownloadStartedForJob = useRef<string | null>(null);
     const [pendingPage, setPendingPage] = useState<{ folderId: string | null; selfie: boolean; page: number } | null>(null);
     const [showFaceSearch, setShowFaceSearch] = useState(false);
     const [showSelectionInfo, setShowSelectionInfo] = useState(false);
@@ -177,7 +179,7 @@ export function EditResultsGrid({
         refetchOnWindowFocus: 'always',
     });
     const folderArchiveMutation = useMutation({
-        mutationFn: ({ folderId }: { folderId: string; name: string }) => folderId === '__all__' ? startEditGalleryArchive(galleryId, token) : startEditFolderArchive(galleryId, folderId, token),
+        mutationFn: ({ folderId, scope }: { folderId: string; name: string; scope: EditFolderArchiveScope }) => folderId === '__all__' ? startEditGalleryArchive(galleryId, token, scope) : startEditFolderArchive(galleryId, folderId, token, scope),
         onSuccess: (job, target) => setFolderArchiveTarget({ ...target, jobId: job.jobId }),
         onError: (cause) => setDownloadError(cause instanceof Error ? cause.message : 'Unable to prepare this folder download.'),
     });
@@ -220,6 +222,7 @@ export function EditResultsGrid({
             : { galleryId, token, folderId, selfie: isSelfieView, page: viewPage, photoId: null });
     }, [galleryId, token, folderId, viewPage, isSelfieView]);
     const childFolders = useMemo(() => folders.filter((folder) => folder.parentId === folderId).sort((a, b) => compareFolderPaths(a.name, b.name)), [folders, folderId]);
+    const childFoldersLabel = childFolders.length === 1 ? childFolders[0]!.name : 'Folders';
     const currentFolder = folders.find((folder) => folder.id === folderId);
     const folderPhotoCounts = useMemo(() => {
         const counts = new Map<string, number>();
@@ -291,8 +294,7 @@ export function EditResultsGrid({
         }
     }, [results.isSuccess, requestedFolder, folderId, navigate]);
     const folderPhotos = useMemo(() => (results.data?.photos ?? []).filter((photo) => (photo.folderId ?? null) === folderId), [results.data?.photos, folderId]);
-    const archive = results.data?.archive;
-    const downloadablePhotoCount = useMemo(() => (results.data?.photos ?? []).filter((photo) => photo.mimeType?.startsWith('image/')).length, [results.data?.photos]);
+    const hasDirectPhotos = folderPhotos.some((photo) => photo.mimeType?.startsWith('image/'));
     const accessError = (results.error || verify.error) as (Error & { code?: string }) | null;
     const expiry = results.data?.expiresAt ?? accessExpiresAt ?? (localStorage.getItem(`orbit:edit-results-expiry:${galleryId}`) || null);
     const expiryTime = expiry && expiry !== 'unlimited' ? Date.parse(expiry) : NaN;
@@ -398,10 +400,11 @@ export function EditResultsGrid({
             setPendingDownload(null);
         }
     }, []);
-    const downloadFolder = useCallback((targetFolderId: string, name: string) => {
-        const activeJob = folderArchiveTarget?.folderId === targetFolderId ? folderArchiveStatus.data : null;
+    const downloadFolder = useCallback((targetFolderId: string, name: string, scope: EditFolderArchiveScope = 'subtree') => {
+        const activeJob = folderArchiveTarget?.folderId === targetFolderId && folderArchiveTarget.scope === scope ? folderArchiveStatus.data : null;
+        const pendingKey = `folder-archive:${scope}:${targetFolderId}`;
         if (activeJob?.status === 'completed' && activeJob.downloadUrl) {
-            setPendingDownload(`folder-archive:${targetFolderId}`);
+            setPendingDownload(pendingKey);
             void folderArchiveStatus.refetch().then(({ data }) => {
                 if (data?.status === 'completed' && data.downloadUrl) window.location.assign(data.downloadUrl);
                 else setDownloadError('The folder ZIP link expired. Prepare the download again.');
@@ -412,11 +415,18 @@ export function EditResultsGrid({
         if (activeJob && ['queued', 'running'].includes(activeJob.status)) return;
         setDownloadError('');
         setFolderArchiveTarget(null);
-        folderArchiveMutation.mutate({ folderId: targetFolderId, name });
+        folderArchiveMutation.mutate({ folderId: targetFolderId, name, scope });
     }, [folderArchiveMutation, folderArchiveStatus, folderArchiveTarget]);
     useEffect(() => {
+        const target = folderArchiveTarget;
+        if (!target?.jobId || folderArchiveStatus.data?.status !== 'completed' || !folderArchiveStatus.data.downloadUrl || pendingDownload) return;
+        if (autoDownloadStartedForJob.current === target.jobId) return;
+        autoDownloadStartedForJob.current = target.jobId;
+        downloadFolder(target.folderId, target.name, target.scope);
+    }, [folderArchiveTarget, folderArchiveStatus.data, pendingDownload, downloadFolder]);
+    useEffect(() => {
         if (!folderArchiveStatus.data || folderArchiveStatus.data.status !== 'failed') return;
-        setDownloadError('Could not prepare this folder ZIP. Please try again.');
+        setDownloadError(folderArchiveStatus.data.error || 'Could not prepare this ZIP. Please try again.');
         setFolderArchiveTarget(null);
     }, [folderArchiveStatus.data]);
     useEffect(() => {
@@ -433,31 +443,33 @@ export function EditResultsGrid({
     const archiveJobInProgress = folderArchiveMutation.isPending || ['queued', 'running'].includes(folderArchiveStatus.data?.status ?? '');
     const renderFolderArchiveButton = (targetFolderId: string, name: string) => {
         if (!folderPhotoCounts.get(targetFolderId)) return null;
-        const isTarget = folderArchiveTarget?.folderId === targetFolderId || (folderArchiveMutation.isPending && folderArchiveMutation.variables?.folderId === targetFolderId);
+        const isTarget = (folderArchiveTarget?.folderId === targetFolderId && folderArchiveTarget.scope === 'subtree') || (folderArchiveMutation.isPending && folderArchiveMutation.variables?.folderId === targetFolderId && folderArchiveMutation.variables?.scope === 'subtree');
         const status = isTarget ? folderArchiveStatus.data : null;
-        const starting = folderArchiveMutation.isPending && folderArchiveMutation.variables?.folderId === targetFolderId;
+        const starting = folderArchiveMutation.isPending && folderArchiveMutation.variables?.folderId === targetFolderId && folderArchiveMutation.variables?.scope === 'subtree';
         const busy = starting || Boolean(isTarget && (!status || ['queued', 'running'].includes(status.status)));
         return <FolderArchiveButton
             name={name}
-            busy={busy || pendingDownload === `folder-archive:${targetFolderId}`}
+            busy={busy || pendingDownload === `folder-archive:subtree:${targetFolderId}`}
             ready={status?.status === 'completed' && Boolean(status.downloadUrl)}
             disabled={archiveJobInProgress && !isTarget}
             progress={status?.total ? `${status.processed ?? 0}/${status.total}` : undefined}
             onClick={() => downloadFolder(targetFolderId, name)}
         />;
     };
-    const allArchiveTarget = folderArchiveTarget?.folderId === '__all__';
-    const allArchiveStarting = folderArchiveMutation.isPending && folderArchiveMutation.variables?.folderId === '__all__';
-    const allArchivePending = allArchiveStarting || Boolean(allArchiveTarget && archiveJobInProgress) || pendingDownload === 'folder-archive:__all__';
-    const archiveAction = !unavailable && token && results.isSuccess && (archive || downloadablePhotoCount > 0) ? (
-        <ArchiveDownloadAction key={`${galleryId}:${token}`} pending={allArchivePending} progress={allArchiveTarget && folderArchiveStatus.data?.total ? `${folderArchiveStatus.data.processed ?? 0}/${folderArchiveStatus.data.total}` : undefined} onDownload={() => archive ? void startDownload(archive.downloadResolveUrl, 'archive') : downloadFolder('__all__', 'All Photos')} />
+    const headerFolderId = folderId ?? '__all__';
+    const headerScope: EditFolderArchiveScope = 'direct';
+    const headerArchiveTarget = folderArchiveTarget?.folderId === headerFolderId && folderArchiveTarget.scope === headerScope;
+    const headerArchiveStarting = folderArchiveMutation.isPending && folderArchiveMutation.variables?.folderId === headerFolderId && folderArchiveMutation.variables?.scope === headerScope;
+    const headerArchivePending = headerArchiveStarting || Boolean(headerArchiveTarget && archiveJobInProgress) || pendingDownload === `folder-archive:${headerScope}:${headerFolderId}`;
+    const archiveAction = !unavailable && token && results.isSuccess && hasDirectPhotos ? (
+        <ArchiveDownloadAction key={`${galleryId}:${token}`} folder={Boolean(folderId)} pending={headerArchivePending} progress={headerArchiveTarget && folderArchiveStatus.data?.total ? `${folderArchiveStatus.data.processed ?? 0}/${folderArchiveStatus.data.total}` : undefined} onDownload={() => folderId && currentFolder ? downloadFolder(folderId, currentFolder.name, 'direct') : downloadFolder('__all__', 'Edited Photos', 'direct')} />
     ) : null;
     const accessLabel = accessExpired ? 'Access expired' : unavailable ? 'Access unavailable' : expiry ? expiryLabel(expiry) : null;
     const showGalleryToolbar = Boolean(token && !unavailable && results.isSuccess && !expired);
     const expiryAction = accessLabel ? <span className="inline-flex min-w-0 items-center gap-1.5 whitespace-nowrap text-[11px] font-medium text-[var(--text-secondary)] sm:text-sm" title={accessLabel} aria-live="polite"><Clock3 size={15} aria-hidden="true" className="shrink-0" /><span className="sm:hidden">{accessExpired ? 'Expired' : unavailable ? 'Unavailable' : compactExpiryLabel(expiry)}</span><span className="hidden sm:inline">{accessLabel}</span></span> : null;
     const deliveryActions = archiveAction;
     const helpAction = guideReady ? <button type="button" onClick={() => setGuideState({ galleryId, open: true })} title="Edited Photos guide" aria-label="Edited Photos guide" className="flex h-11 w-11 shrink-0 items-center justify-center text-[var(--text-secondary)] transition-colors hover:text-[var(--text-primary)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)]"><HelpCircle size={16} aria-hidden="true" /></button> : null;
-    const guide = guideReady && <EditedPhotosGuide open={guideOpen} onClose={closeGuide} theme={theme} hasFolders={folders.length > 0} hasArchive={Boolean(archive) || downloadablePhotoCount > 0} />;
+    const guide = guideReady && <EditedPhotosGuide open={guideOpen} onClose={closeGuide} theme={theme} hasFolders={folders.length > 0} hasArchive={hasDirectPhotos} />;
     const changeView = (next: GalleryView) => {
         closePhoto();
         setFolderPickerOpen(false);
@@ -553,10 +565,10 @@ export function EditResultsGrid({
                 </nav>
                 {renderFolderArchiveButton(currentFolder.id, currentFolder.name)}
             </div>}
-            {folderArchiveTarget && ['queued', 'running'].includes(folderArchiveStatus.data?.status ?? 'queued') && <p role="status" aria-live="polite" className="mb-3 text-xs text-[var(--text-secondary)]">Preparing {folderArchiveTarget.name} ZIP{folderArchiveStatus.data?.total ? ` (${folderArchiveStatus.data.processed ?? 0}/${folderArchiveStatus.data.total})` : '…'}</p>}
-            {folderArchiveTarget && folderArchiveStatus.data?.status === 'completed' && folderArchiveStatus.data.downloadUrl && <p role="status" className="mb-3 text-xs text-[var(--text-secondary)]">{folderArchiveTarget.name} ZIP is ready. Select its download icon to save it.</p>}
-            {!isSelfieView && childFolders.length > 0 && <section aria-label="Folders" className={photos.length > 0 ? 'mb-6' : undefined}>
-                <h2 className="mb-2 flex items-center gap-2 font-sans text-xs font-semibold tracking-normal text-[var(--text-secondary)]"><Folder size={14} aria-hidden="true" />Folders</h2>
+            {folderArchiveTarget && ['queued', 'running'].includes(folderArchiveStatus.data?.status ?? 'queued') && <p role="status" aria-live="polite" className="mb-3 text-xs text-[var(--text-secondary)]">{folderArchiveStatus.data?.status === 'running' ? 'Preparing' : 'Queued'} {folderArchiveTarget.name} ZIP{folderArchiveStatus.data?.status === 'running' && folderArchiveStatus.data.total ? ` (${folderArchiveStatus.data.processed ?? 0}/${folderArchiveStatus.data.total})` : '…'}</p>}
+            {folderArchiveTarget && folderArchiveStatus.data?.status === 'completed' && folderArchiveStatus.data.downloadUrl && <p role="status" aria-live="polite" className="sr-only">{folderArchiveTarget.name} ZIP is ready. Download starting.</p>}
+            {!isSelfieView && childFolders.length > 0 && <section aria-label={childFoldersLabel} className={photos.length > 0 ? 'mb-6' : undefined}>
+                <h2 className="mb-2 flex items-center gap-2 font-sans text-xs font-semibold tracking-normal text-[var(--text-secondary)]"><Folder size={14} aria-hidden="true" /><span className="min-w-0 [overflow-wrap:anywhere]">{childFoldersLabel}</span></h2>
                 <div data-testid="edited-folder-tiles" className="grid grid-cols-1 gap-0 border-t border-[var(--border)] sm:grid-cols-2 sm:gap-2 sm:border-0 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6">
                     {childFolders.map((folder) => <div key={folder.id} className="flex min-w-0 items-center border-b border-[var(--border)] sm:min-h-16 sm:rounded-md sm:border sm:bg-[var(--bg-card)]">
                         <Link to="/culling/$galleryId/edited" params={{ galleryId }} search={(current) => ({ ...current, view: undefined, selfieSource: undefined, folder: folder.id, editedPage: 1 })} resetScroll onClick={closePhoto} aria-label={`Open folder ${folder.name}`} className="group flex min-h-12 min-w-0 flex-1 items-center gap-3 px-2.5 py-2 text-[13px] font-medium transition-colors hover:bg-[var(--bg-card)] focus-visible:z-10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-[var(--accent)] sm:min-h-16 sm:rounded-md sm:px-3 sm:py-3 sm:text-sm sm:hover:bg-[var(--bg-elevated)]">

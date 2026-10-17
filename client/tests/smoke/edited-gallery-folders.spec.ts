@@ -206,7 +206,7 @@ test('switching folders from the bottom picker returns to the new folder start',
     await expect.poll(() => page.evaluate(() => window.scrollY)).toBeLessThan(100);
 });
 
-test('folder ZIP button tracks the worker job and exposes the completed download', async ({ page }) => {
+test('folder ZIP button tracks the worker job and automatically downloads the completed ZIP', async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 800 });
     await seed(page);
     let created = false;
@@ -224,39 +224,124 @@ test('folder ZIP button tracks the worker job and exposes the completed download
         if (path.endsWith('/edit-results')) return route.fulfill({ json: snapshot });
         return route.fulfill({ contentType: 'image/png', body: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl6z7QAAAAASUVORK5CYII=', 'base64') });
     });
+    await page.route('https://worker.example.test/**', (route) => route.fulfill({ status: 200, headers: { 'content-type': 'application/zip', 'content-disposition': 'attachment; filename="No Watermark.zip"' }, body: 'zip' }));
     await page.goto(`/culling/${id}?view=edit-results`);
     const downloadButton = page.getByRole('button', { name: 'Download No Watermark folder as ZIP' });
     await expect(downloadButton).toBeVisible();
+    const download = page.waitForEvent('download');
     await downloadButton.click();
     await expect.poll(() => created).toBe(true);
+    expect((await download).suggestedFilename()).toBe('No Watermark.zip');
     await expect(page.getByRole('button', { name: 'Download No Watermark ZIP' })).toBeVisible({ timeout: 5000 });
-    await expect(page.getByRole('status').filter({ hasText: 'No Watermark ZIP is ready' })).toBeVisible();
+    await expect(page.locator('p[role="status"]').filter({ hasText: 'Download starting' })).toHaveClass(/sr-only/);
 });
 
-test('Download All Photos prepares a ZIP containing the complete gallery', async ({ page }) => {
+test('folder header downloads only the open folder even when a gallery ZIP exists', async ({ page }) => {
+    await seed(page);
+    let directStarts = 0;
+    let publishedArchiveRequests = 0;
+    await page.route(`**/api/public/galleries/${id}/**`, async (route) => {
+        const url = new URL(route.request().url());
+        const path = url.pathname;
+        if (path.endsWith('/edit-results/status')) return route.fulfill({ json: { available: true } });
+        if (path.endsWith('/edit-results/folders/no-watermark/archive/jobs') && route.request().method() === 'POST') {
+            expect(url.searchParams.get('scope')).toBe('direct');
+            directStarts += 1;
+            return route.fulfill({ status: 202, json: { jobId: 'c'.repeat(32), status: 'queued', total: 1 } });
+        }
+        if (path.endsWith(`/edit-results/archive/jobs/${'c'.repeat(32)}`)) {
+            return route.fulfill({ json: { status: 'completed', processed: 1, total: 1, filename: 'No Watermark.zip', downloadUrl: 'https://worker.example.test/v1/archive/download/direct?ticket=ticket' } });
+        }
+        if (path.endsWith('/edit-results/archive/download-url')) {
+            publishedArchiveRequests += 1;
+            return route.fulfill({ json: { downloadUrl: snapshot.archive.downloadUrl, filename: snapshot.archive.filename } });
+        }
+        if (path.endsWith('/edit-results')) return route.fulfill({ json: snapshot });
+        return route.fulfill({ contentType: 'image/png', body: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl6z7QAAAAASUVORK5CYII=', 'base64') });
+    });
+    await page.route('https://worker.example.test/**', (route) => route.fulfill({ status: 200, headers: { 'content-type': 'application/zip', 'content-disposition': 'attachment; filename="No Watermark.zip"' }, body: 'zip' }));
+    await page.goto(`/culling/${id}/edited`);
+    await expect(page.getByRole('button', { name: 'Download All Photos' })).toBeVisible();
+    await page.getByRole('link', { name: 'Open folder No Watermark' }).click();
+    const folderDownload = page.getByRole('button', { name: 'Download Folder Photos' });
+    await expect(folderDownload).toBeVisible();
+    const automaticDownload = page.waitForEvent('download');
+    await folderDownload.click();
+    expect((await automaticDownload).suggestedFilename()).toBe('No Watermark.zip');
+    expect(directStarts).toBe(1);
+    expect(publishedArchiveRequests).toBe(0);
+    await expect(page.getByRole('button', { name: 'Download No Watermark folder as ZIP' })).toBeVisible();
+    const manualDownload = page.waitForEvent('download');
+    await folderDownload.click();
+    expect((await manualDownload).suggestedFilename()).toBe('No Watermark.zip');
+    expect(directStarts).toBe(1);
+    await page.getByRole('link', { name: 'Open folder Empty' }).click();
+    await expect(page.getByRole('button', { name: 'Download Folder Photos' })).toHaveCount(0);
+});
+
+test('Download All Photos requests only root photos even when a gallery ZIP exists', async ({ page }) => {
     await seed(page);
     let created = false;
+    let publishedArchiveRequests = 0;
     await page.route(`**/api/public/galleries/${id}/**`, async (route) => {
         const url = new URL(route.request().url());
         const path = url.pathname;
         if (path.endsWith('/edit-results/status')) return route.fulfill({ json: { available: true } });
         if (path.endsWith('/edit-results/archive/jobs') && route.request().method() === 'POST') {
+            expect(url.searchParams.get('scope')).toBe('direct');
             created = true;
-            return route.fulfill({ status: 202, json: { jobId: 'b'.repeat(32), status: 'queued', total: 56 } });
+            return route.fulfill({ status: 202, json: { jobId: 'b'.repeat(32), status: 'queued', total: 55 } });
         }
         if (path.endsWith(`/edit-results/archive/jobs/${'b'.repeat(32)}`)) {
-            return route.fulfill({ json: created ? { status: 'completed', processed: 56, total: 56, filename: 'Edited Photos.zip', downloadUrl: 'https://worker.example.test/v1/archive/download/job?ticket=ticket' } : { status: 'queued', processed: 0, total: 56 } });
+            return route.fulfill({ json: created ? { status: 'completed', processed: 55, total: 55, filename: 'Edited Photos.zip', downloadUrl: 'https://worker.example.test/v1/archive/download/job?ticket=ticket' } : { status: 'queued', processed: 0, total: 55 } });
         }
-        if (path.endsWith('/edit-results')) return route.fulfill({ json: { ...snapshot, archive: null } });
+        if (path.endsWith('/edit-results/archive/download-url')) {
+            publishedArchiveRequests += 1;
+            return route.fulfill({ json: { downloadUrl: snapshot.archive.downloadUrl, filename: snapshot.archive.filename } });
+        }
+        if (path.endsWith('/edit-results')) return route.fulfill({ json: snapshot });
         return route.fulfill({ contentType: 'image/png', body: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl6z7QAAAAASUVORK5CYII=', 'base64') });
     });
+    await page.route('https://worker.example.test/**', (route) => route.fulfill({ status: 200, headers: { 'content-type': 'application/zip', 'content-disposition': 'attachment; filename="Edited Photos.zip"' }, body: 'zip' }));
     await page.goto(`/culling/${id}/edited`);
     const downloadAll = page.getByRole('button', { name: 'Download All Photos' });
     await expect(downloadAll).toBeVisible();
+    const download = page.waitForEvent('download');
     await downloadAll.click();
     await expect.poll(() => created).toBe(true);
-    await expect(page.getByRole('status').filter({ hasText: 'All Photos ZIP is ready' })).toBeVisible();
+    expect((await download).suggestedFilename()).toBe('Edited Photos.zip');
+    expect(publishedArchiveRequests).toBe(0);
+    await expect(page.locator('p[role="status"]').filter({ hasText: 'Download starting' })).toHaveClass(/sr-only/);
     await expect(downloadAll).toBeVisible();
+});
+
+test('root download is hidden when photos exist only in subfolders', async ({ page }) => {
+    await seed(page);
+    await page.route(`**/api/public/galleries/${id}/**`, async (route) => {
+        const path = new URL(route.request().url()).pathname;
+        if (path.endsWith('/edit-results/status')) return route.fulfill({ json: { available: true } });
+        if (path.endsWith('/edit-results')) return route.fulfill({ json: { ...snapshot, photos: [photo('clean-photo', 'no-watermark')] } });
+        return route.fulfill({ contentType: 'image/png', body: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl6z7QAAAAASUVORK5CYII=', 'base64') });
+    });
+    await page.goto(`/culling/${id}/edited`);
+    await expect(page.getByRole('link', { name: 'Open folder No Watermark' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Download All Photos' })).toHaveCount(0);
+});
+
+test('failed ZIP job shows the worker failure without leaving a spinner', async ({ page }) => {
+    await seed(page);
+    await page.route(`**/api/public/galleries/${id}/**`, async (route) => {
+        const path = new URL(route.request().url()).pathname;
+        if (path.endsWith('/edit-results/status')) return route.fulfill({ json: { available: true } });
+        if (path.endsWith('/edit-results/archive/jobs') && route.request().method() === 'POST') return route.fulfill({ status: 202, json: { jobId: 'd'.repeat(32), status: 'queued', total: 55 } });
+        if (path.endsWith(`/edit-results/archive/jobs/${'d'.repeat(32)}`)) return route.fulfill({ json: { status: 'failed', processed: 0, total: 55, error: 'The photo source is unavailable. Please contact the photographer.' } });
+        if (path.endsWith('/edit-results')) return route.fulfill({ json: snapshot });
+        return route.fulfill({ contentType: 'image/png', body: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl6z7QAAAAASUVORK5CYII=', 'base64') });
+    });
+    await page.goto(`/culling/${id}/edited`);
+    await page.getByRole('button', { name: 'Download All Photos' }).click();
+    await expect(page.getByRole('alert')).toContainText('The photo source is unavailable. Please contact the photographer.');
+    await expect(page.getByRole('button', { name: 'Download All Photos' })).toBeEnabled();
 });
 
 test('Edited Photos guide opens once, restarts from Help, and closes with Escape', async ({ page }) => {
@@ -286,7 +371,7 @@ test('Edited Photos guide opens once, restarts from Help, and closes with Escape
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
 });
 
-test('guide adapts to a gallery without folders or ZIP', async ({ page }) => {
+test('guide offers a complete ZIP download for a flat gallery', async ({ page }) => {
     await page.addInitScript((galleryId) => { localStorage.setItem(`orbit:edit-results-token:${galleryId}`, 'old-token'); }, id);
     await page.route(`**/api/public/galleries/${id}/**`, async (route) => {
         const path = new URL(route.request().url()).pathname;
@@ -300,7 +385,7 @@ test('guide adapts to a gallery without folders or ZIP', async ({ page }) => {
     await expect(guide).toContainText('Step 1 of 2');
     await guide.getByRole('button', { name: 'Next' }).click();
     await expect(guide.getByRole('heading', { name: 'Download your photos' })).toBeVisible();
-    await expect(guide).not.toContainText('Download All Photos');
+    await expect(guide).toContainText('Download All Photos');
     await guide.getByRole('button', { name: 'View photos' }).click();
     await expect(page.getByTestId('edited-gallery-grid')).toBeVisible();
     await expect(page.getByTestId('edited-folder-bar')).toHaveCount(0);

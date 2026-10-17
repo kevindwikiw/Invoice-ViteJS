@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 from contextlib import asynccontextmanager
 from datetime import datetime
+import hashlib
+import json
 import logging
 import os
 from pathlib import Path, PurePosixPath
@@ -10,7 +12,7 @@ import re
 import secrets
 import shutil
 import time
-from typing import Any
+from typing import Any, Literal
 from uuid import uuid4
 import zipfile
 
@@ -35,12 +37,58 @@ ARCHIVE_MAX_BYTES = max(1, int(os.getenv("FACE_ARCHIVE_WORKER_MAX_BYTES", str(20
 ARCHIVE_MAX_PHOTOS = max(1, int(os.getenv("FACE_ARCHIVE_WORKER_MAX_PHOTOS", "2000")))
 ARCHIVE_MAX_ACTIVE = max(1, int(os.getenv("FACE_ARCHIVE_WORKER_MAX_ACTIVE", "4")))
 ARCHIVE_CONCURRENCY = max(1, int(os.getenv("FACE_ARCHIVE_WORKER_CONCURRENCY", "1")))
-ARCHIVE_TTL_SECONDS = max(60, int(os.getenv("FACE_ARCHIVE_WORKER_TTL_SECONDS", str(12 * 60 * 60))))
+ARCHIVE_TTL_SECONDS = max(60, int(os.getenv("FACE_ARCHIVE_WORKER_TTL_SECONDS", str(6 * 60 * 60))))
+ARCHIVE_PREBUILD_TTL_SECONDS = max(ARCHIVE_TTL_SECONDS, int(os.getenv("FACE_ARCHIVE_WORKER_PREBUILD_TTL_SECONDS", str(30 * 24 * 60 * 60))))
+ARCHIVE_CACHE_MAX_BYTES = max(1, int(os.getenv("FACE_ARCHIVE_WORKER_CACHE_MAX_BYTES", str(100 * 1024 * 1024 * 1024))))
+ARCHIVE_MIN_FREE_BYTES = max(0, int(os.getenv("FACE_ARCHIVE_WORKER_MIN_FREE_BYTES", str(5 * 1024 * 1024 * 1024))))
+ARCHIVE_MAX_PREBUILD_JOBS = max(1, int(os.getenv("FACE_ARCHIVE_WORKER_MAX_PREBUILD_JOBS", "128")))
 
 archive_semaphore = asyncio.Semaphore(ARCHIVE_CONCURRENCY)
 archive_jobs: dict[str, dict[str, Any]] = {}
 archive_tasks: dict[str, asyncio.Task[None]] = {}
+archive_tickets: dict[str, dict[str, float]] = {}
 drive_source: DriveSource | None = None
+
+
+class ArchiveStorageError(RuntimeError):
+    code = "archive_storage_full"
+
+
+def prebuilt_expires_at(access_expires_at: str | None) -> float:
+    deadline = time.time() + ARCHIVE_PREBUILD_TTL_SECONDS
+    if access_expires_at:
+        try:
+            deadline = min(deadline, datetime.fromisoformat(access_expires_at.replace("Z", "+00:00")).timestamp())
+        except ValueError:
+            raise HTTPException(status_code=400, detail="invalid_access_expiry") from None
+    return deadline
+
+
+def archive_key(payload: "ArchiveJobInput") -> str:
+    entries = [(photo.driveFileId, photo.archivePath) for photo in payload.photos]
+    source = [payload.galleryId, payload.folderId, payload.folderName, payload.scope, payload.snapshotVersion, entries]
+    return hashlib.sha256(json.dumps(source, separators=(",", ":"), ensure_ascii=False).encode()).hexdigest()
+
+
+def save_job(job_id: str, payload: "ArchiveJobInput") -> None:
+    job_dir = ARCHIVE_ROOT / job_id
+    job_dir.mkdir(parents=True, exist_ok=True)
+    record = {"job": {key: value for key, value in archive_jobs[job_id].items() if key not in {"downloadTicket", "downloadTicketExpiresAt"}}, "payload": payload.model_dump()}
+    temporary = job_dir / "job.json.tmp"
+    temporary.write_text(json.dumps(record, separators=(",", ":")), encoding="utf-8")
+    temporary.replace(job_dir / "job.json")
+
+
+def evict_completed(exclude: str, required_free: int = 0) -> None:
+    candidates = sorted(((job.get("finishedAt", 0), job_id) for job_id, job in archive_jobs.items() if job_id != exclude and job["status"] == "completed" and not any(deadline > time.time() for deadline in archive_tickets.get(job_id, {}).values())))
+    for _, job_id in candidates:
+        cached = sum((ARCHIVE_ROOT / key / job["filename"]).stat().st_size for key, job in archive_jobs.items() if job["status"] == "completed" and (ARCHIVE_ROOT / key / job["filename"]).is_file())
+        if cached <= ARCHIVE_CACHE_MAX_BYTES and shutil.disk_usage(ARCHIVE_ROOT).free >= ARCHIVE_MIN_FREE_BYTES + required_free:
+            break
+        archive_jobs.pop(job_id, None)
+        archive_tasks.pop(job_id, None)
+        archive_tickets.pop(job_id, None)
+        shutil.rmtree(ARCHIVE_ROOT / job_id, ignore_errors=True)
 
 
 def prune_archives() -> None:
@@ -50,6 +98,7 @@ def prune_archives() -> None:
             continue
         archive_jobs.pop(job_id, None)
         archive_tasks.pop(job_id, None)
+        archive_tickets.pop(job_id, None)
         shutil.rmtree(ARCHIVE_ROOT / job_id, ignore_errors=True)
 
 
@@ -63,16 +112,38 @@ async def expire_archives() -> None:
 async def lifespan(_: FastAPI):
     global drive_source
     ARCHIVE_ROOT.mkdir(parents=True, exist_ok=True)
-    # Jobs live in this process, so files left by an earlier process are orphans.
     for child in ARCHIVE_ROOT.iterdir():
         if child.name == "lost+found":
             continue
-        if child.is_dir():
-            shutil.rmtree(child)
-        else:
+        if child.is_symlink() or not child.is_dir():
             child.unlink()
+            continue
+        try:
+            if not re.fullmatch(r"[a-f0-9]{32}", child.name):
+                raise ValueError("invalid_job_directory")
+            record = json.loads((child / "job.json").read_text(encoding="utf-8"))
+            payload = ArchiveJobInput.model_validate(record["payload"])
+            job = record["job"]
+            if job["galleryId"] != payload.galleryId or job["snapshotKey"] != archive_key(payload) or time.time() >= job["expiresAt"]:
+                raise ValueError("stale_archive")
+            if job["status"] == "completed":
+                if not (child / job["filename"]).is_file():
+                    raise ValueError("missing_archive")
+                archive_jobs[child.name] = job
+            elif job["status"] in {"queued", "running"}:
+                job["status"] = "queued"
+                job["processed"] = 0
+                archive_jobs[child.name] = job
+            else:
+                raise ValueError("finished_job_without_archive")
+        except (OSError, ValueError, KeyError, TypeError):
+            shutil.rmtree(child, ignore_errors=True)
     async with httpx.AsyncClient(timeout=HTTP_TIMEOUT, limits=httpx.Limits(max_connections=8, max_keepalive_connections=8)) as client:
         drive_source = DriveSource(client, CALLBACK_ORIGIN, CALLBACK_TOKEN, ARCHIVE_MAX_BYTES)
+        for job_id, job in archive_jobs.items():
+            if job["status"] == "queued":
+                record = json.loads((ARCHIVE_ROOT / job_id / "job.json").read_text(encoding="utf-8"))
+                archive_tasks[job_id] = asyncio.create_task(process_archive_job(job_id, ArchiveJobInput.model_validate(record["payload"])))
         cleanup_task = asyncio.create_task(expire_archives())
         try:
             yield
@@ -83,6 +154,7 @@ async def lifespan(_: FastAPI):
             await asyncio.gather(*tasks, return_exceptions=True)
             archive_tasks.clear()
             archive_jobs.clear()
+            archive_tickets.clear()
             drive_source = None
 
 
@@ -99,8 +171,14 @@ class ArchiveJobInput(BaseModel):
     galleryId: int = Field(gt=0)
     folderId: str = Field(min_length=1, max_length=256)
     folderName: str = Field(min_length=1, max_length=256)
+    scope: Literal["subtree", "direct"] = "subtree"
+    snapshotVersion: str = Field(default="", max_length=256)
     accessExpiresAt: str | None = None
     photos: list[ArchivePhotoInput] = Field(min_length=1)
+
+
+class ArchivePrebuildInput(BaseModel):
+    jobs: list[ArchiveJobInput] = Field(min_length=1)
 
 
 def require_worker_token(authorization: str | None) -> None:
@@ -143,11 +221,14 @@ async def process_archive_job(job_id: str, payload: ArchiveJobInput) -> None:
             raise RuntimeError("drive_unavailable")
         async with archive_semaphore:
             job["status"] = "running"
+            save_job(job_id, payload)
             total_bytes = 0
             seen_paths: set[str] = set()
             with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_STORED, allowZip64=True) as archive:
                 for photo in payload.photos:
                     member = safe_archive_path(photo.archivePath)
+                    if payload.scope == "direct":
+                        member = PurePosixPath(member).name
                     unique_member = member
                     serial = 2
                     while unique_member.casefold() in seen_paths:
@@ -155,7 +236,14 @@ async def process_archive_job(job_id: str, payload: ArchiveJobInput) -> None:
                         unique_member = str(path.with_name(f"{path.stem} ({serial}){path.suffix}"))
                         serial += 1
                     seen_paths.add(unique_member.casefold())
-                    file_bytes = await drive_source.download_to_path(photo.driveFileId, staging_path, ARCHIVE_MAX_BYTES - total_bytes)
+                    evict_completed(job_id, required_free=256 * 1024 * 1024)
+                    available = shutil.disk_usage(ARCHIVE_ROOT).free - ARCHIVE_MIN_FREE_BYTES
+                    if available <= 0:
+                        raise ArchiveStorageError("archive_storage_full")
+                    limit = min(ARCHIVE_MAX_BYTES - total_bytes, available // 2)
+                    if limit <= 0:
+                        raise ArchiveStorageError("archive_storage_full")
+                    file_bytes = await drive_source.download_to_path(photo.driveFileId, staging_path, limit)
                     total_bytes += file_bytes
                     await asyncio.to_thread(archive.write, staging_path, unique_member)
                     staging_path.unlink(missing_ok=True)
@@ -163,19 +251,22 @@ async def process_archive_job(job_id: str, payload: ArchiveJobInput) -> None:
                     job["bytes"] = total_bytes
             job["status"] = "completed"
             job["filename"] = zip_path.name
-            job["expiresAt"] = time.time() + ARCHIVE_TTL_SECONDS
+            job["expiresAt"] = prebuilt_expires_at(payload.accessExpiresAt) if job["prebuilt"] else time.time() + ARCHIVE_TTL_SECONDS
             job["accessExpiresAt"] = payload.accessExpiresAt
+            job["finishedAt"] = time.time()
+            save_job(job_id, payload)
+            evict_completed(job_id)
+            if zip_path.stat().st_size > ARCHIVE_CACHE_MAX_BYTES:
+                raise ArchiveStorageError("archive_storage_full")
             logger.info("Archive job %s completed: gallery=%s photos=%s bytes=%s", job_id, payload.galleryId, job["processed"], total_bytes)
     except Exception as error:
         job["status"] = "failed"
         job["errorCode"] = getattr(error, "code", None) or "archive_failed"
         shutil.rmtree(job_dir, ignore_errors=True)
-        logger.warning("Archive job %s failed: gallery=%s code=%s", job_id, payload.galleryId, job["errorCode"])
+        logger.warning("Archive job %s failed: gallery=%s code=%s error_class=%s", job_id, payload.galleryId, job["errorCode"], type(error).__name__)
 
 
-@app.post("/v1/archive/jobs", status_code=202)
-async def create_archive_job(payload: ArchiveJobInput, authorization: str | None = Header(default=None)) -> JSONResponse:
-    require_worker_token(authorization)
+def enqueue_archive_job(payload: ArchiveJobInput, prebuilt: bool) -> dict[str, Any]:
     if len(payload.photos) > ARCHIVE_MAX_PHOTOS:
         raise HTTPException(status_code=413, detail="too_many_photos")
     if not drive_source or not CALLBACK_ORIGIN or not CALLBACK_TOKEN:
@@ -185,16 +276,55 @@ async def create_archive_job(payload: ArchiveJobInput, authorization: str | None
             safe_archive_path(photo.archivePath)
         except ValueError as error:
             raise HTTPException(status_code=400, detail="invalid_archive_path") from error
+    snapshot_key = archive_key(payload)
     for existing_id, existing in archive_jobs.items():
-        if existing["galleryId"] == payload.galleryId and existing["folderId"] == payload.folderId and existing["status"] in {"queued", "running", "completed"} and time.time() < existing["expiresAt"]:
-            return JSONResponse({"jobId": existing_id, "status": existing["status"], "duplicate": True}, status_code=202)
-    active = sum(job["status"] in {"queued", "running"} for job in archive_jobs.values())
-    if active >= ARCHIVE_MAX_ACTIVE:
+        if existing["snapshotKey"] == snapshot_key and existing["status"] in {"queued", "running", "completed"} and time.time() < existing["expiresAt"]:
+            if prebuilt and not existing["prebuilt"]:
+                existing["prebuilt"] = True
+                if existing["status"] == "completed":
+                    existing["expiresAt"] = prebuilt_expires_at(payload.accessExpiresAt)
+                save_job(existing_id, payload)
+            return {"jobId": existing_id, "status": existing["status"], "duplicate": True}
+    active = sum(job["status"] in {"queued", "running"} and not job.get("prebuilt") for job in archive_jobs.values())
+    if not prebuilt and active >= ARCHIVE_MAX_ACTIVE:
         raise HTTPException(status_code=429, detail="archive_queue_full")
     job_id = uuid4().hex
-    archive_jobs[job_id] = {"galleryId": payload.galleryId, "folderId": payload.folderId, "status": "queued", "processed": 0, "total": len(payload.photos), "bytes": 0, "expiresAt": time.time() + 3600}
+    archive_jobs[job_id] = {"galleryId": payload.galleryId, "folderId": payload.folderId, "scope": payload.scope, "snapshotVersion": payload.snapshotVersion, "snapshotKey": snapshot_key, "prebuilt": prebuilt, "status": "queued", "processed": 0, "total": len(payload.photos), "bytes": 0, "expiresAt": prebuilt_expires_at(payload.accessExpiresAt) if prebuilt else time.time() + 3600}
+    save_job(job_id, payload)
     archive_tasks[job_id] = asyncio.create_task(process_archive_job(job_id, payload))
-    return JSONResponse({"jobId": job_id, "status": "queued", "duplicate": False}, status_code=202)
+    return {"jobId": job_id, "status": "queued", "duplicate": False}
+
+
+@app.post("/v1/archive/jobs", status_code=202)
+async def create_archive_job(payload: ArchiveJobInput, authorization: str | None = Header(default=None)) -> JSONResponse:
+    require_worker_token(authorization)
+    return JSONResponse(enqueue_archive_job(payload, prebuilt=False), status_code=202)
+
+
+@app.post("/v1/archive/prebuild", status_code=202)
+async def prebuild_archives(payload: ArchivePrebuildInput, authorization: str | None = Header(default=None)) -> JSONResponse:
+    require_worker_token(authorization)
+    if len(payload.jobs) > ARCHIVE_MAX_PREBUILD_JOBS or sum(len(job.photos) for job in payload.jobs) > 50_000:
+        raise HTTPException(status_code=413, detail="prebuild_batch_too_large")
+    if len({job.galleryId for job in payload.jobs}) != 1:
+        raise HTTPException(status_code=400, detail="mixed_galleries")
+    for job in payload.jobs:
+        if len(job.photos) > ARCHIVE_MAX_PHOTOS:
+            raise HTTPException(status_code=413, detail="too_many_photos")
+        for photo in job.photos:
+            try:
+                safe_archive_path(photo.archivePath)
+            except ValueError as error:
+                raise HTTPException(status_code=400, detail="invalid_archive_path") from error
+    jobs = [enqueue_archive_job(job, prebuilt=True) for job in payload.jobs]
+    return JSONResponse({"jobs": jobs}, status_code=202)
+
+
+@app.get("/v1/archive/prebuild/galleries/{gallery_id}")
+async def prebuild_status(gallery_id: int, snapshotVersion: str, authorization: str | None = Header(default=None)) -> JSONResponse:
+    require_worker_token(authorization)
+    jobs = [{"folderId": job["folderId"], "scope": job["scope"], "status": job["status"], "processed": job["processed"], "total": job["total"], "errorCode": job.get("errorCode")} for job in archive_jobs.values() if job["galleryId"] == gallery_id and job.get("prebuilt") and job.get("snapshotVersion") == snapshotVersion]
+    return JSONResponse({"jobs": jobs})
 
 
 @app.get("/v1/archive/jobs/{job_id}")
@@ -203,6 +333,7 @@ async def get_archive_job(job_id: str, authorization: str | None = Header(defaul
     job = archive_jobs.get(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="archive_job_not_found")
+    response = {key: job[key] for key in ("galleryId", "folderId", "snapshotVersion", "status", "processed", "total", "bytes", "filename", "expiresAt", "errorCode") if key in job}
     if job["status"] == "completed":
         ticket_expires_at = time.time() + 900
         if job.get("accessExpiresAt"):
@@ -212,15 +343,23 @@ async def get_archive_job(job_id: str, authorization: str | None = Header(defaul
                 raise HTTPException(status_code=409, detail="invalid_access_expiry") from None
         if ticket_expires_at <= time.time():
             raise HTTPException(status_code=409, detail="edited_access_expired")
-        job["downloadTicket"] = secrets.token_urlsafe(32)
-        job["downloadTicketExpiresAt"] = ticket_expires_at
-    return JSONResponse({key: job[key] for key in ("galleryId", "folderId", "status", "processed", "total", "bytes", "filename", "downloadTicket", "downloadTicketExpiresAt", "expiresAt", "errorCode") if key in job})
+        tickets = archive_tickets.setdefault(job_id, {})
+        for old_ticket, deadline in list(tickets.items()):
+            if deadline <= time.time():
+                tickets.pop(old_ticket)
+        while len(tickets) >= 256:
+            tickets.pop(next(iter(tickets)))
+        ticket = secrets.token_urlsafe(32)
+        tickets[ticket] = ticket_expires_at
+        response["downloadTicket"] = ticket
+        response["downloadTicketExpiresAt"] = ticket_expires_at
+    return JSONResponse(response)
 
 
 @app.get("/v1/archive/download/{job_id}")
 async def download_archive(job_id: str, ticket: str) -> FileResponse:
     job = archive_jobs.get(job_id)
-    if not job or job["status"] != "completed" or time.time() >= job["expiresAt"] or time.time() >= job.get("downloadTicketExpiresAt", 0) or not secrets.compare_digest(ticket, job.get("downloadTicket", "")):
+    if not job or job["status"] != "completed" or time.time() >= job["expiresAt"] or time.time() >= archive_tickets.get(job_id, {}).get(ticket, 0):
         raise HTTPException(status_code=404, detail="archive_not_available")
     path = ARCHIVE_ROOT / job_id / job["filename"]
     if not path.is_file():

@@ -99,16 +99,23 @@ export type EditFolderArchiveJob = {
     total?: number;
     filename?: string;
     downloadUrl?: string;
+    error?: string;
 };
 
-export async function startEditFolderArchive(id: string, folderId: string, token: string): Promise<EditFolderArchiveJob> {
-    const response = await apiFetch(`/public/galleries/${encodeURIComponent(id)}/edit-results/folders/${encodeURIComponent(folderId)}/archive/jobs?token=${encodeURIComponent(token)}`, { method: 'POST' });
+export type EditFolderArchiveScope = 'subtree' | 'direct';
+
+export async function startEditFolderArchive(id: string, folderId: string, token: string, scope: EditFolderArchiveScope = 'subtree'): Promise<EditFolderArchiveJob> {
+    const params = new URLSearchParams({ token });
+    if (scope === 'direct') params.set('scope', 'direct');
+    const response = await apiFetch(`/public/galleries/${encodeURIComponent(id)}/edit-results/folders/${encodeURIComponent(folderId)}/archive/jobs?${params.toString()}`, { method: 'POST' });
     if (!response.ok) throw await parseError(response, 'Unable to prepare this folder download.');
     return response.json();
 }
 
-export async function startEditGalleryArchive(id: string, token: string): Promise<EditFolderArchiveJob> {
-    const response = await apiFetch(`/public/galleries/${encodeURIComponent(id)}/edit-results/archive/jobs?token=${encodeURIComponent(token)}`, { method: 'POST' });
+export async function startEditGalleryArchive(id: string, token: string, scope: EditFolderArchiveScope = 'subtree'): Promise<EditFolderArchiveJob> {
+    const params = new URLSearchParams({ token });
+    if (scope === 'direct') params.set('scope', 'direct');
+    const response = await apiFetch(`/public/galleries/${encodeURIComponent(id)}/edit-results/archive/jobs?${params.toString()}`, { method: 'POST' });
     if (!response.ok) throw await parseError(response, 'Unable to prepare the gallery download.');
     return response.json();
 }

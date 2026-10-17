@@ -1,6 +1,6 @@
 import { Hono, type Context } from "hono";
 import { Buffer } from "node:buffer";
-import { createHmac } from "node:crypto";
+import { createHash, createHmac } from "node:crypto";
 import writeExcelFile from "write-excel-file/node";
 import { galleryAll, galleryBatch, galleryInsertReturningId, galleryOne, galleryRun } from "../db/galleries";
 import { fetchDriveFile, fetchDriveVideo, getDrivePhotoMetadata, hasAnyoneViewerFolderAccess, listDrivePhotos, listDrivePhotoTree, type DriveFolder, type DriveFolderPhoto, type DrivePhoto } from "../lib/google-drive";
@@ -47,6 +47,7 @@ const PAIRING_CANDIDATE_CACHE_MS = 60_000;
 const ARCHIVE_WORKER_URL = process.env.FACE_ARCHIVE_WORKER_URL?.trim().replace(/\/$/, "") || "";
 const ARCHIVE_WORKER_PUBLIC_URL = process.env.FACE_ARCHIVE_WORKER_PUBLIC_URL?.trim().replace(/\/$/, "") || "";
 const ARCHIVE_WORKER_TOKEN = process.env.FACE_ARCHIVE_WORKER_TOKEN?.trim() || "";
+const ARCHIVE_PREBUILD_ENABLED = process.env.FACE_ARCHIVE_PREBUILD_ENABLED === "1";
 const MAX_FOLDER_ARCHIVE_PHOTOS = 2_000;
 const pairingCandidateCache = new Map<number, { folderId: string; expiresAt: number; photos: Map<string, DrivePhoto> }>();
 const pendingPairingCandidates = new Map<string, Promise<Map<string, DrivePhoto>>>();
@@ -1364,6 +1365,79 @@ function editedSnapshotStatements(galleryId: number, photos: DriveFolderPhoto[],
     ];
 }
 
+type ArchivePhoto = { driveFileId: string; filename: string; folderId: string | null };
+type ArchiveJobRequest = { galleryId: number; folderId: string; folderName: string; scope: "direct" | "subtree"; snapshotVersion: string; accessExpiresAt: string | null; photos: Array<{ driveFileId: string; filename: string; archivePath: string }> };
+
+async function archiveSnapshotVersion(galleryId: number): Promise<string> {
+    const snapshot = await galleryOne<{ publishedAt: string | null }>('SELECT edit_results_published_at as "publishedAt" FROM galleries WHERE id = ?', [galleryId]);
+    const folders = await galleryAll<{ id: string; parentId: string | null; name: string }>('SELECT drive_folder_id as id, parent_id as "parentId", name FROM gallery_edit_result_folders WHERE gallery_id = ? ORDER BY drive_folder_id', [galleryId]);
+    const photos = await galleryAll<{ driveFileId: string; filename: string; folderId: string | null; sourceVersion: string }>('SELECT drive_file_id as "driveFileId", filename, folder_id as "folderId", source_version as "sourceVersion" FROM gallery_edit_result_photos WHERE gallery_id = ? AND mime_type LIKE \'image/%\' ORDER BY drive_file_id', [galleryId]);
+    return createHash("sha256").update(JSON.stringify([snapshot?.publishedAt, folders, photos])).digest("hex");
+}
+
+async function prebuiltArchiveJobs(galleryId: number, expiresAt: string | null): Promise<ArchiveJobRequest[]> {
+        const folders = await galleryAll<{ id: string; parentId: string | null; name: string }>('SELECT drive_folder_id as id, parent_id as "parentId", name FROM gallery_edit_result_folders WHERE gallery_id = ? ORDER BY name, drive_folder_id', [galleryId]);
+        const photos = await galleryAll<ArchivePhoto>('SELECT drive_file_id as "driveFileId", filename, folder_id as "folderId" FROM gallery_edit_result_photos WHERE gallery_id = ? AND mime_type LIKE \'image/%\' ORDER BY display_order, filename', [galleryId]);
+        const byId = new Map(folders.map((folder) => [folder.id, folder]));
+        const paths = new Map<string, string[]>();
+        for (const photo of photos) {
+            if (!photo.folderId) continue;
+            const trail: string[] = [];
+            const seen = new Set<string>();
+            let currentId: string | null = photo.folderId;
+            while (currentId) {
+                const current = byId.get(currentId);
+                if (!current || seen.has(currentId)) throw new Error("invalid_folder_tree");
+                seen.add(currentId);
+                trail.unshift(currentId);
+                currentId = current.parentId;
+            }
+            paths.set(photo.driveFileId, trail);
+        }
+        const snapshotVersion = await archiveSnapshotVersion(galleryId);
+        const jobs: ArchiveJobRequest[] = [];
+        const rootPhotos = photos.filter((photo) => !photo.folderId);
+        if (rootPhotos.length && rootPhotos.length <= MAX_FOLDER_ARCHIVE_PHOTOS) jobs.push({ galleryId, folderId: "__all__", folderName: "Edited Photos", scope: "direct", snapshotVersion, accessExpiresAt: expiresAt, photos: rootPhotos.map((photo) => ({ driveFileId: photo.driveFileId, filename: photo.filename, archivePath: photo.filename })) });
+        for (const folder of folders) {
+            const direct = photos.filter((photo) => photo.folderId === folder.id);
+            if (direct.length && direct.length <= MAX_FOLDER_ARCHIVE_PHOTOS) jobs.push({ galleryId, folderId: folder.id, folderName: folder.name, scope: "direct", snapshotVersion, accessExpiresAt: expiresAt, photos: direct.map((photo) => ({ driveFileId: photo.driveFileId, filename: photo.filename, archivePath: photo.filename })) });
+            const subtree = photos.filter((photo) => paths.get(photo.driveFileId)?.includes(folder.id));
+            if (subtree.length && subtree.length <= MAX_FOLDER_ARCHIVE_PHOTOS) jobs.push({ galleryId, folderId: folder.id, folderName: folder.name, scope: "subtree", snapshotVersion, accessExpiresAt: expiresAt, photos: subtree.map((photo) => {
+                const trail = paths.get(photo.driveFileId)!;
+                return { driveFileId: photo.driveFileId, filename: photo.filename, archivePath: [...trail.slice(trail.indexOf(folder.id)).map((id) => byId.get(id)!.name), photo.filename].join("/") };
+            }) });
+        }
+        return jobs;
+}
+
+async function queuePrebuiltArchives(galleryId: number, expiresAt: string | null): Promise<boolean> {
+    if (!ARCHIVE_PREBUILD_ENABLED || !ARCHIVE_WORKER_URL || !ARCHIVE_WORKER_TOKEN) return false;
+    try {
+        const jobs = await prebuiltArchiveJobs(galleryId, expiresAt);
+        if (!jobs.length) return true;
+        for (let offset = 0; offset < jobs.length;) {
+            const batch: ArchiveJobRequest[] = [];
+            let photoEntries = 0;
+            while (offset < jobs.length && batch.length < 64 && photoEntries + jobs[offset]!.photos.length <= 20_000) {
+                batch.push(jobs[offset]!);
+                photoEntries += jobs[offset]!.photos.length;
+                offset += 1;
+            }
+            const response = await fetch(`${ARCHIVE_WORKER_URL}/v1/archive/prebuild`, {
+                method: "POST",
+                headers: { Authorization: `Bearer ${ARCHIVE_WORKER_TOKEN}`, "Content-Type": "application/json" },
+                body: JSON.stringify({ jobs: batch }),
+                signal: AbortSignal.timeout(15_000),
+            });
+            if (!response.ok) throw new Error(`worker_status_${response.status}`);
+        }
+        return true;
+    } catch (error) {
+        console.warn(`[edited photos] Archive prebuild could not start for gallery ${galleryId}:`, error instanceof Error ? error.message : "unknown");
+        return false;
+    }
+}
+
 adminGalleriesRouter.post("/:id/edit-results/sync", async (c) => {
     const denied = await requireGalleryAdmin(c);
     if (denied) return denied;
@@ -1386,7 +1460,9 @@ adminGalleriesRouter.post("/:id/edit-results/sync", async (c) => {
             { sql: "UPDATE galleries SET edit_results_photo_count = ?, edit_results_published_zip_file_id = ?, edit_results_zip_filename = ?, edit_results_zip_download_url = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?", params: [tree.photos.length, archive ? gallery.editResultsZipFileId : null, archive?.filename || null, archive?.downloadUrl || null, id] },
         ]);
         void prepareGalleryFaceIndex(id, 'edited');
-        return c.json({ status: "synced", published: true, photoCount: tree.photos.length, folderCount: tree.folders.length, warnings }, 200, { "Cache-Control": "no-store" });
+        const archivesQueued = await queuePrebuiltArchives(id, (await galleryOne<{ expiresAt: string | null }>('SELECT edit_results_expires_at as "expiresAt" FROM galleries WHERE id = ?', [id]))?.expiresAt ?? null);
+        if (ARCHIVE_PREBUILD_ENABLED && !archivesQueued) warnings.push("ZIP preparation could not start. Downloads will still be prepared when requested.");
+        return c.json({ status: "synced", published: true, photoCount: tree.photos.length, folderCount: tree.folders.length, archivesQueued, warnings }, 200, { "Cache-Control": "no-store" });
     } catch {
         return c.json({ error: "Unable to sync the Edited Photos folder. Check Google Drive access and try again." }, 502);
     }
@@ -1422,7 +1498,9 @@ adminGalleriesRouter.post("/:id/edit-results/publish", async (c) => {
         ];
         await galleryBatch(statements);
         void prepareGalleryFaceIndex(id, 'edited');
-        return c.json({ publishedAt, expiresAt, expiresIn: editResultsExpiresIn(expiresAt), photoCount: photos.length, folderCount: folders.length, comparisonCount: beforeByEdited.size, warnings }, 201, { "Cache-Control": "no-store" });
+        const archivesQueued = await queuePrebuiltArchives(id, expiresAt);
+        if (ARCHIVE_PREBUILD_ENABLED && !archivesQueued) warnings.push("ZIP preparation could not start. Downloads will still be prepared when requested.");
+        return c.json({ publishedAt, expiresAt, expiresIn: editResultsExpiresIn(expiresAt), photoCount: photos.length, folderCount: folders.length, comparisonCount: beforeByEdited.size, archivesQueued, warnings }, 201, { "Cache-Control": "no-store" });
     } catch (error) {
         console.error(`[gallery ${id}] Edited photos publish failed:`, error instanceof Error ? error.message : error);
         return c.json({ error: "Unable to verify or publish this Google Drive folder." }, 502);
@@ -1445,6 +1523,45 @@ adminGalleriesRouter.post("/:id/edit-results/unpublish", async (c) => {
         { sql: "UPDATE galleries SET edit_results_status = 'draft', edit_results_key_hash = NULL, edit_results_published_at = NULL, edit_results_expires_at = NULL, edit_results_photo_count = 0, edit_results_published_zip_file_id = NULL, edit_results_zip_filename = NULL, edit_results_zip_download_url = NULL, edit_results_version = edit_results_version + 1, updated_at = CURRENT_TIMESTAMP WHERE id = ?", params: [id] },
     ]);
     return c.json({ status: "unpublished" });
+});
+
+adminGalleriesRouter.get("/:id/edit-results/archive/status", async (c) => {
+    const denied = await requireGalleryAdmin(c);
+    if (denied) return denied;
+    const galleryId = Number(c.req.param("id"));
+    if (!Number.isInteger(galleryId) || galleryId < 1) return c.json({ error: "Invalid gallery ID" }, 400);
+    const gallery = await galleryOne<{ status: GalleryStatus; expiresAt: string | null }>('SELECT edit_results_status as status, edit_results_expires_at as "expiresAt" FROM galleries WHERE id = ?', [galleryId]);
+    if (!gallery) return c.json({ error: "Gallery not found" }, 404);
+    if (!ARCHIVE_PREBUILD_ENABLED || gallery.status !== "open") return c.json({ enabled: false, ready: false, total: 0, completed: 0 }, 200, { "Cache-Control": "no-store" });
+    try {
+        const expected = await prebuiltArchiveJobs(galleryId, gallery.expiresAt);
+        if (!expected.length) return c.json({ enabled: true, available: true, ready: true, total: 0, completed: 0 }, 200, { "Cache-Control": "no-store" });
+        const snapshotVersion = expected[0]!.snapshotVersion;
+        const response = await fetch(`${ARCHIVE_WORKER_URL}/v1/archive/prebuild/galleries/${galleryId}?snapshotVersion=${encodeURIComponent(snapshotVersion)}`, {
+            headers: { Authorization: `Bearer ${ARCHIVE_WORKER_TOKEN}` }, signal: AbortSignal.timeout(5_000),
+        });
+        if (!response.ok) throw new Error(`worker_status_${response.status}`);
+        const data = await response.json() as { jobs?: Array<{ folderId: string; scope: string; status: string; processed: number; total: number }> };
+        const byScope = new Map((data.jobs || []).map((job) => [`${job.folderId}:${job.scope}`, job]));
+        const statuses = expected.map((job) => byScope.get(`${job.folderId}:${job.scope}`)?.status || "missing");
+        const completed = statuses.filter((status) => status === "completed").length;
+        return c.json({ enabled: true, available: true, ready: completed === expected.length, total: expected.length, completed, failed: statuses.filter((status) => status === "failed").length, queued: statuses.filter((status) => status === "queued").length, running: statuses.filter((status) => status === "running").length, missing: statuses.filter((status) => status === "missing").length }, 200, { "Cache-Control": "no-store" });
+    } catch (error) {
+        console.warn(`[edited photos] Archive prebuild status failed for gallery ${galleryId}:`, error instanceof Error ? error.message : "unknown");
+        return c.json({ enabled: true, available: false, ready: false, total: 0, completed: 0 }, 200, { "Cache-Control": "no-store" });
+    }
+});
+
+adminGalleriesRouter.post("/:id/edit-results/archive/rebuild", async (c) => {
+    const denied = await requireGalleryAdmin(c);
+    if (denied) return denied;
+    const galleryId = Number(c.req.param("id"));
+    if (!Number.isInteger(galleryId) || galleryId < 1) return c.json({ error: "Invalid gallery ID" }, 400);
+    const gallery = await galleryOne<{ status: GalleryStatus; expiresAt: string | null }>('SELECT edit_results_status as status, edit_results_expires_at as "expiresAt" FROM galleries WHERE id = ?', [galleryId]);
+    if (!gallery) return c.json({ error: "Gallery not found" }, 404);
+    if (!ARCHIVE_PREBUILD_ENABLED || gallery.status !== "open") return c.json({ error: "ZIP preparation is unavailable." }, 503);
+    const queued = await queuePrebuiltArchives(galleryId, gallery.expiresAt);
+    return c.json({ queued }, queued ? 202 : 503);
 });
 
 adminGalleriesRouter.delete("/:id", async (c) => {
@@ -1945,19 +2062,22 @@ publicGalleriesRouter.post("/:id/edit-results/archive/jobs", async (c) => {
     if (!ARCHIVE_WORKER_URL || !ARCHIVE_WORKER_TOKEN || !ARCHIVE_WORKER_PUBLIC_URL) {
         return c.json({ error: "Gallery downloads are temporarily unavailable.", code: "ARCHIVE_WORKER_UNAVAILABLE" }, 503);
     }
-    const folders = await galleryAll<{ id: string; parentId: string | null; name: string }>(
+    const scope = c.req.query("scope") ?? "subtree";
+    if (scope !== "subtree" && scope !== "direct") return c.json({ error: "Invalid gallery download scope.", code: "EDIT_RESULT_ARCHIVE_SCOPE_INVALID" }, 400);
+    const folders = scope === "subtree" ? await galleryAll<{ id: string; parentId: string | null; name: string }>(
         'SELECT drive_folder_id as id, parent_id as "parentId", name FROM gallery_edit_result_folders WHERE gallery_id = ?',
         [access.galleryId],
-    );
+    ) : [];
     const byId = new Map(folders.map((folder) => [folder.id, folder]));
     const photos = await galleryAll<{ driveFileId: string; filename: string; folderId: string | null }>(
-        `SELECT drive_file_id as "driveFileId", filename, folder_id as "folderId" FROM gallery_edit_result_photos WHERE gallery_id = ? AND mime_type LIKE 'image/%' ORDER BY display_order, filename`,
+        `SELECT drive_file_id as "driveFileId", filename, folder_id as "folderId" FROM gallery_edit_result_photos WHERE gallery_id = ? AND mime_type LIKE 'image/%' ${scope === "direct" ? "AND folder_id IS NULL" : ""} ORDER BY display_order, filename`,
         [access.galleryId],
     );
-    if (!photos.length) return c.json({ error: "This gallery has no downloadable photos.", code: "EDIT_RESULT_GALLERY_EMPTY" }, 404);
+    if (!photos.length) return c.json({ error: "This level has no downloadable photos.", code: "EDIT_RESULT_GALLERY_EMPTY" }, 404);
     if (photos.length > MAX_FOLDER_ARCHIVE_PHOTOS) return c.json({ error: "This gallery contains too many photos for one ZIP. Contact the photographer.", code: "EDIT_RESULT_ARCHIVE_TOO_LARGE" }, 413);
 
     const archivePhotos = photos.map((photo) => {
+        if (scope === "direct") return { driveFileId: photo.driveFileId, filename: photo.filename, archivePath: photo.filename };
         const nested: string[] = [];
         const seen = new Set<string>();
         let current = photo.folderId ? byId.get(photo.folderId) : undefined;
@@ -1975,7 +2095,7 @@ publicGalleriesRouter.post("/:id/edit-results/archive/jobs", async (c) => {
         const response = await fetch(`${ARCHIVE_WORKER_URL}/v1/archive/jobs`, {
             method: "POST",
             headers: { Authorization: `Bearer ${ARCHIVE_WORKER_TOKEN}`, "Content-Type": "application/json" },
-            body: JSON.stringify({ galleryId: access.galleryId, folderId: "__all__", folderName: "Edited Photos", accessExpiresAt: access.expiresAt, photos: archivePhotos }),
+            body: JSON.stringify({ galleryId: access.galleryId, folderId: "__all__", folderName: "Edited Photos", scope, snapshotVersion: await archiveSnapshotVersion(access.galleryId), accessExpiresAt: access.expiresAt, photos: archivePhotos }),
             signal: AbortSignal.timeout(15_000),
         });
         if (!response.ok) {
@@ -1998,6 +2118,8 @@ publicGalleriesRouter.post("/:id/edit-results/folders/:folderId/archive/jobs", a
         return c.json({ error: "Folder downloads are temporarily unavailable.", code: "ARCHIVE_WORKER_UNAVAILABLE" }, 503);
     }
     const requestedFolderId = c.req.param("folderId");
+    const scope = c.req.query("scope") ?? "subtree";
+    if (scope !== "subtree" && scope !== "direct") return c.json({ error: "Invalid folder download scope.", code: "EDIT_RESULT_ARCHIVE_SCOPE_INVALID" }, 400);
     const folders = await galleryAll<{ id: string; parentId: string | null; name: string }>(
         'SELECT drive_folder_id as id, parent_id as "parentId", name FROM gallery_edit_result_folders WHERE gallery_id = ?',
         [access.galleryId],
@@ -2007,13 +2129,15 @@ publicGalleriesRouter.post("/:id/edit-results/folders/:folderId/archive/jobs", a
     if (!root) return c.json({ error: "This folder is not part of the published gallery.", code: "EDIT_RESULT_FOLDER_NOT_FOUND" }, 404);
 
     const subtree = new Set<string>([root.id]);
-    let changed = true;
-    while (changed) {
-        changed = false;
-        for (const folder of folders) {
-            if (folder.parentId && subtree.has(folder.parentId) && !subtree.has(folder.id)) {
-                subtree.add(folder.id);
-                changed = true;
+    if (scope === "subtree") {
+        let changed = true;
+        while (changed) {
+            changed = false;
+            for (const folder of folders) {
+                if (folder.parentId && subtree.has(folder.parentId) && !subtree.has(folder.id)) {
+                    subtree.add(folder.id);
+                    changed = true;
+                }
             }
         }
     }
@@ -2026,6 +2150,7 @@ publicGalleriesRouter.post("/:id/edit-results/folders/:folderId/archive/jobs", a
     if (photos.length > MAX_FOLDER_ARCHIVE_PHOTOS) return c.json({ error: "This folder contains too many photos for one ZIP. Contact the photographer.", code: "EDIT_RESULT_ARCHIVE_TOO_LARGE" }, 413);
 
     const archivePhotos = photos.map((photo) => {
+        if (scope === "direct") return { driveFileId: photo.driveFileId, filename: photo.filename, archivePath: photo.filename };
         const nested: string[] = [];
         let current = byId.get(photo.folderId);
         const seen = new Set<string>();
@@ -2043,7 +2168,7 @@ publicGalleriesRouter.post("/:id/edit-results/folders/:folderId/archive/jobs", a
         const response = await fetch(`${ARCHIVE_WORKER_URL}/v1/archive/jobs`, {
             method: "POST",
             headers: { Authorization: `Bearer ${ARCHIVE_WORKER_TOKEN}`, "Content-Type": "application/json" },
-            body: JSON.stringify({ galleryId: access.galleryId, folderId: root.id, folderName: root.name, accessExpiresAt: access.expiresAt, photos: archivePhotos }),
+            body: JSON.stringify({ galleryId: access.galleryId, folderId: root.id, folderName: root.name, scope, snapshotVersion: await archiveSnapshotVersion(access.galleryId), accessExpiresAt: access.expiresAt, photos: archivePhotos }),
             signal: AbortSignal.timeout(15_000),
         });
         if (!response.ok) {
@@ -2072,14 +2197,24 @@ publicGalleriesRouter.get("/:id/edit-results/archive/jobs/:jobId", async (c) => 
         });
         if (response.status === 404) return c.json({ error: "Archive job expired. Start the download again.", code: "ARCHIVE_JOB_EXPIRED" }, 404);
         if (!response.ok) return c.json({ error: "Unable to check folder download progress.", code: "ARCHIVE_WORKER_UNAVAILABLE" }, 503);
-        const result = await response.json() as { galleryId?: unknown; status?: unknown; processed?: unknown; total?: unknown; filename?: unknown; downloadTicket?: unknown; expiresAt?: unknown; errorCode?: unknown };
+        const result = await response.json() as { galleryId?: unknown; snapshotVersion?: unknown; status?: unknown; processed?: unknown; total?: unknown; filename?: unknown; downloadTicket?: unknown; expiresAt?: unknown; errorCode?: unknown };
         if (result.galleryId !== access.galleryId) return c.json({ error: "Archive job not found.", code: "ARCHIVE_JOB_NOT_FOUND" }, 404);
+        if (typeof result.snapshotVersion === "string" && result.snapshotVersion !== await archiveSnapshotVersion(access.galleryId)) return c.json({ error: "Gallery photos changed. Start the ZIP download again.", code: "ARCHIVE_JOB_STALE" }, 409);
         const payload: Record<string, unknown> = {
             status: result.status,
             processed: Number(result.processed) || 0,
             total: Number(result.total) || 0,
         };
-        if (result.status === "failed") payload.error = "Some photos could not be packaged. Please retry or contact the photographer.";
+        if (result.status === "failed") {
+            const failureMessages: Record<string, string> = {
+                drive_token_unavailable: "The photo source is unavailable. Please contact the photographer.",
+                drive_fetch_failed: "A photo could not be downloaded from Drive. Please contact the photographer.",
+                drive_network_failed: "The connection to Drive failed. Please try again.",
+                drive_payload_too_large: "This ZIP exceeds the download size limit. Please contact the photographer.",
+                archive_storage_full: "ZIP storage is full. Please contact the photographer.",
+            };
+            payload.error = typeof result.errorCode === "string" ? failureMessages[result.errorCode] ?? "Could not prepare this ZIP. Please try again or contact the photographer." : "Could not prepare this ZIP. Please try again or contact the photographer.";
+        }
         if (result.status === "completed" && typeof result.downloadTicket === "string" && typeof result.filename === "string") {
             if (!isAllowedArchivePublicUrl(ARCHIVE_WORKER_PUBLIC_URL)) throw new Error("worker_public_url_must_use_https_or_loopback_http");
             const base = new URL(ARCHIVE_WORKER_PUBLIC_URL);

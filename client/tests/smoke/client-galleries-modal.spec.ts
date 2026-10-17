@@ -342,7 +342,7 @@ test('saving a new edited folder requires Sync before client photos are marked u
     await dialog.getByRole('button', { name: 'Sync', exact: true }).click();
     await expect.poll(() => syncs).toBe(1);
     await expect(dialog.getByText('Folder saved. Sync to replace the photos clients see.')).toHaveCount(0);
-    await expect(page.getByText('Published snapshot updated with 5 edited photos. Access settings unchanged.')).toBeVisible();
+    await expect(page.getByText('Published snapshot updated with 5 edited items. Access settings unchanged.')).toBeVisible();
 });
 
 test('Preview Samples saves globally without appearing in gallery details', async ({ page }) => {
@@ -673,6 +673,23 @@ test('edited results folder can be published with an admin-defined password', as
     await expect(dialog.getByLabel('Password for publication')).toHaveValue('');
     await expect(dialog.getByLabel('Password for publication')).toHaveAttribute('type', 'password');
     await expect(page.getByText('Published 2 edited items across 1 folders with your delivery password.')).toBeVisible();
+});
+
+test('admin sees ZIP prebuild progress and can retry failed archives', async ({ page }) => {
+    const gallery = { ...exampleGallery, hasEditResults: true, editResultsStatus: 'open', editResultsFolderId: 'edited-folder', editResultsPhotoCount: 8 };
+    let retries = 0;
+    await page.route('**/api/galleries?*', (route) => route.fulfill({ json: { items: [gallery], total: 1, totalPages: 1 } }));
+    await page.route('**/api/galleries/7', (route) => route.fulfill({ json: { gallery, photos: [], selections: [] } }));
+    await page.route('**/api/galleries/7/edit-results/archive/status', (route) => route.fulfill({ json: retries ? { enabled: true, available: true, ready: true, total: 3, completed: 3 } : { enabled: true, available: true, ready: false, total: 3, completed: 1, failed: 1, queued: 1 } }));
+    await page.route('**/api/galleries/7/edit-results/archive/rebuild', (route) => { retries++; return route.fulfill({ status: 202, json: { queued: true } }); });
+    await page.goto('/galleries?mode=edited');
+    await page.getByText(gallery.title, { exact: true }).click();
+    const dialog = page.getByRole('dialog');
+    await dialog.getByRole('tab', { name: 'Edited Photos' }).click();
+    await expect(dialog.getByText('Preparing ZIPs (1/3), 1 failed')).toBeVisible();
+    await dialog.getByRole('button', { name: 'Retry ZIP preparation' }).click();
+    await expect.poll(() => retries).toBe(1);
+    await expect(dialog.getByText('ZIPs ready (3/3)')).toBeVisible();
 });
 
 test('admin actions explain save prerequisites and preserve drafts on API failures', async ({ page }) => {

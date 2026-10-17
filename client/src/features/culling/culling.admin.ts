@@ -196,6 +196,19 @@ export async function unpublishEditResults(id: number): Promise<void> {
     if (!response.ok) throw await parseError(response, 'Unable to unpublish edited photos.');
 }
 
+export type EditArchivePreparation = { enabled: boolean; available?: boolean; ready: boolean; total: number; completed: number; failed?: number; queued?: number; running?: number; missing?: number };
+
+export async function getEditArchivePreparation(id: number): Promise<EditArchivePreparation> {
+    const response = await fetchWithAuth(`/galleries/${id}/edit-results/archive/status`);
+    if (!response.ok) throw await parseError(response, 'Unable to check ZIP preparation.');
+    return response.json();
+}
+
+export async function retryEditArchivePreparation(id: number): Promise<void> {
+    const response = await fetchWithAuth(`/galleries/${id}/edit-results/archive/rebuild`, { method: 'POST' });
+    if (!response.ok) throw await parseError(response, 'Unable to restart ZIP preparation.');
+}
+
 export async function downloadGallerySelectionCopyScript(id: number): Promise<void> {
     const response = await fetchWithAuth(`/galleries/${id}/export-copy.ps1`);
     if (!response.ok) throw await parseError(response, 'Unable to export copy script.');

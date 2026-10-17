@@ -81,13 +81,35 @@ It routes `/v1/archive/*` to `127.0.0.1:8089`, leaves buffering off for file
 downloads and disables access logs because download tickets are in the query
 string. Do not expose port `8089` directly to the Internet.
 
+The Hono folder archive route accepts `scope=direct` for photos immediately in
+the selected folder, with files at the ZIP root. Without this option, folder
+downloads include descendants. Deploy the updated archive worker before the
+Fly API so the worker deduplicates these two archive scopes separately.
+
+After expanding the mounted archive volume and verifying free space, enable
+`FACE_ARCHIVE_PREBUILD_ENABLED=1` on Fly. Publishing or syncing Edited Photos
+then queues the root ZIP and both direct and recursive ZIPs for every folder.
+The admin Edited Photos panel shows how many ZIPs are ready and offers a retry
+button. Existing galleries can be queued with that retry button. Share a new
+gallery only after the panel reports all ZIPs ready; publishing queues the work
+but does not wait for large Drive downloads to finish.
+
+The worker stores job manifests and finished ZIPs on the archive volume, so a
+service restart resumes unfinished jobs and retains completed ZIPs. Prebuilt
+ZIPs live until the Edited Photos access expiry or 30 days, whichever comes
+first. The cache limit defaults to 100 GiB and leaves at least 5 GiB free;
+older completed ZIPs may be evicted when space is needed. When a prebuilt ZIP
+is unavailable, the normal on-demand download path still works. Customer-
+requested ZIPs retain their six-hour lifetime.
+
 ## Limits And Tests
 
 Configure limits in `/etc/orbit-archive-worker.env`. Defaults are 20 GiB per
-ZIP, 2,000 images per job, 4 active jobs, 1 ZIP built at a time, and 12 hours
-before completed ZIP files expire. The service stores temporary ZIPs under its
-own `archives/` directory. A service restart cancels running jobs; clients can
-retry.
+ZIP, 2,000 images per job, 4 active jobs, 1 ZIP built at a time, and 6 hours
+before customer-requested ZIP files expire. The service stores ZIPs and job
+metadata under its own `archives/` directory. A background sweep removes
+expired ZIPs once per minute. Startup removes orphaned files but preserves
+valid jobs and the filesystem's `lost+found` directory.
 
 Run archive tests from this folder:
 
