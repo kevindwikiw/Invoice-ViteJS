@@ -73,13 +73,33 @@ class DriveTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await self.source.fetch("c", "https://lh3.googleusercontent.com/image=s220", 2), b"fresh")
         self.assertTrue(any(r.url.host == "lh3.googleusercontent.com" and "image" in r.url.path for r in self.requests))
 
+    async def test_metadata_first_fetch_logs_stage_timings_without_urls_or_tokens(self):
+        self.source._prefer_fresh_metadata(7)
+
+        def handler(request):
+            if request.url.host == "www.googleapis.com":
+                return httpx.Response(200, json={"thumbnailLink": "https://lh3.googleusercontent.com/signed-secret=s220"})
+            return httpx.Response(200, content=b"thumbnail-bytes")
+
+        self.handler = handler
+        with self.assertLogs("orbit-face-worker", level="INFO") as captured:
+            result = await self.source.fetch("photo-id", "https://lh3.googleusercontent.com/old=s220", 7)
+
+        self.assertEqual(result, b"thumbnail-bytes")
+        message = "\n".join(captured.output)
+        self.assertIn("kind=metadata_thumbnail", message)
+        self.assertRegex(message, r"metadata_ms=\d+ thumbnail_ms=\d+ stale_thumbnail_ms=0 original_ms=0")
+        self.assertIn("thumbnail_fallback=False", message)
+        self.assertNotIn("signed-secret", message)
+        self.assertNotIn("callback-secret", message)
+
     async def test_missing_thumbnail_uses_bounded_original_directly(self):
         self.handler = lambda r: httpx.Response(200, content=b"original") if "alt" in r.url.params else httpx.Response(200, json={"id": "a"})
         self.assertEqual(await self.source.fetch("a", None, 1), b"original")
         self.assertEqual(self.requests[-1].url.host, "www.googleapis.com")
 
     async def test_download_to_path_streams_drive_file_and_enforces_limit(self):
-        with tempfile.TemporaryDirectory(dir=Path(__file__).parent) as directory:
+        with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "photo.jpg"
             self.handler = lambda request: httpx.Response(200, content=b"full-resolution-photo")
             written = await self.source.download_to_path("photo-id", path, 100)

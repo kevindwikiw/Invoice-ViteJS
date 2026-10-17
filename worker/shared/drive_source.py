@@ -161,43 +161,62 @@ class DriveSource:
             path.unlink(missing_ok=True)
             raise DriveError("drive_network_failed") from None
 
-    async def thumbnail(self, url: str) -> bytes:
+    async def thumbnail(self, url: str) -> tuple[bytes, bool]:
         try:
-            return await self.get(thumbnail_url(url), self.max_bytes)
+            return await self.get(thumbnail_url(url), self.max_bytes), False
         except DriveError as error:
             if error.code != "drive_fetch_failed":
                 raise
-        return await self.get(thumbnail_url(url, webp=False), self.max_bytes)
+        return await self.get(thumbnail_url(url, webp=False), self.max_bytes), True
 
     async def fetch(self, file_id: str, thumbnail: str | None, job_id: int) -> bytes:
         started = time.perf_counter()
+        metadata_ms = 0.0
+        thumbnail_ms = 0.0
+        stale_thumbnail_ms = 0.0
+        original_ms = 0.0
+        thumbnail_fallback = False
         base = f"https://www.googleapis.com/drive/v3/files/{quote(file_id, safe='')}"
         metadata_first = job_id in self._metadata_first_jobs
         if thumbnail and not metadata_first:
             try:
-                payload = await self.thumbnail(thumbnail)
-                return self._result(payload, file_id, job_id, "thumbnail", started)
+                stage_started = time.perf_counter()
+                payload, thumbnail_fallback = await self.thumbnail(thumbnail)
+                thumbnail_ms = (time.perf_counter() - stage_started) * 1000
+                return self._result(payload, file_id, job_id, "thumbnail", started, metadata_ms, thumbnail_ms, stale_thumbnail_ms, original_ms, thumbnail_fallback)
             except DriveError as error:
+                stale_thumbnail_ms = (time.perf_counter() - stage_started) * 1000
                 if error.code == "drive_fetch_failed":
                     self._prefer_fresh_metadata(job_id)
                 elif error.code != "drive_network_failed":
                     raise
         try:
-            metadata = json.loads(await self.get(f"{base}?supportsAllDrives=true&fields=id,thumbnailLink", 64 * 1024))
+            stage_started = time.perf_counter()
+            metadata_payload = await self.get(f"{base}?supportsAllDrives=true&fields=id,thumbnailLink", 64 * 1024)
+            metadata_ms = (time.perf_counter() - stage_started) * 1000
+            metadata = json.loads(metadata_payload)
             fresh = metadata.get("thumbnailLink")
             if fresh:
-                payload = await self.thumbnail(fresh)
+                stage_started = time.perf_counter()
+                payload, thumbnail_fallback = await self.thumbnail(fresh)
+                thumbnail_ms = (time.perf_counter() - stage_started) * 1000
                 kind = "metadata_thumbnail" if metadata_first else "refreshed_thumbnail"
-                return self._result(payload, file_id, job_id, kind, started)
+                return self._result(payload, file_id, job_id, kind, started, metadata_ms, thumbnail_ms, stale_thumbnail_ms, original_ms, thumbnail_fallback)
         except (ValueError, TypeError, AttributeError):
             raise DriveError("drive_metadata_invalid") from None
         except DriveError as error:
             if error.code not in {"drive_fetch_failed", "drive_network_failed"}:
                 raise
+        stage_started = time.perf_counter()
         payload = await self.get(f"{base}?alt=media&supportsAllDrives=true", self.max_bytes)
-        return self._result(payload, file_id, job_id, "original", started)
+        original_ms = (time.perf_counter() - stage_started) * 1000
+        return self._result(payload, file_id, job_id, "original", started, metadata_ms, thumbnail_ms, stale_thumbnail_ms, original_ms, thumbnail_fallback)
 
     @staticmethod
-    def _result(payload: bytes, file_id: str, job_id: int, kind: str, started: float) -> bytes:
-        logger.info("Job %s photo %s: source=drive kind=%s bytes=%s fetch_ms=%.0f", job_id, file_id, kind, len(payload), (time.perf_counter() - started) * 1000)
+    def _result(payload: bytes, file_id: str, job_id: int, kind: str, started: float, metadata_ms: float, thumbnail_ms: float, stale_thumbnail_ms: float, original_ms: float, thumbnail_fallback: bool) -> bytes:
+        logger.info(
+            "Job %s photo %s: source=drive kind=%s bytes=%s fetch_ms=%.0f metadata_ms=%.0f thumbnail_ms=%.0f stale_thumbnail_ms=%.0f original_ms=%.0f thumbnail_fallback=%s",
+            job_id, file_id, kind, len(payload), (time.perf_counter() - started) * 1000,
+            metadata_ms, thumbnail_ms, stale_thumbnail_ms, original_ms, thumbnail_fallback,
+        )
         return payload
