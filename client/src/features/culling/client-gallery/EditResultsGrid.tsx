@@ -578,7 +578,7 @@ export function EditResultsGrid({
                     </div>)}
                 </div>
             </section>}
-            {!isSelfieView && childFolders.length > 0 && photos.length > 0 && <h2 className="mb-3 border-t border-[var(--border)] pt-5 font-sans text-xs font-semibold tracking-normal text-[var(--text-secondary)]">Photos</h2>}
+            {!isSelfieView && childFolders.length > 0 && photos.length > 0 && <h2 className="mb-3 border-t border-[var(--border)] pt-5 font-sans text-xs font-semibold tracking-normal text-[var(--text-secondary)]">Photos &amp; Video</h2>}
             {photos.length ? <div ref={gridRef} data-testid="edited-gallery-grid" className="grid scroll-mt-36 grid-cols-2 gap-1.5 sm:grid-cols-3 sm:gap-2 md:grid-cols-4 md:gap-3 xl:grid-cols-5 2xl:grid-cols-6">
                 {visiblePhotos.map((photo, index) => <PhotoTile
                     key={photo.driveFileId}
@@ -676,12 +676,11 @@ export function EditResultsGrid({
                     <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full border border-[var(--border)] bg-[var(--bg-card)] text-[var(--text-secondary)]"><Lock size={17} aria-hidden="true" /></span>
                     <p className="text-[11px] font-semibold uppercase leading-4 tracking-[0.12em] text-[var(--text-muted)]">Gallery Access</p>
                 </div>
-                <h2 id="selection-access-title" className="text-xl font-semibold leading-tight text-[var(--text-primary)] [text-wrap:balance]">Want to see all the photos?</h2>
-                <p id="selection-access-description" className="mt-3 text-sm leading-6 text-[var(--text-secondary)]">Photo Selection is closed. Contact Team Orbit to request access again. Your edited gallery is still available.</p>
-                <div className="mt-5 inline-flex items-center gap-2 rounded-full border border-[var(--border)] px-3 py-1.5 text-xs font-medium text-[var(--text-secondary)]"><span className="h-2 w-2 rounded-full bg-[var(--accent)]" aria-hidden="true" />Edited gallery available</div>
-                <div className="mt-6 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
-                    <button type="button" onClick={() => { setShowSelectionInfo(false); selectionInfoTriggerRef.current?.focus({ preventScroll: true }); }} className="min-h-11 rounded-md px-4 text-sm font-semibold text-[var(--text-secondary)] transition-colors hover:bg-[var(--bg-card)] hover:text-[var(--text-primary)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)]">Stay in Edited Photos</button>
-                    {selectionContactUrl && <a href={selectionContactUrl} target="_blank" rel="noreferrer" className="inline-flex min-h-11 whitespace-nowrap items-center justify-center gap-2 rounded-md bg-[var(--accent)] px-4 text-sm font-semibold text-[var(--bg-deep)] transition-opacity hover:opacity-90 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)]"><MessageCircle size={16} aria-hidden="true" />Message Team Orbit</a>}
+                <h2 id="selection-access-title" className="text-xl font-semibold leading-tight text-[var(--text-primary)] [text-wrap:balance]">Photo Selection is closed</h2>
+                <p id="selection-access-description" className="mt-3 text-sm leading-6 text-[var(--text-secondary)]">Your Edited Photos gallery is still available.</p>
+                <div className="mt-6 flex flex-col gap-2 sm:flex-row sm:justify-end">
+                    <button type="button" onClick={() => { setShowSelectionInfo(false); selectionInfoTriggerRef.current?.focus({ preventScroll: true }); }} className="min-h-11 whitespace-nowrap rounded-md px-3 text-sm font-semibold text-[var(--text-secondary)] transition-colors hover:bg-[var(--bg-card)] hover:text-[var(--text-primary)] active:scale-[0.98] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)]">Continue browsing</button>
+                    {selectionContactUrl && <a href={selectionContactUrl} target="_blank" rel="noreferrer" className="inline-flex min-h-11 whitespace-nowrap items-center justify-center gap-2 rounded-md bg-[var(--accent)] px-4 text-sm font-semibold text-[var(--bg-deep)] transition-opacity hover:opacity-90 active:scale-[0.98] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)]"><MessageCircle size={16} aria-hidden="true" />Message Team Orbit</a>}
                 </div>
             </section>
         </div>}
