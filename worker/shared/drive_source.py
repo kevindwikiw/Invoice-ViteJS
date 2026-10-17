@@ -198,8 +198,10 @@ class DriveSource:
             fresh = metadata.get("thumbnailLink")
             if fresh:
                 stage_started = time.perf_counter()
-                payload, thumbnail_fallback = await self.thumbnail(fresh)
-                thumbnail_ms = (time.perf_counter() - stage_started) * 1000
+                try:
+                    payload, thumbnail_fallback = await self.thumbnail(fresh)
+                finally:
+                    thumbnail_ms = (time.perf_counter() - stage_started) * 1000
                 kind = "metadata_thumbnail" if metadata_first else "refreshed_thumbnail"
                 return self._result(payload, file_id, job_id, kind, started, metadata_ms, thumbnail_ms, stale_thumbnail_ms, original_ms, thumbnail_fallback)
         except (ValueError, TypeError, AttributeError):

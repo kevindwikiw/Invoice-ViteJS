@@ -93,6 +93,37 @@ class DriveTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("signed-secret", message)
         self.assertNotIn("callback-secret", message)
 
+    async def test_failed_metadata_thumbnail_timing_is_logged_before_original_fallback(self):
+        async def handler(request):
+            if request.url.host == "www.googleapis.com" and "alt" in request.url.params:
+                return httpx.Response(200, content=b"original-bytes")
+            if request.url.host == "www.googleapis.com":
+                return httpx.Response(200, json={"thumbnailLink": "https://lh3.googleusercontent.com/fresh=s220"})
+            await asyncio.sleep(0.01)
+            return httpx.Response(404)
+
+        async def transport(request):
+            self.requests.append(request)
+            if request.url.host == "api.test":
+                self.issued += 1
+                return httpx.Response(200, json={"accessToken": f"token-{self.issued}", "expiresAt": (time.time() + 3600) * 1000})
+            return await handler(request)
+
+        await self.client.aclose()
+        self.client = httpx.AsyncClient(transport=httpx.MockTransport(transport))
+        self.source = DriveSource(self.client, "https://api.test", "callback-secret", 100)
+        self.source._prefer_fresh_metadata(8)
+
+        with self.assertLogs("orbit-face-worker", level="INFO") as captured:
+            result = await self.source.fetch("photo-id", None, 8)
+
+        self.assertEqual(result, b"original-bytes")
+        message = "\n".join(captured.output)
+        self.assertIn("kind=original", message)
+        self.assertRegex(message, r"metadata_ms=\d+ thumbnail_ms=\d+ stale_thumbnail_ms=0 original_ms=\d+")
+        thumbnail_ms = int(message.split("thumbnail_ms=")[1].split()[0])
+        self.assertGreaterEqual(thumbnail_ms, 20)
+
     async def test_missing_thumbnail_uses_bounded_original_directly(self):
         self.handler = lambda r: httpx.Response(200, content=b"original") if "alt" in r.url.params else httpx.Response(200, json={"id": "a"})
         self.assertEqual(await self.source.fetch("a", None, 1), b"original")
