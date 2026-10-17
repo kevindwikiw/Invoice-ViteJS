@@ -233,6 +233,32 @@ test('folder ZIP button tracks the worker job and exposes the completed download
     await expect(page.getByRole('status').filter({ hasText: 'No Watermark ZIP is ready' })).toBeVisible();
 });
 
+test('Download All Photos prepares a ZIP containing the complete gallery', async ({ page }) => {
+    await seed(page);
+    let created = false;
+    await page.route(`**/api/public/galleries/${id}/**`, async (route) => {
+        const url = new URL(route.request().url());
+        const path = url.pathname;
+        if (path.endsWith('/edit-results/status')) return route.fulfill({ json: { available: true } });
+        if (path.endsWith('/edit-results/archive/jobs') && route.request().method() === 'POST') {
+            created = true;
+            return route.fulfill({ status: 202, json: { jobId: 'b'.repeat(32), status: 'queued', total: 56 } });
+        }
+        if (path.endsWith(`/edit-results/archive/jobs/${'b'.repeat(32)}`)) {
+            return route.fulfill({ json: created ? { status: 'completed', processed: 56, total: 56, filename: 'Edited Photos.zip', downloadUrl: 'https://worker.example.test/v1/archive/download/job?ticket=ticket' } : { status: 'queued', processed: 0, total: 56 } });
+        }
+        if (path.endsWith('/edit-results')) return route.fulfill({ json: { ...snapshot, archive: null } });
+        return route.fulfill({ contentType: 'image/png', body: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl6z7QAAAAASUVORK5CYII=', 'base64') });
+    });
+    await page.goto(`/culling/${id}/edited`);
+    const downloadAll = page.getByRole('button', { name: 'Download All Photos' });
+    await expect(downloadAll).toBeVisible();
+    await downloadAll.click();
+    await expect.poll(() => created).toBe(true);
+    await expect(page.getByRole('status').filter({ hasText: 'All Photos ZIP is ready' })).toBeVisible();
+    await expect(downloadAll).toBeVisible();
+});
+
 test('Edited Photos guide opens once, restarts from Help, and closes with Escape', async ({ page }) => {
     await page.setViewportSize({ width: 320, height: 700 });
     await page.addInitScript((galleryId) => { localStorage.setItem(`orbit:edit-results-token:${galleryId}`, 'old-token'); }, id);

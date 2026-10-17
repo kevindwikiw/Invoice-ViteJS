@@ -13,6 +13,7 @@ import {
     selectionDeadlineFromNow,
 } from "../lib/gallery-deadline";
 import { getFreshGallerySettings, getGallerySettings, invalidateGallerySettingsCache } from "../lib/gallery-settings-cache";
+import { isAllowedArchivePublicUrl } from "../lib/archive-url";
 import { fetchSelectionImage } from "../lib/selection-image";
 import { resetGalleryEditResultsAttempts, resetGalleryPinAttempts } from "../middleware/rate-limit";
 import { hasFeaturePermission } from "../permissions";
@@ -1938,6 +1939,58 @@ publicGalleriesRouter.get("/:id/edit-results/photos/:fileId/download-url", async
     }
 });
 
+publicGalleriesRouter.post("/:id/edit-results/archive/jobs", async (c) => {
+    const access = await requireEditResultsAccess(c);
+    if (access instanceof Response) return access;
+    if (!ARCHIVE_WORKER_URL || !ARCHIVE_WORKER_TOKEN || !ARCHIVE_WORKER_PUBLIC_URL) {
+        return c.json({ error: "Gallery downloads are temporarily unavailable.", code: "ARCHIVE_WORKER_UNAVAILABLE" }, 503);
+    }
+    const folders = await galleryAll<{ id: string; parentId: string | null; name: string }>(
+        'SELECT drive_folder_id as id, parent_id as "parentId", name FROM gallery_edit_result_folders WHERE gallery_id = ?',
+        [access.galleryId],
+    );
+    const byId = new Map(folders.map((folder) => [folder.id, folder]));
+    const photos = await galleryAll<{ driveFileId: string; filename: string; folderId: string | null }>(
+        `SELECT drive_file_id as "driveFileId", filename, folder_id as "folderId" FROM gallery_edit_result_photos WHERE gallery_id = ? AND mime_type LIKE 'image/%' ORDER BY display_order, filename`,
+        [access.galleryId],
+    );
+    if (!photos.length) return c.json({ error: "This gallery has no downloadable photos.", code: "EDIT_RESULT_GALLERY_EMPTY" }, 404);
+    if (photos.length > MAX_FOLDER_ARCHIVE_PHOTOS) return c.json({ error: "This gallery contains too many photos for one ZIP. Contact the photographer.", code: "EDIT_RESULT_ARCHIVE_TOO_LARGE" }, 413);
+
+    const archivePhotos = photos.map((photo) => {
+        const nested: string[] = [];
+        const seen = new Set<string>();
+        let current = photo.folderId ? byId.get(photo.folderId) : undefined;
+        while (current && !seen.has(current.id)) {
+            seen.add(current.id);
+            nested.push(current.name);
+            current = current.parentId ? byId.get(current.parentId) : undefined;
+        }
+        if (photo.folderId && (!seen.size || !seen.has(photo.folderId) || current)) return null;
+        return { driveFileId: photo.driveFileId, filename: photo.filename, archivePath: [...nested.reverse(), photo.filename].join("/") };
+    });
+    if (archivePhotos.some((photo) => !photo)) return c.json({ error: "The folder structure is invalid. Sync the gallery and try again.", code: "EDIT_RESULT_FOLDER_INVALID" }, 409);
+
+    try {
+        const response = await fetch(`${ARCHIVE_WORKER_URL}/v1/archive/jobs`, {
+            method: "POST",
+            headers: { Authorization: `Bearer ${ARCHIVE_WORKER_TOKEN}`, "Content-Type": "application/json" },
+            body: JSON.stringify({ galleryId: access.galleryId, folderId: "__all__", folderName: "Edited Photos", accessExpiresAt: access.expiresAt, photos: archivePhotos }),
+            signal: AbortSignal.timeout(15_000),
+        });
+        if (!response.ok) {
+            const code = response.status === 429 ? "ARCHIVE_QUEUE_FULL" : "ARCHIVE_WORKER_UNAVAILABLE";
+            return c.json({ error: response.status === 429 ? "The download queue is busy. Try again shortly." : "Gallery download could not be started. Try again shortly.", code }, response.status === 429 ? 429 : 503);
+        }
+        const result = await response.json() as { jobId?: unknown; status?: unknown };
+        if (typeof result.jobId !== "string" || !/^[a-f0-9]{32}$/.test(result.jobId)) throw new Error("invalid_worker_job");
+        return c.json({ jobId: result.jobId, status: typeof result.status === "string" ? result.status : "queued", total: photos.length }, 202);
+    } catch (error) {
+        console.warn(`[edited photos] Gallery archive start failed for gallery ${access.galleryId}:`, error instanceof Error ? error.message : "unknown");
+        return c.json({ error: "Gallery download could not be started. Try again shortly.", code: "ARCHIVE_WORKER_UNAVAILABLE" }, 503);
+    }
+});
+
 publicGalleriesRouter.post("/:id/edit-results/folders/:folderId/archive/jobs", async (c) => {
     const access = await requireEditResultsAccess(c);
     if (access instanceof Response) return access;
@@ -2028,8 +2081,8 @@ publicGalleriesRouter.get("/:id/edit-results/archive/jobs/:jobId", async (c) => 
         };
         if (result.status === "failed") payload.error = "Some photos could not be packaged. Please retry or contact the photographer.";
         if (result.status === "completed" && typeof result.downloadTicket === "string" && typeof result.filename === "string") {
+            if (!isAllowedArchivePublicUrl(ARCHIVE_WORKER_PUBLIC_URL)) throw new Error("worker_public_url_must_use_https_or_loopback_http");
             const base = new URL(ARCHIVE_WORKER_PUBLIC_URL);
-            if (base.protocol !== "https:") throw new Error("worker_public_url_must_use_https");
             const download = new URL(`/v1/archive/download/${jobId}`, base);
             download.searchParams.set("ticket", result.downloadTicket);
             payload.downloadUrl = download.toString();

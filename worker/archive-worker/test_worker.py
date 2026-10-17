@@ -87,6 +87,22 @@ class ArchiveTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(all(entry.compress_type == zipfile.ZIP_STORED for entry in archive.infolist()))
         self.assertEqual(self.drive.download_to_path.await_count, 2)
 
+    async def test_gallery_archive_keeps_root_photos_and_folder_paths(self):
+        self.payload.update({
+            "folderId": "__all__",
+            "folderName": "Edited Photos",
+            "photos": [
+                {"driveFileId": "root-photo", "filename": "root.jpg", "archivePath": "root.jpg"},
+                {"driveFileId": "nested-photo", "filename": "nested.jpg", "archivePath": "Details/Day 1/nested.jpg"},
+            ],
+        })
+        job_id = await self.complete_job()
+        status = (await self.client.get(f"/v1/archive/jobs/{job_id}")).json()
+        self.assertEqual(status["folderId"], "__all__")
+        download = await self.client.get(f"/v1/archive/download/{job_id}?ticket={status['downloadTicket']}")
+        with zipfile.ZipFile(io.BytesIO(download.content)) as archive:
+            self.assertEqual(archive.namelist(), ["root.jpg", "Details/Day 1/nested.jpg"])
+
     async def test_archive_token_is_required_and_selfie_routes_are_absent(self):
         for path in ("/readyz", "/v1/archive/jobs/missing"):
             self.assertEqual((await self.client.get(path, headers={"Authorization": "Bearer selfie-token"})).status_code, 401)

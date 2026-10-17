@@ -107,6 +107,12 @@ export async function startEditFolderArchive(id: string, folderId: string, token
     return response.json();
 }
 
+export async function startEditGalleryArchive(id: string, token: string): Promise<EditFolderArchiveJob> {
+    const response = await apiFetch(`/public/galleries/${encodeURIComponent(id)}/edit-results/archive/jobs?token=${encodeURIComponent(token)}`, { method: 'POST' });
+    if (!response.ok) throw await parseError(response, 'Unable to prepare the gallery download.');
+    return response.json();
+}
+
 export async function getEditFolderArchiveJob(id: string, jobId: string, token: string, signal?: AbortSignal): Promise<EditFolderArchiveJob> {
     const response = await apiFetch(`/public/galleries/${encodeURIComponent(id)}/edit-results/archive/jobs/${encodeURIComponent(jobId)}?token=${encodeURIComponent(token)}`, { signal });
     if (!response.ok) throw await parseError(response, 'Unable to check folder download progress.');

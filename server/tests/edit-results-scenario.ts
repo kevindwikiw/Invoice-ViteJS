@@ -208,6 +208,14 @@ if (process.env.FACE_ARCHIVE_WORKER_URL) {
         { driveFileId: 'bw', filename: 'bw.jpg', archivePath: 'No Watermark/bw.jpg' },
         { driveFileId: 'nested-photo', filename: 'nested-photo.jpg', archivePath: 'No Watermark/Empty/nested-photo.jpg' },
     ]);
+    const galleryArchiveStart = await request(`/public/gallery/edit-results/archive/jobs?token=${token}`, 'POST');
+    assert.equal(galleryArchiveStart.status, 202, await galleryArchiveStart.clone().text());
+    assert.equal(workerArchivePayload.folderId, '__all__');
+    assert.deepEqual(Object.fromEntries(workerArchivePayload.photos.map((photo: any) => [photo.driveFileId, photo.archivePath])), {
+        color: 'color.jpg',
+        bw: 'No Watermark/bw.jpg',
+        'nested-photo': 'No Watermark/Empty/nested-photo.jpg',
+    });
     assert.equal((await request(`/public/gallery/edit-results/folders/not-published/archive/jobs?token=${token}`, 'POST')).status, 404);
     assert.equal((await request(`/public/gallery/edit-results/folders/no-watermark/archive/jobs?token=bad`, 'POST')).status, 401);
     const archiveJob = await json(await request(`/public/gallery/edit-results/archive/jobs/${workerArchiveJobId}?token=${token}`));
