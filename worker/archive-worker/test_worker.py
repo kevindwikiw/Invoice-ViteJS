@@ -169,9 +169,12 @@ class ArchiveTests(unittest.IsolatedAsyncioTestCase):
     async def test_startup_and_shutdown_own_only_archive_resources(self):
         orphan = worker.ARCHIVE_ROOT / "orphan.zip"
         orphan.write_bytes(b"orphan")
+        lost_found = worker.ARCHIVE_ROOT / "lost+found"
+        lost_found.mkdir()
         with patch.object(worker, "drive_source", None):
             async with worker.lifespan(worker.app):
                 self.assertFalse(orphan.exists())
+                self.assertTrue(lost_found.is_dir())
                 self.assertEqual((await self.client.get("/readyz")).status_code, 200)
                 task = asyncio.create_task(asyncio.Event().wait())
                 worker.archive_tasks["pending"] = task

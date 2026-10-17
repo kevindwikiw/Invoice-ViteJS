@@ -65,6 +65,8 @@ async def lifespan(_: FastAPI):
     ARCHIVE_ROOT.mkdir(parents=True, exist_ok=True)
     # Jobs live in this process, so files left by an earlier process are orphans.
     for child in ARCHIVE_ROOT.iterdir():
+        if child.name == "lost+found":
+            continue
         if child.is_dir():
             shutil.rmtree(child)
         else:
