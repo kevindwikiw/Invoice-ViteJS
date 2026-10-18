@@ -38,6 +38,7 @@ sudo install -m 0600 .env.example /etc/orbit-archive-worker.env
 sudoedit /etc/orbit-archive-worker.env
 sudo systemctl daemon-reload
 sudo systemctl enable --now orbit-archive-worker
+sudo systemctl enable --now orbit-archive-monitor.timer
 ```
 
 Create the environment file only for the initial install. Set the archive token
@@ -89,6 +90,11 @@ Fly API so the worker deduplicates these two archive scopes separately.
 After expanding the mounted archive volume and verifying free space, enable
 `FACE_ARCHIVE_PREBUILD_ENABLED=1` on Fly. Publishing or syncing Edited Photos
 then queues the root ZIP and both direct and recursive ZIPs for every folder.
+For a production pilot, also set `FACE_ARCHIVE_PREBUILD_GALLERY_IDS` to one
+comma-separated gallery ID, for example `123`. With this allowlist configured,
+only that gallery is prebuilt; omit the allowlist after the pilot to enable all
+galleries. A successful Drive Sync is required first so every image has a known
+size.
 The admin Edited Photos panel shows how many ZIPs are ready and offers a retry
 button. Existing galleries can be queued with that retry button. Share a new
 gallery only after the panel reports all ZIPs ready; publishing queues the work
@@ -97,10 +103,25 @@ but does not wait for large Drive downloads to finish.
 The worker stores job manifests and finished ZIPs on the archive volume, so a
 service restart resumes unfinished jobs and retains completed ZIPs. Prebuilt
 ZIPs live until the Edited Photos access expiry or 30 days, whichever comes
-first. The cache limit defaults to 100 GiB and leaves at least 5 GiB free;
+first. The cache limit defaults to 80 GiB and leaves at least 5 GiB free;
 older completed ZIPs may be evicted when space is needed. When a prebuilt ZIP
 is unavailable, the normal on-demand download path still works. Customer-
 requested ZIPs retain their six-hour lifetime.
+
+Prebuild estimates use each Drive file's size plus a 64 KiB per-entry ZIP
+overhead allowance, including repeated entries in direct and recursive ZIPs.
+The worker rejects unknown sizes and jobs whose estimate exceeds safe disk/cache
+capacity. Existing galleries need a successful Sync to populate file sizes. The
+admin status shows estimated and currently available storage before retrying.
+The worker also stores each gallery's active snapshot in
+`gallery-snapshots.json`; unpublish and Sync revoke old jobs/tickets before
+replacing that snapshot. Keep this file on the mounted archive volume.
+
+The Ubuntu setup also installs a five-minute systemd monitor. It checks that
+the archive volume is mounted, that at least 5 GiB remains free, and that the
+worker stays active; new service restarts and unhealthy states are recorded in
+the system journal under `orbit-archive-monitor`. This is local monitoring,
+not an external notification channel.
 
 ## Limits And Tests
 

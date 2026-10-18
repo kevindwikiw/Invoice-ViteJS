@@ -196,7 +196,7 @@ export async function unpublishEditResults(id: number): Promise<void> {
     if (!response.ok) throw await parseError(response, 'Unable to unpublish edited photos.');
 }
 
-export type EditArchivePreparation = { enabled: boolean; available?: boolean; ready: boolean; total: number; completed: number; failed?: number; queued?: number; running?: number; missing?: number };
+export type EditArchivePreparation = { enabled: boolean; available?: boolean; ready: boolean; total: number; completed: number; failed?: number; queued?: number; running?: number; missing?: number; estimatedBytes?: number; availableBytes?: number; unknownPhotos?: number; capacityExceeded?: boolean };
 
 export async function getEditArchivePreparation(id: number): Promise<EditArchivePreparation> {
     const response = await fetchWithAuth(`/galleries/${id}/edit-results/archive/status`);

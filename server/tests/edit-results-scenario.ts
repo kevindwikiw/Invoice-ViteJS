@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { mock } from 'bun:test';
 import { Hono } from 'hono';
 
-const drivePhoto = (id: string) => ({ id, name: `${id}.jpg`, mimeType: 'image/jpeg', thumbnailLink: `https://lh3.googleusercontent.com/${id}=s320`, webContentLink: `https://drive.google.com/uc?export=download&id=${id}`, width: 1200, height: 900 });
+const drivePhoto = (id: string) => ({ id, name: `${id}.jpg`, mimeType: 'image/jpeg', thumbnailLink: `https://lh3.googleusercontent.com/${id}=s320`, webContentLink: `https://drive.google.com/uc?export=download&id=${id}`, width: 1200, height: 900, size: '1200' });
 let edited = [drivePhoto('color'), drivePhoto('bw'), drivePhoto('extra')];
 let folderSnapshot: Array<{ id: string; parentId: string | null; name: string }> = [];
 let treeFails = false;
@@ -52,6 +52,7 @@ app.route('/public', publicGalleriesRouter);
 const request = (path: string, method = 'GET', body?: unknown, authenticated = true) => app.request(path, { method, headers: { 'content-type': 'application/json', ...(authenticated ? { 'x-test-admin': '1' } : {}) }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
 let workerArchivePayload: any = null;
 let workerPrebuildPayload: any = null;
+const workerSnapshotUpdates: Array<{ galleryId: number; snapshotVersion: string | null }> = [];
 let archiveWorkerOffline = false;
 let workerArchiveErrorCode: string | null = null;
 let workerArchiveSnapshotStale = false;
@@ -63,6 +64,12 @@ globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) =>
         assert.equal(new Headers(init?.headers).get('Authorization'), 'Bearer archive-test-token');
         if (archiveWorkerOffline) return Response.json({ error: 'offline' }, { status: 503 });
     }
+    if (new URL(url).pathname.endsWith('/snapshot') && init?.method === 'PUT') {
+        const match = new URL(url).pathname.match(/\/galleries\/(\d+)\/snapshot$/)!;
+        workerSnapshotUpdates.push({ galleryId: Number(match[1]), snapshotVersion: JSON.parse(String(init.body)).snapshotVersion });
+        return Response.json({ ok: true, revokedJobs: 0 });
+    }
+    if (new URL(url).pathname === '/v1/archive/capacity') return Response.json({ availableBytes: 2_000_000_000, diskFreeBytes: 2_100_000_000, cacheUsedBytes: 100_000_000, reservedBytes: 0 });
     if (url.endsWith('/v1/archive/jobs') && init?.method === 'POST') {
         workerArchivePayload = JSON.parse(String(init.body));
         return Response.json({ jobId: workerArchiveJobId, status: 'queued' }, { status: 202 });
@@ -356,6 +363,10 @@ assert.deepEqual(await one('SELECT status, access_version, selection_deadline_at
 assert.equal((await one<any>('SELECT status FROM galleries WHERE id = 1')).status, 'open');
 assert.equal((await listing()).status, 403);
 await request('/admin/1/edit-results/unpublish', 'POST');
+if (process.env.FACE_ARCHIVE_WORKER_URL) {
+    assert.equal(workerSnapshotUpdates.at(-1)?.galleryId, 1);
+    assert.equal(workerSnapshotUpdates.at(-1)?.snapshotVersion, null);
+}
 assert.equal((await listing()).status, 404);
 assert.equal((await one<{ n: number }>('SELECT COUNT(*) as n FROM gallery_edit_result_photos'))!.n, 0);
 assert.equal((await one<{ n: number }>('SELECT COUNT(*) as n FROM gallery_edit_result_folders'))!.n, 0);
@@ -443,6 +454,12 @@ assert.equal((await request('/admin/3', 'PATCH', { editResultsZipFileId: 'archiv
 const updatedSync = await request('/admin/3/edit-results/sync', 'POST');
 assert.equal(updatedSync.status, 200, await updatedSync.clone().text());
 assert.equal((await updatedSync.json() as any).published, true);
+if (process.env.FACE_ARCHIVE_WORKER_URL) {
+    assert.equal(workerSnapshotUpdates.at(-2)?.galleryId, 3);
+    assert.equal(workerSnapshotUpdates.at(-2)?.snapshotVersion, null);
+    assert.equal(workerSnapshotUpdates.at(-1)?.galleryId, 3);
+    assert.equal(typeof workerSnapshotUpdates.at(-1)?.snapshotVersion, 'string');
+}
 assert.deepEqual(await one('SELECT edit_results_key_hash, edit_results_published_at, edit_results_expires_at, edit_results_version FROM galleries WHERE id = 3'), beforeSync);
 const afterSync = await json(await syncListing());
 assert.deepEqual(afterSync.photos.map((photo) => photo.driveFileId), ['new-edited-photo', 'another-edited-photo']);

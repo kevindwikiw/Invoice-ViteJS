@@ -1,0 +1,11 @@
+[Unit]
+Description=Run Orbit archive worker health checks every five minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+AccuracySec=30s
+Unit=orbit-archive-monitor.service
+
+[Install]
+WantedBy=timers.target

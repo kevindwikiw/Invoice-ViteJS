@@ -1,0 +1,7 @@
+[Unit]
+Description=Check Orbit archive worker health and disk capacity
+After=orbit-archive-worker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/orbit-archive-monitor

@@ -11,6 +11,8 @@ sudo useradd --system --create-home --home-dir "$APP_DIR" --shell /usr/sbin/nolo
 sudo mkdir -p "$APP_DIR/archives" "$APP_DIR/shared"
 sudo install -m 0644 "$SOURCE_DIR/archive_worker.py" "$SOURCE_DIR/requirements.txt" "$APP_DIR/"
 sudo install -m 0644 "$SOURCE_DIR/../shared/drive_source.py" "$APP_DIR/shared/drive_source.py"
+sudo install -m 0755 "$SOURCE_DIR/deploy/check-archive-worker.sh" /usr/local/sbin/orbit-archive-monitor
+sudo install -m 0644 "$SOURCE_DIR/deploy/orbit-archive-monitor.service" "$SOURCE_DIR/deploy/orbit-archive-monitor.timer" /etc/systemd/system/
 sudo python3 -m venv "$APP_DIR/.venv"
 sudo "$APP_DIR/.venv/bin/pip" install --only-binary=:all: -r "$APP_DIR/requirements.txt"
 sudo chown "$SERVICE_USER:$SERVICE_USER" "$APP_DIR/archives"
@@ -19,3 +21,4 @@ sudo install -m 0644 "$SOURCE_DIR/deploy/orbit-archive-worker.service" /etc/syst
 echo "Create /etc/orbit-archive-worker.env from .env.example (root-only, chmod 600), then run:"
 echo "  sudo systemctl daemon-reload"
 echo "  sudo systemctl enable --now orbit-archive-worker"
+echo "  sudo systemctl enable --now orbit-archive-monitor.timer"

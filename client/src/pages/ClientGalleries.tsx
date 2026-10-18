@@ -95,6 +95,14 @@ function GalleryModeTabs<T extends GalleryPageMode>({ value, onChange, disabled 
 const PAGE_SIZE = 10;
 const dateFormat = new Intl.DateTimeFormat('en-GB', { dateStyle: 'medium', timeStyle: 'short' });
 const idrFormat = new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 });
+const storageFormat = new Intl.NumberFormat('id-ID', { maximumFractionDigits: 1 });
+const formatStorageBytes = (bytes: number) => {
+  const units = ['B', 'KiB', 'MiB', 'GiB', 'TiB'];
+  let value = Math.max(0, bytes);
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) { value /= 1024; unit += 1; }
+  return `${storageFormat.format(value)} ${units[unit]}`;
+};
 const inputClass = 'h-11 w-full rounded-md border border-[var(--border)] bg-[var(--bg-deep)] px-3.5 text-sm text-[var(--text-primary)] outline-none transition-colors placeholder:text-[var(--text-muted)]/60 hover:border-[var(--text-muted)] focus:border-[var(--accent)] focus:ring-1 focus:ring-[var(--accent)]';
 const compactInputClass = inputClass;
 const unitInputShellClass = 'grid h-11 grid-cols-[minmax(0,1fr)_4.5rem] overflow-hidden rounded-md border border-[var(--border)] bg-[var(--bg-deep)] transition-colors hover:border-[var(--text-muted)] focus-within:border-[var(--accent)] focus-within:ring-1 focus-within:ring-[var(--accent)]';
@@ -1371,9 +1379,12 @@ function GalleryDetailEditor({ data, close, initialMode, focusSelectionDuration 
             </fieldset>
              </form>
             {publishWarnings.map((warning) => <p key={warning} role="status" className="mb-3 text-sm text-amber-600 dark:text-amber-400">{warning}</p>)}
-            {mode === 'edited' && archivePreparation.data?.enabled && <div role="status" className="flex flex-wrap items-center justify-between gap-2 border-t border-[var(--border)] py-3 text-xs text-[var(--text-secondary)]">
-              <span>{archivePreparation.data.available === false ? 'ZIP preparation unavailable' : archivePreparation.data.ready ? `ZIPs ready (${archivePreparation.data.completed}/${archivePreparation.data.total})` : `Preparing ZIPs (${archivePreparation.data.completed}/${archivePreparation.data.total})${archivePreparation.data.failed ? `, ${archivePreparation.data.failed} failed` : ''}`}</span>
-              {(archivePreparation.data.failed || archivePreparation.data.missing || archivePreparation.data.available === false) ? <button type="button" disabled={retryArchivePreparation.isPending} onClick={() => retryArchivePreparation.mutate()} className="inline-flex min-h-9 items-center gap-2 text-xs font-semibold text-[var(--text-primary)] hover:text-[var(--accent)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)] disabled:opacity-50"><RefreshCw size={14} aria-hidden="true" className={retryArchivePreparation.isPending ? 'animate-spin' : undefined} />Retry ZIP preparation</button> : null}
+            {mode === 'edited' && archivePreparation.data?.enabled && <div className="flex flex-wrap items-center justify-between gap-2 border-t border-[var(--border)] py-3 text-xs text-[var(--text-secondary)]">
+              <div className="min-w-0 space-y-1">
+                <p role="status" aria-live="polite">{archivePreparation.data.available === false ? 'ZIP preparation unavailable' : archivePreparation.data.ready ? `ZIPs ready (${archivePreparation.data.completed}/${archivePreparation.data.total})` : `Preparing ZIPs (${archivePreparation.data.completed}/${archivePreparation.data.total})${archivePreparation.data.failed ? `, ${archivePreparation.data.failed} failed` : ''}`}</p>
+                {archivePreparation.data.capacityExceeded ? <p aria-live="off" className="max-w-2xl text-amber-700 dark:text-amber-300">Prebuild paused: estimated {formatStorageBytes(archivePreparation.data.estimatedBytes || 0)} across all ZIPs, but only {formatStorageBytes(archivePreparation.data.availableBytes || 0)} is safely available. Free archive storage, then retry. {archivePreparation.data.unknownPhotos ? `${archivePreparation.data.unknownPhotos} photo size(s) are unknown; sync this gallery first.` : ''}</p> : archivePreparation.data.estimatedBytes !== undefined && <p aria-live="off">Estimated ZIP storage: {formatStorageBytes(archivePreparation.data.estimatedBytes)} · Available: {formatStorageBytes(archivePreparation.data.availableBytes || 0)}</p>}
+              </div>
+              {(archivePreparation.data.failed || archivePreparation.data.missing || archivePreparation.data.available === false) && !archivePreparation.data.capacityExceeded ? <button type="button" disabled={retryArchivePreparation.isPending} onClick={() => retryArchivePreparation.mutate()} className="inline-flex min-h-9 items-center gap-2 text-xs font-semibold text-[var(--text-primary)] hover:text-[var(--accent)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)] disabled:opacity-50"><RefreshCw size={14} aria-hidden="true" className={retryArchivePreparation.isPending ? 'animate-spin' : undefined} />Retry ZIP Preparation</button> : null}
             </div>}
           </section>
           <div hidden={mode !== 'edited'} className="flex flex-wrap items-center justify-between gap-3 border-t border-[var(--border)] pt-4">

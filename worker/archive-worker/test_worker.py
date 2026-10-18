@@ -41,6 +41,7 @@ class ArchiveTests(unittest.IsolatedAsyncioTestCase):
             "archive_jobs": {},
             "archive_tasks": {},
             "archive_tickets": {},
+            "gallery_snapshots": {},
             "archive_semaphore": asyncio.Semaphore(1),
             "drive_source": self.drive,
         }.items():
@@ -129,7 +130,7 @@ class ArchiveTests(unittest.IsolatedAsyncioTestCase):
     async def test_prebuild_survives_restart_and_deduplicates_client_request(self):
         self.payload["scope"] = "direct"
         self.payload["snapshotVersion"] = "published:v1"
-        self.payload["photos"] = [{"driveFileId": "photo-a", "filename": "a.jpg", "archivePath": "a.jpg"}]
+        self.payload["photos"] = [{"driveFileId": "photo-a", "filename": "a.jpg", "archivePath": "a.jpg", "sizeBytes": 6}]
         response = await self.client.post("/v1/archive/prebuild", json={"jobs": [self.payload]})
         self.assertEqual(response.status_code, 202)
         job_id = response.json()["jobs"][0]["jobId"]
@@ -153,6 +154,7 @@ class ArchiveTests(unittest.IsolatedAsyncioTestCase):
             self.assertNotEqual(changed.json()["jobId"], job_id)
 
     async def test_queued_prebuild_resumes_after_restart(self):
+        self.payload["photos"] = [{**photo, "sizeBytes": 10} for photo in self.payload["photos"]]
         gate = asyncio.Event()
         original = self.drive.download_to_path.side_effect
 
@@ -296,6 +298,30 @@ class ArchiveTests(unittest.IsolatedAsyncioTestCase):
             self.assertIsNone(worker.drive_source)
             self.assertFalse(worker.archive_tasks)
             self.assertEqual((await self.client.get("/readyz")).status_code, 503)
+
+    async def test_gallery_snapshot_revokes_existing_download_ticket_and_persists(self):
+        self.payload.update({"snapshotVersion": "published:v1", "photos": [{"driveFileId": "photo-a", "filename": "a.jpg", "archivePath": "a.jpg"}]})
+        job_id = await self.complete_job()
+        status = (await self.client.get(f"/v1/archive/jobs/{job_id}")).json()
+        ticket = status["downloadTicket"]
+        revoked = await self.client.put("/v1/archive/galleries/17/snapshot", json={"snapshotVersion": None})
+        self.assertEqual(revoked.status_code, 200)
+        self.assertEqual((await self.client.get(f"/v1/archive/download/{job_id}?ticket={ticket}")).status_code, 404)
+        self.assertEqual((await self.client.get(f"/v1/archive/jobs/{job_id}")).status_code, 404)
+        self.assertIsNone(worker.gallery_snapshots[17])
+        self.assertTrue((worker.ARCHIVE_ROOT / worker.SNAPSHOT_STATE).is_file())
+        worker.gallery_snapshots.clear()
+        async with worker.lifespan(worker.app):
+            self.assertIsNone(worker.gallery_snapshots[17])
+            self.assertEqual((await self.client.get(f"/v1/archive/jobs/{job_id}")).status_code, 404)
+
+    async def test_prebuild_capacity_estimate_blocks_unknown_or_over_capacity(self):
+        self.payload.update({"snapshotVersion": "published:v1", "photos": [{"driveFileId": "photo-a", "filename": "a.jpg", "archivePath": "a.jpg", "sizeBytes": 500}]})
+        with patch.object(worker, "ARCHIVE_CACHE_MAX_BYTES", 100), patch.object(worker, "ARCHIVE_MIN_FREE_BYTES", 0):
+            response = await self.client.post("/v1/archive/prebuild", json={"jobs": [self.payload]})
+            self.assertEqual(response.status_code, 507)
+        self.payload["photos"][0].pop("sizeBytes")
+        self.assertEqual((await self.client.post("/v1/archive/prebuild", json={"jobs": [self.payload]})).status_code, 422)
 
     def test_archive_import_does_not_require_selfie_or_ml_dependencies(self):
         script = """

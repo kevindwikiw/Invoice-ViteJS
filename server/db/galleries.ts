@@ -151,6 +151,7 @@ const GALLERY_SCHEMA = [
         folder_id TEXT,
         width INTEGER,
         height INTEGER,
+        source_size_bytes INTEGER,
         display_order INTEGER NOT NULL DEFAULT 0,
         PRIMARY KEY (gallery_id, drive_file_id)
     )`,
@@ -316,7 +317,7 @@ const FACE_INDEX_PHOTO_REQUIRED_COLUMNS: Array<readonly [string, string]> = [
 
 const FACE_EMBEDDING_REQUIRED_COLUMNS: Array<readonly [string, string]> = [["source_scope", "TEXT NOT NULL DEFAULT 'selection'"]];
 
-const EDIT_RESULT_REQUIRED_COLUMNS: Array<readonly [string, string]> = [["before_photo", "TEXT"], ["folder_id", "TEXT"], ["source_version", "TEXT NOT NULL DEFAULT ''"]];
+const EDIT_RESULT_REQUIRED_COLUMNS: Array<readonly [string, string]> = [["before_photo", "TEXT"], ["folder_id", "TEXT"], ["source_version", "TEXT NOT NULL DEFAULT ''"], ["source_size_bytes", "INTEGER"]];
 
 async function migrateFaceScopes(): Promise<void> {
     for (const table of ['face_embeddings', 'face_index_photos'] as const) {
