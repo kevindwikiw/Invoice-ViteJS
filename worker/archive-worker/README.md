@@ -106,7 +106,11 @@ ZIPs live until the Edited Photos access expiry or 30 days, whichever comes
 first. The cache limit defaults to 80 GiB and leaves at least 5 GiB free;
 older completed ZIPs may be evicted when space is needed. When a prebuilt ZIP
 is unavailable, the normal on-demand download path still works. Customer-
-requested ZIPs retain their six-hour lifetime.
+requested ZIPs expire seven days after becoming ready if nobody downloads them.
+The first valid download starts their six-hour retention window; later downloads
+do not extend it. Download tickets still expire after 15 minutes. Prebuilt ZIPs
+remain available until the Edited Photos access expiry or the prebuild TTL,
+whichever comes first.
 
 Prebuild estimates use each Drive file's size plus a 64 KiB per-entry ZIP
 overhead allowance, including repeated entries in direct and recursive ZIPs.

@@ -77,6 +77,7 @@ class ArchiveTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(status["processed"], 2)
         ticket = status["downloadTicket"]
         self.assertEqual((await self.client.get(f"/v1/archive/download/{job_id}?ticket=wrong")).status_code, 404)
+        self.assertIsNone(worker.archive_jobs[job_id]["firstDownloadAt"])
         refreshed = (await self.client.get(f"/v1/archive/jobs/{job_id}")).json()["downloadTicket"]
         self.assertNotEqual(ticket, refreshed)
         self.assertEqual((await self.client.get(f"/v1/archive/download/{job_id}?ticket={ticket}")).status_code, 200)
@@ -137,8 +138,13 @@ class ArchiveTests(unittest.IsolatedAsyncioTestCase):
         await worker.archive_tasks[job_id]
         self.assertTrue(worker.archive_jobs[job_id]["prebuilt"])
         self.assertGreater(worker.archive_jobs[job_id]["expiresAt"], time.time() + worker.ARCHIVE_TTL_SECONDS)
+        prebuilt_expiry = worker.archive_jobs[job_id]["expiresAt"]
         prebuild_status = await self.client.get("/v1/archive/prebuild/galleries/17", params={"snapshotVersion": "published:v1"})
         self.assertEqual(prebuild_status.json()["jobs"][0]["status"], "completed")
+        status = (await self.client.get(f"/v1/archive/jobs/{job_id}")).json()
+        self.assertEqual((await self.client.get(f"/v1/archive/download/{job_id}?ticket={status['downloadTicket']}")).status_code, 200)
+        self.assertIsNone(worker.archive_jobs[job_id]["firstDownloadAt"])
+        self.assertEqual(worker.archive_jobs[job_id]["expiresAt"], prebuilt_expiry)
         worker.archive_jobs.clear()
         worker.archive_tasks.clear()
         worker.archive_tickets.clear()
@@ -274,6 +280,7 @@ class ArchiveTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_archive_ttl_defaults_to_six_hours_and_active_jobs_are_not_pruned(self):
         self.assertEqual(worker.ARCHIVE_TTL_SECONDS, 6 * 60 * 60)
+        self.assertEqual(worker.ARCHIVE_UNDOWNLOADED_TTL_SECONDS, 7 * 24 * 60 * 60)
         active_id = "active-job"
         active_dir = worker.ARCHIVE_ROOT / active_id
         active_dir.mkdir()
@@ -281,6 +288,43 @@ class ArchiveTests(unittest.IsolatedAsyncioTestCase):
         worker.prune_archives()
         self.assertTrue(active_dir.exists())
         self.assertIn(active_id, worker.archive_jobs)
+
+    async def test_undownloaded_archive_expires_seven_days_after_ready(self):
+        job_id = await self.complete_job()
+        job = worker.archive_jobs[job_id]
+        self.assertIsNone(job["firstDownloadAt"])
+        self.assertAlmostEqual(job["expiresAt"], job["readyAt"] + worker.ARCHIVE_UNDOWNLOADED_TTL_SECONDS)
+        job["readyAt"] -= worker.ARCHIVE_UNDOWNLOADED_TTL_SECONDS + 1
+        job["expiresAt"] = job["readyAt"] + worker.ARCHIVE_UNDOWNLOADED_TTL_SECONDS
+        worker.prune_archives()
+        self.assertNotIn(job_id, worker.archive_jobs)
+        self.assertFalse((worker.ARCHIVE_ROOT / job_id).exists())
+
+    async def test_first_download_starts_six_hour_expiry_once_and_persists_after_restart(self):
+        job_id = await self.complete_job()
+        ready_at = worker.archive_jobs[job_id]["readyAt"]
+        self.assertAlmostEqual(worker.archive_jobs[job_id]["expiresAt"], ready_at + worker.ARCHIVE_UNDOWNLOADED_TTL_SECONDS)
+
+        status = (await self.client.get(f"/v1/archive/jobs/{job_id}")).json()
+        self.assertEqual((await self.client.get(f"/v1/archive/download/{job_id}?ticket={status['downloadTicket']}")).status_code, 200)
+        first_download_at = worker.archive_jobs[job_id]["firstDownloadAt"]
+        first_expiry = worker.archive_jobs[job_id]["expiresAt"]
+        self.assertGreaterEqual(first_download_at, ready_at)
+        self.assertAlmostEqual(first_expiry, first_download_at + worker.ARCHIVE_TTL_SECONDS)
+
+        status = (await self.client.get(f"/v1/archive/jobs/{job_id}")).json()
+        self.assertEqual((await self.client.get(f"/v1/archive/download/{job_id}?ticket={status['downloadTicket']}")).status_code, 200)
+        self.assertEqual(worker.archive_jobs[job_id]["firstDownloadAt"], first_download_at)
+        self.assertEqual(worker.archive_jobs[job_id]["expiresAt"], first_expiry)
+
+        worker.archive_jobs.clear()
+        worker.archive_tasks.clear()
+        worker.archive_tickets.clear()
+        async with worker.lifespan(worker.app):
+            restored = worker.archive_jobs[job_id]
+            self.assertEqual(restored["readyAt"], ready_at)
+            self.assertEqual(restored["firstDownloadAt"], first_download_at)
+            self.assertEqual(restored["expiresAt"], first_expiry)
 
     async def test_startup_and_shutdown_own_only_archive_resources(self):
         orphan = worker.ARCHIVE_ROOT / "orphan.zip"

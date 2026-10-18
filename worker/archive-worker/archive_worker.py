@@ -38,6 +38,7 @@ ARCHIVE_MAX_PHOTOS = max(1, int(os.getenv("FACE_ARCHIVE_WORKER_MAX_PHOTOS", "200
 ARCHIVE_MAX_ACTIVE = max(1, int(os.getenv("FACE_ARCHIVE_WORKER_MAX_ACTIVE", "4")))
 ARCHIVE_CONCURRENCY = max(1, int(os.getenv("FACE_ARCHIVE_WORKER_CONCURRENCY", "1")))
 ARCHIVE_TTL_SECONDS = max(60, int(os.getenv("FACE_ARCHIVE_WORKER_TTL_SECONDS", str(6 * 60 * 60))))
+ARCHIVE_UNDOWNLOADED_TTL_SECONDS = 7 * 24 * 60 * 60
 ARCHIVE_PREBUILD_TTL_SECONDS = max(ARCHIVE_TTL_SECONDS, int(os.getenv("FACE_ARCHIVE_WORKER_PREBUILD_TTL_SECONDS", str(30 * 24 * 60 * 60))))
 ARCHIVE_CACHE_MAX_BYTES = max(1, int(os.getenv("FACE_ARCHIVE_WORKER_CACHE_MAX_BYTES", str(80 * 1024 * 1024 * 1024))))
 ARCHIVE_MIN_FREE_BYTES = max(0, int(os.getenv("FACE_ARCHIVE_WORKER_MIN_FREE_BYTES", str(5 * 1024 * 1024 * 1024))))
@@ -80,6 +81,15 @@ def save_job(job_id: str, payload: "ArchiveJobInput") -> None:
     temporary = job_dir / "job.json.tmp"
     temporary.write_text(json.dumps(record, separators=(",", ":")), encoding="utf-8")
     temporary.replace(job_dir / "job.json")
+
+
+def save_job_state(job_id: str) -> None:
+    manifest = ARCHIVE_ROOT / job_id / "job.json"
+    record = json.loads(manifest.read_text(encoding="utf-8"))
+    record["job"] = {key: value for key, value in archive_jobs[job_id].items() if key not in {"downloadTicket", "downloadTicketExpiresAt"}}
+    temporary = manifest.with_suffix(".json.tmp")
+    temporary.write_text(json.dumps(record, separators=(",", ":")), encoding="utf-8")
+    temporary.replace(manifest)
 
 
 def save_gallery_snapshots() -> None:
@@ -320,9 +330,11 @@ async def process_archive_job(job_id: str, payload: ArchiveJobInput) -> None:
                     job["bytes"] = total_bytes
             job["status"] = "completed"
             job["filename"] = zip_path.name
-            job["expiresAt"] = prebuilt_expires_at(payload.accessExpiresAt) if job["prebuilt"] else time.time() + ARCHIVE_TTL_SECONDS
+            ready_at = time.time()
+            job["readyAt"] = ready_at
+            job["expiresAt"] = prebuilt_expires_at(payload.accessExpiresAt) if job["prebuilt"] else ready_at + ARCHIVE_UNDOWNLOADED_TTL_SECONDS
             job["accessExpiresAt"] = payload.accessExpiresAt
-            job["finishedAt"] = time.time()
+            job["finishedAt"] = ready_at
             save_job(job_id, payload)
             evict_completed(job_id)
             if zip_path.stat().st_size > ARCHIVE_CACHE_MAX_BYTES:
@@ -361,7 +373,7 @@ def enqueue_archive_job(payload: ArchiveJobInput, prebuilt: bool) -> dict[str, A
         raise HTTPException(status_code=429, detail="archive_queue_full")
     job_id = uuid4().hex
     estimated_bytes = sum((photo.sizeBytes or 0) + ZIP_ENTRY_OVERHEAD_BYTES for photo in payload.photos) if prebuilt else 0
-    archive_jobs[job_id] = {"galleryId": payload.galleryId, "folderId": payload.folderId, "scope": payload.scope, "snapshotVersion": payload.snapshotVersion, "snapshotKey": snapshot_key, "prebuilt": prebuilt, "estimatedBytes": estimated_bytes, "status": "queued", "processed": 0, "total": len(payload.photos), "bytes": 0, "expiresAt": prebuilt_expires_at(payload.accessExpiresAt) if prebuilt else time.time() + 3600}
+    archive_jobs[job_id] = {"galleryId": payload.galleryId, "folderId": payload.folderId, "scope": payload.scope, "snapshotVersion": payload.snapshotVersion, "snapshotKey": snapshot_key, "prebuilt": prebuilt, "estimatedBytes": estimated_bytes, "status": "queued", "processed": 0, "total": len(payload.photos), "bytes": 0, "readyAt": None, "firstDownloadAt": None, "expiresAt": prebuilt_expires_at(payload.accessExpiresAt) if prebuilt else time.time() + 3600}
     save_job(job_id, payload)
     archive_tasks[job_id] = asyncio.create_task(process_archive_job(job_id, payload))
     return {"jobId": job_id, "status": "queued", "duplicate": False}
@@ -441,4 +453,16 @@ async def download_archive(job_id: str, ticket: str) -> FileResponse:
     path = ARCHIVE_ROOT / job_id / job["filename"]
     if not path.is_file():
         raise HTTPException(status_code=404, detail="archive_not_available")
+    if not job.get("prebuilt") and job.get("readyAt") is not None and job.get("firstDownloadAt") is None:
+        first_download_at = time.time()
+        previous_expiry = job["expiresAt"]
+        job["firstDownloadAt"] = first_download_at
+        job["expiresAt"] = first_download_at + ARCHIVE_TTL_SECONDS
+        try:
+            save_job_state(job_id)
+        except (OSError, ValueError, KeyError):
+            job["firstDownloadAt"] = None
+            job["expiresAt"] = previous_expiry
+            logger.exception("Unable to persist first-download expiry for archive job %s", job_id)
+            raise HTTPException(status_code=503, detail="archive_expiry_state_unavailable") from None
     return FileResponse(path, media_type="application/zip", filename=job["filename"], headers={"Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff"})
