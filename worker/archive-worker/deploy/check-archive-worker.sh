@@ -18,7 +18,7 @@ if [[ "$mount_target" != "$archive_dir" ]]; then
 fi
 
 if [[ -d "$archive_dir" ]]; then
-    free_bytes="$(df -PB1 --output=avail "$archive_dir" 2>/dev/null | tail -n 1 | tr -d ' ' || true)"
+    free_bytes="$(df -B1 --output=avail "$archive_dir" 2>/dev/null | awk 'NR == 2 { print $1 }' || true)"
     if [[ "$free_bytes" =~ ^[0-9]+$ ]] && (( free_bytes < min_free_bytes )); then
         alert "archive volume has less than 5 GiB free (${free_bytes} bytes)"
     elif [[ ! "$free_bytes" =~ ^[0-9]+$ ]]; then
