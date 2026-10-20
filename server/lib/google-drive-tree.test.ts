@@ -65,6 +65,7 @@ test('Drive tree follows pagination and folders, ignores shortcuts, and rejects 
         const tree = await listDrivePhotoTree('root');
         expect((await listDrivePhotos('selection')).map((item) => item.mimeType)).toEqual(['image/jpeg']);
         expect(secondPageRead).toBe(true);
+        expect(tree.rootName).toBe('root');
         expect(tree.folders).toEqual([{ id: 'child', name: 'child', parentId: null }, { id: 'nested', name: 'nested', parentId: 'child' }]);
         expect(tree.photos.map(({ id, folderId }) => ({ id, folderId }))).toEqual([
             { id: 'root-photo', folderId: null }, { id: 'root-video', folderId: null }, { id: 'child-photo', folderId: 'child' }, { id: 'nested-photo', folderId: 'nested' },

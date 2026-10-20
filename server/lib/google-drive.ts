@@ -256,9 +256,10 @@ async function listDriveEntries(folderId: string, includeFolders = false): Promi
 export type DriveFolder = { id: string; parentId: string | null; name: string };
 export type DriveFolderPhoto = DrivePhoto & { folderId: string | null };
 
-export async function listDrivePhotoTree(rootId: string): Promise<{ folders: DriveFolder[]; photos: DriveFolderPhoto[] }> {
+export async function listDrivePhotoTree(rootId: string): Promise<{ rootName: string; folders: DriveFolder[]; photos: DriveFolderPhoto[] }> {
     const folders: DriveFolder[] = [];
     const photos: DriveFolderPhoto[] = [];
+    let rootName = '';
     const queue = [{ id: rootId, depth: 0 }];
     const visited = new Set([rootId]);
     const fileIds = new Set<string>();
@@ -266,6 +267,7 @@ export async function listDrivePhotoTree(rootId: string): Promise<{ folders: Dri
         const folder = queue[index]!;
         const metadata = await getDrivePhotoMetadata(folder.id);
         if (metadata.mimeType !== 'application/vnd.google-apps.folder') throw new Error('Edited photos source must be a Drive folder.');
+        if (folder.id === rootId) rootName = metadata.name;
         const parentId = folder.id === rootId ? null : folder.id;
         for (const entry of await listDriveEntries(folder.id, true)) {
             if (entry.mimeType === 'application/vnd.google-apps.folder') {
@@ -281,7 +283,7 @@ export async function listDrivePhotoTree(rootId: string): Promise<{ folders: Dri
             }
         }
     }
-    return { folders, photos };
+    return { rootName, folders, photos };
 }
 
 export async function fetchDriveVideo(fileId: string, range?: string, responseTimeoutMs = 15_000): Promise<Response> {

@@ -1,4 +1,4 @@
-import { memo, type RefObject } from 'react';
+import { memo, type ReactNode, type RefObject } from 'react';
 import { ChevronDown, ImageIcon, Images, Moon, ScanFace, Sun } from 'lucide-react';
 import clsx from 'clsx';
 
@@ -7,6 +7,21 @@ import orbitLogo from '../../../assets/pdf/logo.png';
 import type { GalleryTheme } from './types';
 
 export type GalleryView = 'gallery' | 'picked' | 'selfie' | 'edit-results';
+
+export function GalleryHeader({ section, title, theme, utilities }: {
+    section: 'Photo Selection' | 'Edited Photos';
+    title?: string;
+    theme: GalleryTheme;
+    utilities: ReactNode;
+}) {
+    return <header data-testid="gallery-header" className="sticky top-0 z-40 h-20 select-none border-b border-[var(--border)] bg-[var(--bg-deep)] px-2.5 sm:px-8 lg:h-16">
+        <div className="mx-auto grid h-full max-w-[1600px] min-w-0 grid-cols-[auto_minmax(0,1fr)_auto] grid-rows-[2.75rem_1.5rem] items-center gap-x-2 py-1 lg:flex lg:py-0">
+            <OrbitLogo theme={theme} />
+            <GalleryHeaderIdentity section={section} title={title} />
+            <div data-testid="header-utilities" className="col-start-3 row-start-1 flex shrink-0 items-center gap-1 sm:ml-2 sm:gap-2 lg:ml-auto lg:gap-0">{utilities}</div>
+        </div>
+    </header>;
+}
 
 export function GalleryHeaderIdentity({ section, title }: { section: 'Photo Selection' | 'Edited Photos'; title?: string }) {
     const eventTitle = title?.trim() || 'Your Gallery';
@@ -82,7 +97,7 @@ export function ThemeToggle({ theme, onToggle }: { theme: GalleryTheme; onToggle
     const nextTheme = theme === 'black' ? 'white' : 'black';
     return (
         <button type="button" onClick={onToggle} title={`Switch to ${nextTheme} mode`} aria-label={`Switch to ${nextTheme} mode`} className="flex h-11 w-11 shrink-0 items-center justify-center rounded-md text-[var(--text-secondary)] transition-[color,background-color,transform] duration-150 hover:bg-[var(--bg-card)] hover:text-[var(--text-primary)] active:scale-[0.97] motion-reduce:transition-none">
-            {theme === 'black' ? <Sun size={14} aria-hidden="true" /> : <Moon size={14} aria-hidden="true" />}
+            {theme === 'black' ? <Sun size={16} aria-hidden="true" /> : <Moon size={16} aria-hidden="true" />}
         </button>
     );
 }

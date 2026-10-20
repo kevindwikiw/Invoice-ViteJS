@@ -185,6 +185,15 @@ export async function publishEditResults(input: { id: number; password: string }
     return response.json();
 }
 
+export async function changeEditResultsPassword(input: { id: number; password: string }): Promise<{ changed: boolean; warning: string }> {
+    const response = await fetchWithAuth(`/galleries/${input.id}/edit-results/password`, {
+        method: 'POST',
+        body: JSON.stringify({ password: input.password }),
+    });
+    if (!response.ok) throw await parseError(response, 'Unable to change Edited Photos password.');
+    return response.json();
+}
+
 export async function syncEditResults(id: number): Promise<{ status: 'synced' | 'validated'; published: boolean; photoCount: number; folderCount?: number; warnings?: string[] }> {
     const response = await fetchWithAuth(`/galleries/${id}/edit-results/sync`, { method: 'POST' });
     if (!response.ok) throw await parseError(response, 'Unable to sync edited photos folder.');

@@ -8,7 +8,7 @@ import clsx from 'clsx';
 import { editResultVideoUrl, getEditFolderArchiveJob, getEditResults, getEditResultsStatus, resolveEditResultDownload, startEditFolderArchive, startEditGalleryArchive, verifyEditResultsPassword, type EditFolderArchiveScope } from '../culling.public';
 import type { EditResultPhoto } from '../culling.types';
 import { BLACK_THEME, GALLERY_PAGE_SIZE, WHITE_THEME } from './constants';
-import { GalleryHeaderIdentity, GalleryViewTabs, OrbitLogo, ThemeToggle, type GalleryView } from './GalleryChrome';
+import { GalleryHeader, GalleryViewTabs, OrbitLogo, ThemeToggle, type GalleryView } from './GalleryChrome';
 import { GalleryFooter } from './GalleryFooter';
 import { GalleryPreparingScreen } from './AccessScreens';
 import { PhotoTile } from './PhotoTile';
@@ -42,18 +42,11 @@ const prefetchPhoto = (photo: EditResultPhoto) => {
 };
 
 function ArchiveDownloadAction({ folder, pending, progress, onDownload }: { folder: boolean; pending: boolean; progress?: string; onDownload: () => void }) {
-    const label = folder ? 'Download Folder Photos' : 'Download All Photos';
-    return <><button type="button" disabled={pending} aria-busy={pending} onClick={onDownload} title={pending ? `Preparing ZIP${progress ? ` (${progress})` : ''}` : `${label} as ZIP`} aria-label={pending ? `Preparing ZIP${progress ? `, ${progress}` : ''}` : label} className="inline-flex h-11 w-36 shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-md border border-[var(--border)] bg-[var(--accent)] px-2 text-xs font-semibold text-[var(--bg-deep)] transition-[opacity,transform] duration-150 hover:opacity-90 active:scale-[0.97] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)] disabled:opacity-60 motion-reduce:transition-none min-[390px]:w-40 sm:w-[210px] sm:gap-2 sm:px-4 sm:text-[13px]">
+    const label = folder ? 'Download Photos Here' : 'Download All Photos';
+    return <><button type="button" disabled={pending} aria-busy={pending} onClick={onDownload} title={pending ? `Preparing ZIP${progress ? ` (${progress})` : ''}` : `${label} as ZIP`} aria-label={pending ? `Preparing ZIP${progress ? `, ${progress}` : ''}` : label} className={clsx('inline-flex h-11 shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-md border border-[var(--border)] bg-[var(--accent)] px-2 text-xs font-semibold text-[var(--bg-deep)] transition-[opacity,transform] duration-150 hover:opacity-90 active:scale-[0.97] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)] disabled:opacity-60 motion-reduce:transition-none sm:w-[210px] sm:gap-2 sm:px-4 sm:text-[13px]', folder ? 'w-28 min-[390px]:w-32' : 'w-36 min-[390px]:w-40')}>
             {pending ? <Loader2 size={14} aria-hidden="true" className="animate-spin motion-reduce:animate-none" /> : <Download size={13} aria-hidden="true" />}
-            {pending ? <><span className="sm:hidden">Preparing…</span><span className="hidden sm:inline">Preparing download…</span></> : folder ? <><span className="sm:hidden">Folder Photos</span><span className="hidden sm:inline">{label}</span></> : <span>{label}</span>}
+            {pending ? <><span className="sm:hidden">Preparing…</span><span className="hidden sm:inline">Preparing download…</span></> : folder ? <><span className="sm:hidden">Photos Here</span><span className="hidden sm:inline">{label}</span></> : <span>{label}</span>}
         </button><span role="status" aria-live="polite" className="sr-only">{pending ? 'Preparing ZIP download' : ''}</span></>;
-}
-
-function FolderArchiveButton({ name, busy, ready, disabled, progress, onClick }: { name: string; busy: boolean; ready: boolean; disabled?: boolean; progress?: string; onClick: () => void }) {
-    const label = ready ? `Download ${name} ZIP` : busy ? `Preparing ${name} ZIP${progress ? `, ${progress}` : ''}` : `Download ${name} folder as ZIP`;
-    return <button type="button" aria-label={label} title={label} disabled={disabled || busy} onClick={onClick} className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-md text-[var(--text-secondary)] transition-colors hover:bg-[var(--bg-elevated)] hover:text-[var(--text-primary)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)] disabled:cursor-wait disabled:opacity-65 motion-reduce:transition-none sm:h-11 sm:w-11">
-        {busy ? <Loader2 size={16} aria-hidden="true" className="animate-spin motion-reduce:animate-none" /> : <Download size={16} aria-hidden="true" />}
-    </button>;
 }
 
 export function EditResultsGrid({
@@ -215,6 +208,23 @@ export function EditResultsGrid({
         }
     }, [results.error, token, galleryId, onToken, queryClient]);
     const folders = useMemo(() => results.data?.folders ?? [], [results.data?.folders]);
+    const folderContents = useMemo(() => {
+        const contents = new Map<string, { items: number; folders: number }>();
+        for (const folder of folders) contents.set(folder.id, { items: 0, folders: 0 });
+        for (const photo of results.data?.photos ?? []) {
+            if (photo.folderId) {
+                const content = contents.get(photo.folderId);
+                if (content) content.items += 1;
+            }
+        }
+        for (const folder of folders) {
+            if (folder.parentId) {
+                const content = contents.get(folder.parentId);
+                if (content) content.folders += 1;
+            }
+        }
+        return contents;
+    }, [folders, results.data?.photos]);
     const folderId = requestedFolder && folders.some((folder) => folder.id === requestedFolder) ? requestedFolder : null;
     useEffect(() => {
         setNavigation((current) => current.galleryId === galleryId && current.token === token && current.folderId === folderId && current.page === viewPage && current.selfie === isSelfieView
@@ -222,23 +232,7 @@ export function EditResultsGrid({
             : { galleryId, token, folderId, selfie: isSelfieView, page: viewPage, photoId: null });
     }, [galleryId, token, folderId, viewPage, isSelfieView]);
     const childFolders = useMemo(() => folders.filter((folder) => folder.parentId === folderId).sort((a, b) => compareFolderPaths(a.name, b.name)), [folders, folderId]);
-    const childFoldersLabel = childFolders.length === 1 ? childFolders[0]!.name : 'Folders';
     const currentFolder = folders.find((folder) => folder.id === folderId);
-    const folderPhotoCounts = useMemo(() => {
-        const counts = new Map<string, number>();
-        const byId = new Map(folders.map((folder) => [folder.id, folder]));
-        for (const photo of results.data?.photos ?? []) {
-            if (!photo.mimeType?.startsWith('image/')) continue;
-            let current = photo.folderId ? byId.get(photo.folderId) : undefined;
-            const seen = new Set<string>();
-            while (current && !seen.has(current.id)) {
-                seen.add(current.id);
-                counts.set(current.id, (counts.get(current.id) ?? 0) + 1);
-                current = current.parentId ? byId.get(current.parentId) : undefined;
-            }
-        }
-        return counts;
-    }, [folders, results.data?.photos]);
     const folderOptions = useMemo(() => {
         const byId = new Map(folders.map((folder) => [folder.id, folder]));
         return folders.map((folder) => {
@@ -400,7 +394,7 @@ export function EditResultsGrid({
             setPendingDownload(null);
         }
     }, []);
-    const downloadFolder = useCallback((targetFolderId: string, name: string, scope: EditFolderArchiveScope = 'subtree') => {
+    const downloadFolder = useCallback((targetFolderId: string, name: string, scope: EditFolderArchiveScope = 'direct') => {
         const activeJob = folderArchiveTarget?.folderId === targetFolderId && folderArchiveTarget.scope === scope ? folderArchiveStatus.data : null;
         const pendingKey = `folder-archive:${scope}:${targetFolderId}`;
         if (activeJob?.status === 'completed' && activeJob.downloadUrl) {
@@ -441,21 +435,6 @@ export function EditResultsGrid({
         }
     }, [token, unavailable]);
     const archiveJobInProgress = folderArchiveMutation.isPending || ['queued', 'running'].includes(folderArchiveStatus.data?.status ?? '');
-    const renderFolderArchiveButton = (targetFolderId: string, name: string) => {
-        if (!folderPhotoCounts.get(targetFolderId)) return null;
-        const isTarget = (folderArchiveTarget?.folderId === targetFolderId && folderArchiveTarget.scope === 'subtree') || (folderArchiveMutation.isPending && folderArchiveMutation.variables?.folderId === targetFolderId && folderArchiveMutation.variables?.scope === 'subtree');
-        const status = isTarget ? folderArchiveStatus.data : null;
-        const starting = folderArchiveMutation.isPending && folderArchiveMutation.variables?.folderId === targetFolderId && folderArchiveMutation.variables?.scope === 'subtree';
-        const busy = starting || Boolean(isTarget && (!status || ['queued', 'running'].includes(status.status)));
-        return <FolderArchiveButton
-            name={name}
-            busy={busy || pendingDownload === `folder-archive:subtree:${targetFolderId}`}
-            ready={status?.status === 'completed' && Boolean(status.downloadUrl)}
-            disabled={archiveJobInProgress && !isTarget}
-            progress={status?.total ? `${status.processed ?? 0}/${status.total}` : undefined}
-            onClick={() => downloadFolder(targetFolderId, name)}
-        />;
-    };
     const headerFolderId = folderId ?? '__all__';
     const headerScope: EditFolderArchiveScope = 'direct';
     const headerArchiveTarget = folderArchiveTarget?.folderId === headerFolderId && folderArchiveTarget.scope === headerScope;
@@ -540,7 +519,7 @@ export function EditResultsGrid({
             <button type="button" onClick={() => void results.refetch()} className="mt-4 inline-flex h-10 items-center gap-2 rounded-md border border-[var(--border)] px-4 text-xs font-semibold"><RotateCcw size={14} /> Retry</button>
         </div>
     ) : (
-        <div className={clsx('mx-auto max-w-[1664px]', standalone && 'px-2.5 pb-10 pt-3 sm:px-8 sm:pt-5 sm:pb-12 md:pt-6')}>
+        <div className={clsx('mx-auto max-w-[1664px]', standalone && 'px-2.5 pb-10 pt-2 sm:px-8 sm:pt-3 sm:pb-12 md:pt-3')}>
             {downloadError && <div ref={downloadAlertRef} role="alert" tabIndex={-1} className="fixed inset-x-3 bottom-3 z-[140] mx-auto flex max-w-lg items-start gap-3 rounded-md border border-rose-500/40 bg-[var(--bg-card)] px-4 py-3 text-sm text-rose-400 shadow-2xl outline-none focus-visible:ring-2 focus-visible:ring-rose-400 sm:bottom-5">
                 <AlertCircle size={17} aria-hidden="true" className="mt-0.5 shrink-0" /><span className="min-w-0 flex-1">{downloadError}</span><button type="button" onClick={() => setDownloadError('')} aria-label="Dismiss download error" className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md hover:bg-[var(--bg-elevated)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)]"><X size={15} aria-hidden="true" /></button>
             </div>}
@@ -548,8 +527,8 @@ export function EditResultsGrid({
                 <h2 className="font-sans text-base font-semibold">{validSelfieResults ? `${matchedPhotos.length} matching photos` : 'Find Your Photos'}</h2>
                 {selfieSearchAvailable && <button type="button" onClick={() => setShowFaceSearch(true)} className="inline-flex min-h-11 shrink-0 items-center gap-2 rounded-md border border-[var(--border)] px-3 text-sm font-medium focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)]"><ScanFace size={16} aria-hidden="true" />{validSelfieResults ? 'Change selfie' : 'Choose selfie'}</button>}
             </div>}
-            {!isSelfieView && currentFolder && <div className="mb-4 flex min-w-0 items-center gap-2 border-b border-[var(--border)] pb-3">
-                <Link to="/culling/$galleryId/edited" params={{ galleryId }} search={(current) => ({ ...current, view: undefined, selfieSource: undefined, folder: currentFolder.parentId ?? undefined, editedPage: 1 })} resetScroll onClick={closePhoto} aria-label={`Back to ${folders.find((folder) => folder.id === currentFolder.parentId)?.name ?? 'Edited Photos'}`} className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-md border border-[var(--border)] text-[var(--text-secondary)] hover:bg-[var(--bg-card)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)]"><ArrowLeft size={18} aria-hidden="true" /></Link>
+            {!isSelfieView && currentFolder && <div className="mb-4 flex min-w-0 items-center gap-2">
+                <Link to="/culling/$galleryId/edited" params={{ galleryId }} search={(current) => ({ ...current, view: undefined, selfieSource: undefined, folder: currentFolder.parentId ?? undefined, editedPage: 1 })} resetScroll onClick={closePhoto} aria-label={`Back to ${folders.find((folder) => folder.id === currentFolder.parentId)?.name ?? 'Edited Photos'}`} className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-md text-[var(--text-secondary)] transition-colors hover:bg-[var(--bg-card)] hover:text-[var(--text-primary)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)]"><ArrowLeft size={18} aria-hidden="true" /></Link>
                 <nav aria-label="Folder breadcrumb" className="min-w-0 flex-1 overflow-hidden text-xs font-medium text-[var(--text-muted)]">
                     <ol className="flex min-w-0 flex-wrap items-center gap-x-1 gap-y-0.5">
                         <li className="flex min-w-0 items-center gap-1">
@@ -563,22 +542,26 @@ export function EditResultsGrid({
                         </li>)}
                     </ol>
                 </nav>
-                {renderFolderArchiveButton(currentFolder.id, currentFolder.name)}
             </div>}
             {folderArchiveTarget && ['queued', 'running'].includes(folderArchiveStatus.data?.status ?? 'queued') && <p role="status" aria-live="polite" className="mb-3 text-xs text-[var(--text-secondary)]">{folderArchiveStatus.data?.status === 'running' ? 'Preparing' : 'Queued'} {folderArchiveTarget.name} ZIP{folderArchiveStatus.data?.status === 'running' && folderArchiveStatus.data.total ? ` (${folderArchiveStatus.data.processed ?? 0}/${folderArchiveStatus.data.total})` : '…'}</p>}
             {folderArchiveTarget && folderArchiveStatus.data?.status === 'completed' && folderArchiveStatus.data.downloadUrl && <p role="status" aria-live="polite" className="sr-only">{folderArchiveTarget.name} ZIP is ready. Download starting.</p>}
-            {!isSelfieView && childFolders.length > 0 && <section aria-label={childFoldersLabel} className={photos.length > 0 ? 'mb-6' : undefined}>
-                <h2 className="mb-2 flex items-center gap-2 font-sans text-xs font-semibold tracking-normal text-[var(--text-secondary)]"><Folder size={14} aria-hidden="true" /><span className="min-w-0 [overflow-wrap:anywhere]">{childFoldersLabel}</span></h2>
-                <div data-testid="edited-folder-tiles" className="grid grid-cols-1 gap-0 border-t border-[var(--border)] sm:grid-cols-2 sm:gap-2 sm:border-0 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6">
-                    {childFolders.map((folder) => <div key={folder.id} className="flex min-w-0 items-center border-b border-[var(--border)] sm:min-h-16 sm:rounded-md sm:border sm:bg-[var(--bg-card)]">
-                        <Link to="/culling/$galleryId/edited" params={{ galleryId }} search={(current) => ({ ...current, view: undefined, selfieSource: undefined, folder: folder.id, editedPage: 1 })} resetScroll onClick={closePhoto} aria-label={`Open folder ${folder.name}`} className="group flex min-h-12 min-w-0 flex-1 items-center gap-3 px-2.5 py-2 text-[13px] font-medium transition-colors hover:bg-[var(--bg-card)] focus-visible:z-10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-[var(--accent)] sm:min-h-16 sm:rounded-md sm:px-3 sm:py-3 sm:text-sm sm:hover:bg-[var(--bg-elevated)]">
-                            <Folder size={17} aria-hidden="true" className="shrink-0 text-[var(--text-secondary)]" /><span className="min-w-0 flex-1 [overflow-wrap:anywhere]">{folder.name}</span><ChevronRight size={15} aria-hidden="true" className="shrink-0 text-[var(--text-muted)] transition-transform duration-150 group-hover:translate-x-0.5 motion-reduce:transition-none" />
+            {!isSelfieView && childFolders.length > 0 && <section aria-label="Folders" className={photos.length > 0 ? 'mb-4' : undefined}>
+                {(results.data?.rootFolderName || childFolders.length > 1) && <h2 className="mb-2 flex min-w-0 items-center gap-2 font-sans text-xs font-semibold tracking-normal text-[var(--text-secondary)]"><Folder size={14} aria-hidden="true" className="shrink-0" /><span className="min-w-0 [overflow-wrap:anywhere]">{results.data?.rootFolderName || 'Folders'}</span></h2>}
+                <div data-testid="edited-folder-tiles" className="grid grid-cols-1 gap-1.5 sm:grid-cols-2 sm:gap-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6">
+                    {childFolders.map((folder) => {
+                        const contents = folderContents.get(folder.id) ?? { items: 0, folders: 0 };
+                        const details = [contents.items > 0 ? `${contents.items} ${contents.items === 1 ? 'item' : 'items'}` : null, contents.folders > 0 ? `${contents.folders} ${contents.folders === 1 ? 'folder' : 'folders'}` : null].filter(Boolean).join(' · ') || 'Empty folder';
+                        return <div key={folder.id} className="flex min-w-0 items-center rounded-md border border-[var(--border)] bg-[var(--bg-card)]">
+                        <Link to="/culling/$galleryId/edited" params={{ galleryId }} search={(current) => ({ ...current, view: undefined, selfieSource: undefined, folder: folder.id, editedPage: 1 })} resetScroll onClick={closePhoto} aria-label={`Open folder ${folder.name}, ${details}`} className="group flex min-h-12 min-w-0 flex-1 items-center gap-2.5 rounded-md px-2.5 py-1.5 text-left transition-[background-color,transform] duration-100 hover:bg-[var(--bg-elevated)] active:scale-[0.99] focus-visible:z-10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-[var(--accent)] motion-reduce:transition-none sm:min-h-11 sm:gap-3 sm:px-3 sm:py-2">
+                            <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded bg-[var(--bg-elevated)] text-[var(--text-secondary)]"><Folder size={17} aria-hidden="true" /></span>
+                            <span className="min-w-0 flex-1 [overflow-wrap:anywhere]"><span className="block text-[13px] font-semibold leading-4 text-[var(--text-primary)] sm:text-sm">{folder.name}</span><span className="mt-0.5 block text-[10px] font-normal leading-4 text-[var(--text-muted)]">{details}</span></span>
+                            <ChevronRight size={16} aria-hidden="true" className="shrink-0 text-[var(--text-muted)] transition-transform duration-150 group-hover:translate-x-0.5 motion-reduce:transition-none" />
                         </Link>
-                        {renderFolderArchiveButton(folder.id, folder.name)}
-                    </div>)}
+                    </div>;
+                    })}
                 </div>
             </section>}
-            {!isSelfieView && childFolders.length > 0 && photos.length > 0 && <h2 className="mb-3 border-t border-[var(--border)] pt-5 font-sans text-xs font-semibold tracking-normal text-[var(--text-secondary)]">Photos &amp; Video</h2>}
+            {!isSelfieView && photos.length > 0 && <h2 className={clsx('mb-3 border-t border-[var(--border)] pt-3 font-sans text-[13px] font-semibold leading-5 tracking-normal text-[var(--text-secondary)] sm:text-sm', (childFolders.length > 0 || currentFolder) ? '' : 'border-transparent pt-0')}>Photos &amp; Video</h2>}
             {photos.length ? <div ref={gridRef} data-testid="edited-gallery-grid" className="grid scroll-mt-36 grid-cols-2 gap-1.5 sm:grid-cols-3 sm:gap-2 md:grid-cols-4 md:gap-3 xl:grid-cols-5 2xl:grid-cols-6">
                 {visiblePhotos.map((photo, index) => <PhotoTile
                     key={photo.driveFileId}
@@ -648,17 +631,11 @@ export function EditResultsGrid({
     if (!standalone) return <>{downloadTarget && createPortal(archiveAction, downloadTarget)}{expiryTarget && createPortal(expiryAction, expiryTarget)}{helpTarget && createPortal(helpAction, helpTarget)}{content}{guide}{selfieModal}</>;
     return <main style={theme === 'black' ? BLACK_THEME : WHITE_THEME} className="flex min-h-screen flex-col bg-[var(--bg-deep)] font-sans text-[var(--text-primary)]">
         <a href="#edited-gallery-content" className="sr-only focus:not-sr-only focus:fixed focus:left-3 focus:top-3 focus:z-[160] focus:rounded-md focus:bg-[var(--accent)] focus:px-3 focus:py-2 focus:text-xs focus:font-semibold focus:text-[var(--bg-deep)]">Skip to edited photos</a>
-        <header data-testid="gallery-header" className="sticky top-0 z-40 h-20 border-b border-[var(--border)] bg-[var(--bg-deep)] px-2.5 sm:px-8 lg:h-16">
-            <div className="mx-auto grid h-full max-w-[1600px] min-w-0 grid-cols-[auto_minmax(0,1fr)_auto] grid-rows-[2.75rem_1.5rem] items-center gap-x-2 py-1 lg:flex lg:py-0">
-                <OrbitLogo theme={theme} />
-                <GalleryHeaderIdentity section="Edited Photos" title={accessStatus.data?.title} />
-                <div className="col-start-3 row-start-1 flex shrink-0 items-center gap-1 sm:ml-2 sm:gap-2 lg:ml-auto">
-                    {expiryAction}
-                    {helpAction}
-                    {onToggleTheme && <ThemeToggle theme={theme} onToggle={onToggleTheme} />}
-                </div>
-            </div>
-        </header>
+        <GalleryHeader section="Edited Photos" title={accessStatus.data?.title} theme={theme} utilities={<>
+            {expiryAction}
+            {helpAction}
+            {onToggleTheme && <ThemeToggle theme={theme} onToggle={onToggleTheme} />}
+        </>} />
         {showGalleryToolbar && <div data-testid="gallery-toolbar" className="sticky top-20 z-30 border-b border-[var(--border)] bg-[var(--bg-deep)] px-2.5 py-2 [touch-action:manipulation] sm:px-8 sm:py-2.5 lg:top-16">
             <div className="mx-auto flex max-w-[1600px] items-center gap-1 sm:gap-x-2">
                 <div className={clsx('min-w-0 flex-none sm:w-auto', deliveryOnly && !selfieSearchAvailable ? 'w-full' : 'w-[calc((100%-0.375rem)/2)]')}><GalleryViewTabs value={isSelfieView ? 'selfie' : 'edit-results'} deliveryOnly={deliveryOnly} galleryAvailable={Boolean(onRequestSelectionAccess)} galleryUnavailableAction={selectionUnavailable} editedAvailable={!unavailable} editedExpired={accessExpired} selfieAvailable={selfieSearchAvailable} allPhotosButtonRef={selectionInfoTriggerRef} onAllPhotos={() => changeView('gallery')} onChange={changeView} /></div>

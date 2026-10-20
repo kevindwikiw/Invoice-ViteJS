@@ -38,7 +38,7 @@ mock.module('../lib/google-drive', () => ({
     getReadonlyDriveToken: async () => ({ accessToken: 'test', expiresAt: Date.now() + 1000 }),
     hasAnyoneViewerFolderAccess: async () => true,
     listDrivePhotos: async () => [],
-    listDrivePhotoTree: async () => ({ photos: [], folders: [] }),
+    listDrivePhotoTree: async () => ({ rootName: 'Edited Source', photos: [], folders: [] }),
     getDrivePhotoMetadata: async (id: string) => {
         metadataCalls.push(id);
         if (id === 'transient' && failMetadata) throw new Error('Temporary metadata failure');

@@ -15,7 +15,7 @@ mock.module('../lib/google-drive', () => ({
     listDrivePhotos: async () => edited,
     listDrivePhotoTree: async () => {
         if (treeFails) throw new Error('Folder unavailable');
-        return { folders: folderSnapshot, photos: edited.map((photo) => ({ ...photo, folderId: folderSnapshot.length ? photo.id === 'nested-photo' ? 'empty' : photo.id === 'bw' ? 'no-watermark' : null : null })) };
+        return { rootName: 'Edited Source', folders: folderSnapshot, photos: edited.map((photo) => ({ ...photo, folderId: folderSnapshot.length ? photo.id === 'nested-photo' ? 'empty' : photo.id === 'bw' ? 'no-watermark' : null : null })) };
     },
     hasAnyoneViewerFolderAccess: async () => true,
     getDrivePhotoMetadata: async (id: string) => { metadataCalls.push(id); if (missing.has(id)) throw new Error('missing'); if (restricted.has(id)) return { ...drivePhoto(id), canDownload: false }; return id === 'archive' ? { ...drivePhoto(id), name: 'backup.zip', mimeType: 'application/zip', canDownload: true } : drivePhoto(id); },
@@ -89,7 +89,7 @@ globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) =>
     return Response.json({ error: 'not_found' }, { status: 404 });
 }) as typeof fetch;
 type Archive = { filename: string; downloadUrl: string; downloadResolveUrl: string };
-type Payload = { archive: Archive | null; code?: string; downloadUrl?: string; filename?: string; submitted: Array<{ driveFileId: string }>; edited: Array<{ driveFileId: string; thumbnailUrl: string }>; comparisonEnabled: boolean; comparisonCount: number; token: string; warnings: string[]; photos: Array<{ driveFileId?: string; downloadResolveUrl?: string; comparison: { previewUrl: string } | null }> };
+type Payload = { archive: Archive | null; code?: string; downloadUrl?: string; filename?: string; rootFolderName?: string; submitted: Array<{ driveFileId: string }>; edited: Array<{ driveFileId: string; thumbnailUrl: string }>; comparisonEnabled: boolean; comparisonCount: number; token: string; warnings: string[]; photos: Array<{ driveFileId?: string; downloadResolveUrl?: string; comparison: { previewUrl: string } | null }> };
 const json = async (response: Response) => await response.json() as Payload;
 assert.equal((await request('/admin/1/edit-results/pairing', 'GET', undefined, false)).status, 401);
 const candidates = await json(await request('/admin/1/edit-results/pairing'));
@@ -110,11 +110,25 @@ const publish = await request('/admin/1/edit-results/publish', 'POST', { passwor
 assert.equal(publish.status, 201, await publish.clone().text());
 assert.equal((await json(publish)).comparisonCount, 2);
 assert.deepEqual(metadataCalls, ['before-a']);
+assert.equal((await request('/admin/1/edit-results/password', 'POST', { password: 'next' }, false)).status, 401);
+const tokenBeforePasswordChange = (await json(await request('/public/gallery/edit-results/verify', 'POST', { password: 'edit' }))).token;
+const snapshotUpdatesBeforePasswordChange = workerSnapshotUpdates.length;
+const publishedAtBeforePasswordChange = (await one<{ publishedAt: string }>('SELECT edit_results_published_at as "publishedAt" FROM galleries WHERE id = 1'))!.publishedAt;
+archiveWorkerOffline = true;
+assert.equal((await request('/admin/1/edit-results/password', 'POST', { password: 'next' })).status, 200);
+assert.equal(workerSnapshotUpdates.length, snapshotUpdatesBeforePasswordChange);
+assert.equal((await one<{ publishedAt: string }>('SELECT edit_results_published_at as "publishedAt" FROM galleries WHERE id = 1'))!.publishedAt, publishedAtBeforePasswordChange);
+assert.equal((await request('/public/gallery/edit-results/verify', 'POST', { password: 'edit' })).status, 401);
+assert.equal((await request(`/public/gallery/edit-results?token=${tokenBeforePasswordChange}`)).status, 401);
+assert.equal((await request('/public/gallery/edit-results/verify', 'POST', { password: 'next' })).status, 200);
+assert.equal((await request('/admin/1/edit-results/password', 'POST', { password: 'edit' })).status, 200);
+archiveWorkerOffline = false;
 const login = async () => (await json(await request('/public/gallery/edit-results/verify', 'POST', { password: 'edit' }))).token;
 let token = await login();
 const listing = () => request(`/public/gallery/edit-results?token=${token}`);
 assert.equal((await request('/public/gallery/edit-results?token=bad')).status, 401);
 const list = await json(await listing());
+assert.equal(list.rootFolderName, 'Edited Source');
 assert.equal((await json(await request('/public/gallery/edit-results?token=bad'))).archive, undefined);
 assert.equal((await json(await request('/public/gallery/edit-results?token=bad'))).code, 'EDIT_RESULTS_TOKEN_INVALID');
 assert.equal(list.archive, null);
@@ -213,14 +227,13 @@ const nestedPublish = await request('/admin/1/edit-results/publish', 'POST', { p
 assert.equal(nestedPublish.status, 201);
 assert.equal((await json(nestedPublish)).comparisonCount, 1);
 if (process.env.FACE_ARCHIVE_WORKER_URL) {
-    assert.equal(workerPrebuildPayload.jobs.length, 5);
+    assert.equal(workerPrebuildPayload.jobs.length, 3);
     assert.deepEqual(workerPrebuildPayload.jobs.map((job: any) => [job.folderId, job.scope]), [
-        ['__all__', 'direct'], ['empty', 'direct'], ['empty', 'subtree'], ['no-watermark', 'direct'], ['no-watermark', 'subtree'],
+        ['__all__', 'direct'], ['empty', 'direct'], ['no-watermark', 'direct'],
     ]);
-    assert.deepEqual(workerPrebuildPayload.jobs.find((job: any) => job.folderId === 'no-watermark' && job.scope === 'subtree').photos.map((photo: any) => photo.archivePath), ['No Watermark/bw.jpg', 'No Watermark/Empty/nested-photo.jpg']);
     const prebuildStatus = await json(await request('/admin/1/edit-results/archive/status'));
     assert.equal((prebuildStatus as any).ready, true);
-    assert.equal((prebuildStatus as any).completed, 5);
+    assert.equal((prebuildStatus as any).completed, 3);
     assert.equal((await request('/admin/1/edit-results/archive/status', 'GET', undefined, false)).status, 401);
     assert.equal((await request('/admin/1/edit-results/archive/rebuild', 'POST')).status, 202);
 }

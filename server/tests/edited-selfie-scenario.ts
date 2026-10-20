@@ -7,7 +7,7 @@ const drivePhoto = (id: string, folderId: string | null = null) => ({ id, folder
 mock.module('../lib/google-drive', () => ({
     getReadonlyDriveToken: async () => ({ accessToken: 'test', expiresAt: Date.now() + 1000 }),
     hasAnyoneViewerFolderAccess: async () => true,
-    listDrivePhotoTree: async () => ({ photos: [drivePhoto('edited-a', 'portraits'), drivePhoto('edited-b', 'nested')], folders: [{ id: 'portraits', parentId: null, name: 'Portraits' }, { id: 'nested', parentId: 'portraits', name: 'Family' }] }),
+    listDrivePhotoTree: async () => ({ rootName: 'Edited Source', photos: [drivePhoto('edited-a', 'portraits'), drivePhoto('edited-b', 'nested')], folders: [{ id: 'portraits', parentId: null, name: 'Portraits' }, { id: 'nested', parentId: 'portraits', name: 'Family' }] }),
     listDrivePhotos: async () => [drivePhoto('raw-a')],
     getDrivePhotoMetadata: async (id: string) => drivePhoto(id),
     fetchDriveFile: async () => new Response('image', { headers: { 'content-type': 'image/jpeg' } }),

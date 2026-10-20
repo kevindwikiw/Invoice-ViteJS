@@ -14,7 +14,7 @@ mock.module('../lib/google-drive', () => ({
     listDrivePhotoTree: async () => {
         driveReads++;
         if (driveFails) throw new Error('Drive unavailable');
-        return { photos: empty ? [] : [{ ...photo('ceremony'), folderId: 'ceremony-folder' }], folders: [{ id: 'ceremony-folder', parentId: null, name: 'Ceremony' }] };
+        return { rootName: 'Edited Source', photos: empty ? [] : [{ ...photo('ceremony'), folderId: 'ceremony-folder' }], folders: [{ id: 'ceremony-folder', parentId: null, name: 'Ceremony' }] };
     },
     listDrivePhotos: async () => [photo('source')],
     getDrivePhotoMetadata: async (id: string) => photo(id),

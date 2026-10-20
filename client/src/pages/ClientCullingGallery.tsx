@@ -46,7 +46,7 @@ import { canPrefetchPreview, preloadPreviewImage } from '../features/culling/cli
 import { CountdownLabel } from '../features/culling/client-gallery/countdown';
 import { useSelectionCountdown } from '../features/culling/client-gallery/useSelectionCountdown';
 import { useGalleryStartup } from '../features/culling/client-gallery/useGalleryStartup';
-import { GalleryHeaderIdentity, GalleryViewTabs, OrbitLogo, ThemeToggle, type GalleryView } from '../features/culling/client-gallery/GalleryChrome';
+import { GalleryHeader, GalleryViewTabs, ThemeToggle, type GalleryView } from '../features/culling/client-gallery/GalleryChrome';
 import { PhotoTile } from '../features/culling/client-gallery/PhotoTile';
 import { GalleryLockedScreen, PinGate } from '../features/culling/client-gallery/AccessScreens';
 import { GalleryFooter } from '../features/culling/client-gallery/GalleryFooter';
@@ -863,19 +863,13 @@ function SelectionCullingGallery({ title, pathMode }: { title?: string; pathMode
                 Skip to gallery
             </a>
             
-            <header data-testid="gallery-header" className="sticky top-0 z-40 h-20 select-none border-b border-[var(--border)] bg-[var(--bg-deep)] px-2.5 sm:px-8 lg:h-16">
-                <div className="mx-auto grid h-full max-w-[1600px] min-w-0 grid-cols-[auto_minmax(0,1fr)_auto] grid-rows-[2.75rem_1.5rem] items-center gap-x-2 py-1 lg:flex lg:py-0">
-                    <OrbitLogo theme={theme} />
-                    <GalleryHeaderIdentity section="Photo Selection" title={displayGallery?.title || title} />
-                    <div className="col-start-3 row-start-1 flex shrink-0 items-center gap-1 sm:ml-2 sm:gap-2 lg:ml-auto lg:gap-0">
-                        <div className="lg:pr-2"><CountdownLabel countdown={countdown} compact /></div>
-                        <div data-testid="header-utilities" className="flex items-center gap-2">
-                            {<button type="button" onClick={() => setShowTutorial(true)} title="How to Submit" aria-label="How to Submit" className="flex h-11 w-11 shrink-0 items-center justify-center px-2 text-[var(--text-secondary)] transition-[color,transform] duration-150 hover:text-[var(--text-primary)] active:scale-[0.97] motion-reduce:transition-none"><HelpCircle size={16} aria-hidden="true" /></button>}
-                            <ThemeToggle theme={theme} onToggle={toggleTheme} />
-                        </div>
-                    </div>
+            <GalleryHeader section="Photo Selection" title={displayGallery?.title || title} theme={theme} utilities={<>
+                <div className="lg:pr-2"><CountdownLabel countdown={countdown} compact /></div>
+                <div className="flex items-center gap-2">
+                    <button type="button" onClick={() => setShowTutorial(true)} title="How to Submit" aria-label="How to Submit" className="flex h-11 w-11 shrink-0 items-center justify-center px-2 text-[var(--text-secondary)] transition-[color,transform] duration-150 hover:text-[var(--text-primary)] active:scale-[0.97] motion-reduce:transition-none"><HelpCircle size={16} aria-hidden="true" /></button>
+                    <ThemeToggle theme={theme} onToggle={toggleTheme} />
                 </div>
-            </header>
+            </>} />
 
             <div data-testid="gallery-toolbar" className="sticky top-20 z-30 select-none border-b border-[var(--border)] bg-[var(--bg-deep)] px-2.5 py-2 [touch-action:manipulation] sm:px-8 sm:py-2.5 lg:top-16">
                 <div data-testid="gallery-toolbar-inner" className="mx-auto flex max-w-[1600px] items-center gap-1 sm:gap-x-2">

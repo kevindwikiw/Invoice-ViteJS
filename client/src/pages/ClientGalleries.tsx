@@ -50,6 +50,7 @@ import {
   calculateAddonQuote
 } from '../features/culling/culling.public';
 import {
+  changeEditResultsPassword,
   createGallery,
   deleteGallery,
   downloadGallerySelectionCopyScript,
@@ -1034,6 +1035,21 @@ function GalleryDetailEditor({ data, close, initialMode, focusSelectionDuration 
   });
   const [editResultsPassword, setEditResultsPassword] = useState('');
   const [showEditResultsPassword, setShowEditResultsPassword] = useState(false);
+  const changePassword = useMutation({
+    mutationFn: changeEditResultsPassword,
+    onSuccess: (result) => {
+      setEditResultsPassword('');
+      setShowEditResultsPassword(false);
+      setDirty(false);
+      setSaved(true);
+      setActionError('');
+      setPublishWarnings([result.warning]);
+      addToast('Edited Photos password changed.', 'success');
+      void qc.invalidateQueries({ queryKey: ['gallery-detail', data.id] });
+      void qc.invalidateQueries({ queryKey: ['galleries'] });
+    },
+    onError: (error) => reportActionError('Password change', error),
+  });
   const publishResults = useMutation({
     mutationFn: publishEditResults,
     onSuccess: (result) => {
@@ -1062,7 +1078,7 @@ function GalleryDetailEditor({ data, close, initialMode, focusSelectionDuration 
   const [qrisEnabled, setQrisEnabled] = useState(() => Boolean(data.addon?.qrisEnabled));
   const [addonDirty, setAddonDirty] = useState(false);
   const [masterLimit, setMasterLimit] = useState(() => Number(data.maxSelections || 0));
-  const busy = update.isPending || sync.isPending || editSync.isPending || publishResults.isPending || resetPin.isPending || resetEdited.isPending;
+  const busy = update.isPending || sync.isPending || editSync.isPending || publishResults.isPending || changePassword.isPending || resetPin.isPending || resetEdited.isPending;
   const addonPaid = paymentStatus === 'paid';
   const activeLimit = masterLimit ? masterLimit + (addonPaid ? addonDraftLimit : 0) : 0;
   const discountRules = data.addon?.discountRules;
@@ -1288,6 +1304,11 @@ function GalleryDetailEditor({ data, close, initialMode, focusSelectionDuration 
               const form = new FormData(event.currentTarget);
               if (editResultsPassword.trim() && !String(form.get('editResultsFolderId') || '').trim()) {
                 setSaveError('Add an Edited photos Drive folder before publishing.');
+                return;
+              }
+              if (data.hasEditResults && editResultsPassword.trim() && !editedFormChanged(event.currentTarget, '', editedStatus)) {
+                setPublishAfterSave(false);
+                changePassword.mutate({ id: data.id, password: editResultsPassword.trim() });
                 return;
               }
               setPublishAfterSave(Boolean(editResultsPassword.trim()));

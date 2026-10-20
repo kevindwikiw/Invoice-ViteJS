@@ -82,14 +82,15 @@ It routes `/v1/archive/*` to `127.0.0.1:8089`, leaves buffering off for file
 downloads and disables access logs because download tickets are in the query
 string. Do not expose port `8089` directly to the Internet.
 
-The Hono folder archive route accepts `scope=direct` for photos immediately in
-the selected folder, with files at the ZIP root. Without this option, folder
-downloads include descendants. Deploy the updated archive worker before the
-Fly API so the worker deduplicates these two archive scopes separately.
+Edited Photos downloads use `scope=direct`: root downloads include only root
+photos, and folder downloads include only photos directly in that folder, with
+files at the ZIP root. The API retains subtree scope for legacy callers, but
+the gallery UI does not offer recursive downloads.
 
 After expanding the mounted archive volume and verifying free space, enable
 `FACE_ARCHIVE_PREBUILD_ENABLED=1` on Fly. Publishing or syncing Edited Photos
-then queues the root ZIP and both direct and recursive ZIPs for every folder.
+then queues one flat ZIP for root photos and one for each folder with direct
+photos.
 For a production pilot, also set `FACE_ARCHIVE_PREBUILD_GALLERY_IDS` to one
 comma-separated gallery ID, for example `123`. With this allowlist configured,
 only that gallery is prebuilt; omit the allowlist after the pilot to enable all
@@ -113,7 +114,7 @@ remain available until the Edited Photos access expiry or the prebuild TTL,
 whichever comes first.
 
 Prebuild estimates use each Drive file's size plus a 64 KiB per-entry ZIP
-overhead allowance, including repeated entries in direct and recursive ZIPs.
+overhead allowance. Each photo is included only in the ZIP for its own level.
 The worker rejects unknown sizes and jobs whose estimate exceeds safe disk/cache
 capacity. Existing galleries need a successful Sync to populate file sizes. The
 admin status shows estimated and currently available storage before retrying.

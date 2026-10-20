@@ -36,6 +36,7 @@ for (const legacy of [true, false]) {
             assert(db.query('PRAGMA table_info(galleries)').all().some(c => c.name === 'face_source_revision'));
             assert(db.query('PRAGMA table_info(galleries)').all().some(c => c.name === 'edit_results_key_hash'));
             assert(db.query('PRAGMA table_info(galleries)').all().some(c => c.name === 'edit_results_folder_id'));
+            assert(db.query('PRAGMA table_info(galleries)').all().some(c => c.name === 'edit_results_folder_name'));
             for (const name of ['edit_results_zip_file_id', 'edit_results_published_zip_file_id', 'edit_results_zip_filename', 'edit_results_zip_download_url']) {
                 assert(db.query('PRAGMA table_info(galleries)').all().some(c => c.name === name && c.notnull === 0));
             }

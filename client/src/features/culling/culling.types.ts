@@ -154,6 +154,7 @@ export type EditResultPairing = { comparisonEnabled: boolean; comparisonPairs: E
 
 export interface EditResults {
     sourceVersion?: string | null;
+    rootFolderName?: string | null;
     folders?: Array<{ id: string; parentId: string | null; name: string }>;
     photos: EditResultPhoto[];
     publishedAt: string;

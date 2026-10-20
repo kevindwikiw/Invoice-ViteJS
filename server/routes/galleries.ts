@@ -1351,7 +1351,7 @@ async function editedSnapshotComparisons(galleryId: number, workflow: GalleryWor
     return { beforeByEdited, warnings };
 }
 
-function editedSnapshotStatements(galleryId: number, photos: DriveFolderPhoto[], folders: DriveFolder[], beforeByEdited: Map<string, BeforePhoto>) {
+function editedSnapshotStatements(galleryId: number, rootFolderName: string, photos: DriveFolderPhoto[], folders: DriveFolder[], beforeByEdited: Map<string, BeforePhoto>) {
     const versions = new Map(photos.map((photo) => [photo.id, photo.md5Checksum ? `md5:${photo.md5Checksum}` : `${photo.modifiedTime || ''}:${photo.size || ''}:${photo.width || 0}x${photo.height || 0}`]));
     const version = faceSourceVersion(photos.filter((photo) => photo.mimeType.startsWith('image/')).map((photo) => ({ driveFileId: photo.id, sourceVersion: versions.get(photo.id)!, createdAt: '' })));
     return [
@@ -1361,6 +1361,7 @@ function editedSnapshotStatements(galleryId: number, photos: DriveFolderPhoto[],
             sql: "INSERT INTO gallery_edit_result_folders (gallery_id, drive_folder_id, parent_id, name) VALUES (?, ?, ?, ?)",
             params: [galleryId, folder.id, folder.parentId, folder.name],
         })),
+        { sql: "UPDATE galleries SET edit_results_folder_name = ? WHERE id = ?", params: [rootFolderName, galleryId] },
         ...photos.map((photo, displayOrder) => ({
             sql: "INSERT INTO gallery_edit_result_photos (gallery_id, drive_file_id, filename, mime_type, thumbnail_url, web_content_link, resource_key, width, height, display_order, before_photo, folder_id, source_version, source_size_bytes) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             params: [galleryId, photo.id, photo.name, photo.mimeType, photo.thumbnailLink || null, directDriveDownloadUrl(photo), photo.resourceKey || null, photo.width ?? null, photo.height ?? null, displayOrder, beforeByEdited.has(photo.id) ? JSON.stringify(beforeByEdited.get(photo.id)) : null, photo.folderId, versions.get(photo.id)!, /^\d+$/.test(photo.size || "") ? Number(photo.size) : null],
@@ -1406,22 +1407,8 @@ async function archiveSnapshotVersion(galleryId: number): Promise<string> {
 async function prebuiltArchiveJobs(galleryId: number, expiresAt: string | null): Promise<ArchiveJobRequest[]> {
         const folders = await galleryAll<{ id: string; parentId: string | null; name: string }>('SELECT drive_folder_id as id, parent_id as "parentId", name FROM gallery_edit_result_folders WHERE gallery_id = ? ORDER BY name, drive_folder_id', [galleryId]);
         const photos = await galleryAll<ArchivePhoto>('SELECT drive_file_id as "driveFileId", filename, folder_id as "folderId", source_size_bytes as "sizeBytes" FROM gallery_edit_result_photos WHERE gallery_id = ? AND mime_type LIKE \'image/%\' ORDER BY display_order, filename', [galleryId]);
-        const byId = new Map(folders.map((folder) => [folder.id, folder]));
-        const paths = new Map<string, string[]>();
-        for (const photo of photos) {
-            if (!photo.folderId) continue;
-            const trail: string[] = [];
-            const seen = new Set<string>();
-            let currentId: string | null = photo.folderId;
-            while (currentId) {
-                const current = byId.get(currentId);
-                if (!current || seen.has(currentId)) throw new Error("invalid_folder_tree");
-                seen.add(currentId);
-                trail.unshift(currentId);
-                currentId = current.parentId;
-            }
-            paths.set(photo.driveFileId, trail);
-        }
+        const folderIds = new Set(folders.map((folder) => folder.id));
+        if (photos.some((photo) => photo.folderId && !folderIds.has(photo.folderId))) throw new Error("invalid_folder_tree");
         const snapshotVersion = await archiveSnapshotVersion(galleryId);
         const jobs: ArchiveJobRequest[] = [];
         const rootPhotos = photos.filter((photo) => !photo.folderId);
@@ -1429,11 +1416,6 @@ async function prebuiltArchiveJobs(galleryId: number, expiresAt: string | null):
         for (const folder of folders) {
             const direct = photos.filter((photo) => photo.folderId === folder.id);
             if (direct.length && direct.length <= MAX_FOLDER_ARCHIVE_PHOTOS) jobs.push({ galleryId, folderId: folder.id, folderName: folder.name, scope: "direct", snapshotVersion, accessExpiresAt: expiresAt, photos: direct.map((photo) => ({ driveFileId: photo.driveFileId, filename: photo.filename, archivePath: photo.filename, sizeBytes: photo.sizeBytes })) });
-            const subtree = photos.filter((photo) => paths.get(photo.driveFileId)?.includes(folder.id));
-            if (subtree.length && subtree.length <= MAX_FOLDER_ARCHIVE_PHOTOS) jobs.push({ galleryId, folderId: folder.id, folderName: folder.name, scope: "subtree", snapshotVersion, accessExpiresAt: expiresAt, photos: subtree.map((photo) => {
-                const trail = paths.get(photo.driveFileId)!;
-                return { driveFileId: photo.driveFileId, filename: photo.filename, archivePath: [...trail.slice(trail.indexOf(folder.id)).map((id) => byId.get(id)!.name), photo.filename].join("/"), sizeBytes: photo.sizeBytes };
-            }) });
         }
         return jobs;
 }
@@ -1487,7 +1469,7 @@ adminGalleriesRouter.post("/:id/edit-results/sync", async (c) => {
         const { beforeByEdited, warnings } = await editedSnapshotComparisons(id, gallery.workflow, tree.photos);
         if (!await setArchiveGallerySnapshot(id, null)) return c.json({ error: "Could not revoke existing ZIP links. Try syncing again shortly." }, 503);
         await galleryBatch([
-            ...editedSnapshotStatements(id, tree.photos, tree.folders, beforeByEdited),
+            ...editedSnapshotStatements(id, tree.rootName, tree.photos, tree.folders, beforeByEdited),
             { sql: "UPDATE galleries SET edit_results_photo_count = ?, edit_results_published_zip_file_id = ?, edit_results_zip_filename = ?, edit_results_zip_download_url = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?", params: [tree.photos.length, archive ? gallery.editResultsZipFileId : null, archive?.filename || null, archive?.downloadUrl || null, id] },
         ]);
         void prepareGalleryFaceIndex(id, 'edited');
@@ -1527,7 +1509,7 @@ adminGalleriesRouter.post("/:id/edit-results/publish", async (c) => {
         const expiresAt = editResultsExpiryFromDuration(gallery.editResultsAccessDurationHours, publishedAt);
         if (!await setArchiveGallerySnapshot(id, null)) return c.json({ error: "Could not revoke existing ZIP links. Try publishing again shortly." }, 503);
         const statements = [
-            ...editedSnapshotStatements(id, photos, folders, beforeByEdited),
+            ...editedSnapshotStatements(id, tree.rootName, photos, folders, beforeByEdited),
             { sql: "UPDATE galleries SET edit_results_status = 'open', edit_results_key_hash = ?, edit_results_published_at = ?, edit_results_expires_at = ?, edit_results_photo_count = ?, edit_results_published_zip_file_id = ?, edit_results_zip_filename = ?, edit_results_zip_download_url = ?, edit_results_version = edit_results_version + 1, updated_at = CURRENT_TIMESTAMP WHERE id = ?", params: [keyHash, publishedAt, expiresAt, photos.length, archive ? gallery.editResultsZipFileId : null, archive?.filename || null, archive?.downloadUrl || null, id] },
         ];
         await galleryBatch(statements);
@@ -1541,6 +1523,25 @@ adminGalleriesRouter.post("/:id/edit-results/publish", async (c) => {
         console.error(`[gallery ${id}] Edited photos publish failed:`, error instanceof Error ? error.message : error);
         return c.json({ error: "Unable to verify or publish this Google Drive folder." }, 502);
     }
+});
+
+adminGalleriesRouter.post("/:id/edit-results/password", async (c) => {
+    const denied = await requireGalleryAdmin(c);
+    if (denied) return denied;
+    const id = Number(c.req.param("id"));
+    if (!Number.isInteger(id) || id < 1) return c.json({ error: "Invalid gallery ID" }, 400);
+    const gallery = await galleryOne<{ keyHash: string | null; photoCount: number }>(
+        'SELECT edit_results_key_hash as "keyHash", edit_results_photo_count as "photoCount" FROM galleries WHERE id = ?',
+        [id],
+    );
+    if (!gallery) return c.json({ error: "Gallery not found" }, 404);
+    if (!gallery.keyHash || !Number(gallery.photoCount)) return c.json({ error: "Publish Edited Photos before changing its password." }, 409);
+    const body = await c.req.json().catch(() => ({})) as { password?: unknown };
+    const password = String(body.password || "").trim();
+    if (password.length < 1 || password.length > 4) return c.json({ error: "Edited Photos password must be between 1 and 4 characters." }, 400);
+    const keyHash = await Bun.password.hash(password, { algorithm: "bcrypt", cost: 10 });
+    await galleryRun('UPDATE galleries SET edit_results_key_hash = ?, edit_results_version = edit_results_version + 1, updated_at = CURRENT_TIMESTAMP WHERE id = ?', [keyHash, id]);
+    return c.json({ changed: true, warning: "Existing ZIP download tickets remain valid for up to 15 minutes." }, 200, { "Cache-Control": "no-store" });
 });
 
 adminGalleriesRouter.post("/:id/edit-results/unpublish", async (c) => {
@@ -2063,7 +2064,7 @@ publicGalleriesRouter.post("/:id/edit-results/face-search", async (c) => {
 publicGalleriesRouter.get("/:id/edit-results", async (c) => {
     const access = await requireEditResultsAccess(c);
     if (access instanceof Response) return access;
-    const gallery = await galleryOne<{ sourceVersion?: string | null; editResultsPublishedAt?: string | null; editResultsExpiresAt?: string | null; archiveFilename?: string | null; archiveDownloadUrl?: string | null }>("SELECT edited_face_source_version as \"sourceVersion\", edit_results_published_at as \"editResultsPublishedAt\", edit_results_expires_at as \"editResultsExpiresAt\", edit_results_zip_filename as \"archiveFilename\", edit_results_zip_download_url as \"archiveDownloadUrl\" FROM galleries WHERE id = ?", [access.galleryId]);
+    const gallery = await galleryOne<{ sourceVersion?: string | null; editResultsFolderName?: string | null; editResultsPublishedAt?: string | null; editResultsExpiresAt?: string | null; archiveFilename?: string | null; archiveDownloadUrl?: string | null }>("SELECT edited_face_source_version as \"sourceVersion\", edit_results_folder_name as \"editResultsFolderName\", edit_results_published_at as \"editResultsPublishedAt\", edit_results_expires_at as \"editResultsExpiresAt\", edit_results_zip_filename as \"archiveFilename\", edit_results_zip_download_url as \"archiveDownloadUrl\" FROM galleries WHERE id = ?", [access.galleryId]);
     const manualArchive = gallery?.archiveFilename && gallery.archiveDownloadUrl
         ? { filename: gallery.archiveFilename, downloadUrl: gallery.archiveDownloadUrl, downloadResolveUrl: `/api/public/galleries/${encodeURIComponent(c.req.param("id"))}/edit-results/archive/download-url?token=${encodeURIComponent(access.token)}` }
         : null;
@@ -2073,6 +2074,7 @@ publicGalleriesRouter.get("/:id/edit-results", async (c) => {
     return c.json({
         publishedAt: gallery?.editResultsPublishedAt || null,
         sourceVersion: gallery?.sourceVersion || null,
+        rootFolderName: gallery?.editResultsFolderName || null,
         folders: folders.map((folder) => ({ id: folder.id, parentId: folder.parentId, name: folder.name })),
         expiresAt: gallery?.editResultsExpiresAt || null,
         expiresIn: editResultsExpiresIn(gallery?.editResultsExpiresAt),

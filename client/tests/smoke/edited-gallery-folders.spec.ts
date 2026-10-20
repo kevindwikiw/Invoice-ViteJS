@@ -3,6 +3,7 @@ import { expect, test, type Page } from '@playwright/test';
 const id = 'edited-folders';
 const photo = (driveFileId: string, folderId: string | null) => ({ driveFileId, folderId, filename: `${driveFileId}.jpg`, mimeType: 'image/jpeg', width: 800, height: 600, downloadUrl: `https://example.test/${driveFileId}` });
 const snapshot = {
+    rootFolderName: 'Wedding Ges',
     folders: [{ id: 'no-watermark', parentId: null, name: 'No Watermark' }, { id: 'empty', parentId: 'no-watermark', name: 'Empty' }],
     photos: [...Array.from({ length: 55 }, (_, index) => photo(`root-photo-${index}`, null)), photo('clean-photo', 'no-watermark')],
     archive: { filename: 'all.zip', downloadUrl: 'https://example.test/all.zip' },
@@ -28,13 +29,27 @@ for (const width of [320, 390, 1280]) {
         const folderPanel = page.getByTestId('edited-folder-panel');
         await expect(folderBar).toHaveCount(0);
         await expect(page.getByTestId('edited-folder-tiles').getByRole('link', { name: 'Open folder No Watermark' })).toBeVisible();
+        await expect(page.getByRole('heading', { name: 'Wedding Ges' })).toBeVisible();
+        await expect(page.getByTestId('edited-folder-tiles')).toContainText('1 item · 1 folder');
+        await expect(page.getByRole('button', { name: /Download No Watermark photos as ZIP/ })).toHaveCount(0);
         await expect(page.getByRole('heading', { name: 'Photos' })).toBeVisible();
+        const rootPhotosHeadingX = await page.getByRole('heading', { name: 'Photos & Video' }).evaluate((element) => element.getBoundingClientRect().x);
+        const rootLastFolderTile = page.getByRole('link', { name: 'Open folder No Watermark' }).locator('xpath=..');
+        expect(await rootLastFolderTile.evaluate((element) => getComputedStyle(element).borderBottomWidth)).toBe('1px');
         await expect(grid.locator('img')).toHaveCount(54);
         await expect(grid.locator('img').first()).toHaveAttribute('src', /root-photo-0\/thumbnail/);
         await page.getByRole('button', { name: 'Next page', exact: true }).click();
         await expect(page).toHaveURL(/editedPage=2/);
         await expect(grid.locator('img')).toHaveAttribute('src', /root-photo-54\/thumbnail/);
         await page.getByTestId('edited-folder-tiles').getByRole('link', { name: 'Open folder No Watermark' }).click();
+        const downloadHere = page.getByRole('button', { name: 'Download Photos Here' });
+        if (width < 640) expect((await downloadHere.boundingBox())?.width).toBe(width < 390 ? 112 : 128);
+        const folderPhotosHeading = page.getByRole('heading', { name: 'Photos & Video' });
+        await expect(folderPhotosHeading).toBeVisible();
+        const folderPhotosHeadingX = await folderPhotosHeading.evaluate((element) => element.getBoundingClientRect().x);
+        expect(folderPhotosHeadingX).toBe(rootPhotosHeadingX);
+        const folderLastTile = page.getByRole('link', { name: 'Open folder Empty' }).locator('xpath=..');
+        expect(await folderLastTile.evaluate((element) => getComputedStyle(element).borderBottomWidth)).toBe('1px');
         await expect(folderBar).toBeVisible();
         await expect(folderTrigger).toHaveAttribute('aria-expanded', 'false');
         await expect(folderTrigger).toContainText('No Watermark');
@@ -89,6 +104,26 @@ for (const width of [320, 390, 1280]) {
         await expect(grid.locator('img').first()).toHaveAttribute('src', /root-photo-0\/thumbnail/);
     });
 }
+
+test('root folder row and folder breadcrumb align the Photos & Video section', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 900 });
+    await seed(page);
+    await page.route(`**/api/public/galleries/${id}/**`, async (route) => {
+        const path = new URL(route.request().url()).pathname;
+        if (path.endsWith('/edit-results/status')) return route.fulfill({ json: { available: true } });
+        if (path.endsWith('/edit-results')) return route.fulfill({ json: { folders: [{ id: 'no-watermark', parentId: null, name: 'No Watermark' }], photos: [photo('root-photo', null), photo('folder-photo', 'no-watermark')] } });
+        return route.fulfill({ contentType: 'image/png', body: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl6z7QAAAAASUVORK5CYII=', 'base64') });
+    });
+    await page.goto(`/culling/${id}?view=edit-results`);
+    const rootHeading = page.getByRole('heading', { name: 'Photos & Video' });
+    const rootBox = await rootHeading.boundingBox();
+    expect(rootBox).not.toBeNull();
+    await page.getByRole('link', { name: 'Open folder No Watermark' }).click();
+    const folderBox = await page.getByRole('heading', { name: 'Photos & Video' }).boundingBox();
+    expect(folderBox).not.toBeNull();
+    expect(folderBox!.x).toBe(rootBox!.x);
+    expect(folderBox!.y).toBe(rootBox!.y);
+});
 
 for (const theme of ['black', 'white']) {
     test(`folder picker handles long names, many folders, and outside dismissal in ${theme}`, async ({ page }, testInfo) => {
@@ -206,7 +241,7 @@ test('switching folders from the bottom picker returns to the new folder start',
     await expect.poll(() => page.evaluate(() => window.scrollY)).toBeLessThan(100);
 });
 
-test('folder ZIP button tracks the worker job and automatically downloads the completed ZIP', async ({ page }) => {
+test('folder toolbar ZIP tracks the worker job and automatically downloads the completed ZIP', async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 800 });
     await seed(page);
     let created = false;
@@ -215,6 +250,7 @@ test('folder ZIP button tracks the worker job and automatically downloads the co
         const path = url.pathname;
         if (path.endsWith('/edit-results/status')) return route.fulfill({ json: { available: true } });
         if (path.endsWith('/edit-results/folders/no-watermark/archive/jobs') && route.request().method() === 'POST') {
+            expect(url.searchParams.get('scope')).toBe('direct');
             created = true;
             return route.fulfill({ status: 202, json: { jobId: 'a'.repeat(32), status: 'queued', total: 1 } });
         }
@@ -226,13 +262,15 @@ test('folder ZIP button tracks the worker job and automatically downloads the co
     });
     await page.route('https://worker.example.test/**', (route) => route.fulfill({ status: 200, headers: { 'content-type': 'application/zip', 'content-disposition': 'attachment; filename="No Watermark.zip"' }, body: 'zip' }));
     await page.goto(`/culling/${id}?view=edit-results`);
-    const downloadButton = page.getByRole('button', { name: 'Download No Watermark folder as ZIP' });
+    await expect(page.getByRole('button', { name: /Download No Watermark photos as ZIP/ })).toHaveCount(0);
+    await page.getByRole('link', { name: 'Open folder No Watermark' }).click();
+    const downloadButton = page.getByRole('button', { name: 'Download Photos Here' });
     await expect(downloadButton).toBeVisible();
     const download = page.waitForEvent('download');
     await downloadButton.click();
     await expect.poll(() => created).toBe(true);
     expect((await download).suggestedFilename()).toBe('No Watermark.zip');
-    await expect(page.getByRole('button', { name: 'Download No Watermark ZIP' })).toBeVisible({ timeout: 5000 });
+    await expect(downloadButton).toBeVisible({ timeout: 5000 });
     await expect(page.locator('p[role="status"]').filter({ hasText: 'Download starting' })).toHaveClass(/sr-only/);
 });
 
@@ -263,20 +301,21 @@ test('folder header downloads only the open folder even when a gallery ZIP exist
     await page.goto(`/culling/${id}/edited`);
     await expect(page.getByRole('button', { name: 'Download All Photos' })).toBeVisible();
     await page.getByRole('link', { name: 'Open folder No Watermark' }).click();
-    const folderDownload = page.getByRole('button', { name: 'Download Folder Photos' });
+    const folderDownload = page.getByRole('button', { name: 'Download Photos Here' });
     await expect(folderDownload).toBeVisible();
+    await expect(page.getByRole('navigation', { name: 'Folder breadcrumb' }).getByRole('button')).toHaveCount(0);
     const automaticDownload = page.waitForEvent('download');
     await folderDownload.click();
     expect((await automaticDownload).suggestedFilename()).toBe('No Watermark.zip');
     expect(directStarts).toBe(1);
     expect(publishedArchiveRequests).toBe(0);
-    await expect(page.getByRole('button', { name: 'Download No Watermark folder as ZIP' })).toBeVisible();
+    await expect(folderDownload).toBeVisible();
     const manualDownload = page.waitForEvent('download');
     await folderDownload.click();
     expect((await manualDownload).suggestedFilename()).toBe('No Watermark.zip');
     expect(directStarts).toBe(1);
     await page.getByRole('link', { name: 'Open folder Empty' }).click();
-    await expect(page.getByRole('button', { name: 'Download Folder Photos' })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Download Photos Here' })).toHaveCount(0);
 });
 
 test('Download All Photos requests only root photos even when a gallery ZIP exists', async ({ page }) => {
