@@ -262,13 +262,26 @@ const normalizeLegacyInvoiceData = (data: InvoiceData): InvoiceData => {
         }
         return undefined;
     };
+    const footer = value('footerInfo', 'footer_info');
+    const footerValues = Array.isArray(footer) ? footer.filter((item): item is string => typeof item === 'string') : [];
+    const footerOffset = footerValues.length === 3 ? 1 : 0;
     return {
         ...data,
         items: (value('items') ?? data.items) as unknown[],
+        cashback: value('cashback'),
         weddingDate: value('weddingDate', 'wedding_date', 'eventDate', 'event_date'),
         venue: value('venue', 'eventVenue', 'event_venue', 'location'),
         hours: value('hours', 'eventTime', 'event_time', 'time'),
         eventTitle: value('eventTitle', 'event_title', 'title'),
+        bankName: value('bankName', 'bank_name'),
+        bankAcc: value('bankAcc', 'bank_acc'),
+        bankHolder: value('bankHolder', 'bank_holder'),
+        terms: value('terms'),
+        notes: value('notes'),
+        footerAddress: value('footerAddress', 'footer_address') ?? (footerOffset ? undefined : footerValues[0]),
+        footerEmail: value('footerEmail', 'footer_email') ?? footerValues[1 - footerOffset],
+        footerIG: value('footerIG', 'footer_ig') ?? footerValues[2 - footerOffset],
+        footerPhone: value('footerPhone', 'footer_phone') ?? footerValues[3 - footerOffset],
         paymentTerms: value('paymentTerms', 'payment_terms') as InvoiceData['paymentTerms'],
         pay_dp1: value('pay_dp1'), pay_term2: value('pay_term2'),
         pay_term3: value('pay_term3'), pay_full: value('pay_full'),

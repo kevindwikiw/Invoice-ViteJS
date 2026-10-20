@@ -674,18 +674,22 @@ export default function CreateInvoice() {
                     const paymentTerms = legacyPaymentTerms(data);
                     if (paymentTerms.length) setPaymentTerms(paymentTerms);
                     setNotes(String(value(['notes']) ?? ''));
-                    const textField = (keys: string[], setter: (value: string) => void) => {
+                    const footer = value(['footerInfo', 'footer_info']);
+                    const footerValues = Array.isArray(footer) ? footer.filter((item): item is string => typeof item === 'string') : [];
+                    const footerOffset = footerValues.length === 3 ? 1 : 0;
+                    const textField = (keys: string[], setter: (value: string) => void, fallback?: string) => {
                         const field = value(keys);
                         if (field !== undefined) setter(String(field));
+                        else if (fallback !== undefined) setter(fallback);
                     };
                     textField(['bankName', 'bank_name'], setBankName);
                     textField(['bankAcc', 'bank_acc'], setBankAcc);
                     textField(['bankHolder', 'bank_holder'], setBankHolder);
                     textField(['terms'], setTerms);
-                    textField(['footerAddress', 'footer_address'], setFooterAddress);
-                    textField(['footerEmail', 'footer_email'], setFooterEmail);
-                    textField(['footerIG', 'footer_ig'], setFooterIG);
-                    textField(['footerPhone', 'footer_phone'], setFooterPhone);
+                    textField(['footerAddress', 'footer_address'], setFooterAddress, footerOffset ? undefined : footerValues[0]);
+                    textField(['footerEmail', 'footer_email'], setFooterEmail, footerValues[1 - footerOffset]);
+                    textField(['footerIG', 'footer_ig'], setFooterIG, footerValues[2 - footerOffset]);
+                    textField(['footerPhone', 'footer_phone'], setFooterPhone, footerValues[3 - footerOffset]);
                     textField(['waTemplate', 'wa_template'], setWaTemplate);
                 }
                 const proofs = editInvoiceData.paymentProofs || editInvoiceData.payment_proofs;
