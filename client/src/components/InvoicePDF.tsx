@@ -124,6 +124,8 @@ type Invoice = {
     date?: string | Date | null;
     createdAt?: string | Date | null;
     created_at?: string | Date | null;
+    updatedAt?: string | Date | null;
+    updated_at?: string | Date | null;
 };
 
 // ======================
@@ -237,18 +239,40 @@ const formatHoursWithDuration = (hoursStr: string): string => {
 
 const parseInvoiceData = (raw: unknown): InvoiceData => {
     if (!raw) return {};
-    if (typeof raw === "object") return raw as InvoiceData;
+    if (typeof raw === "object") return normalizeLegacyInvoiceData(raw as InvoiceData);
     if (typeof raw === "string") {
         const t = raw.trim();
         if (!t) return {};
         try {
             const parsed = JSON.parse(t);
-            return parsed && typeof parsed === "object" ? (parsed as InvoiceData) : {};
+            return parsed && typeof parsed === "object" ? normalizeLegacyInvoiceData(parsed as InvoiceData) : {};
         } catch {
             return {};
         }
     }
     return {};
+};
+
+const normalizeLegacyInvoiceData = (data: InvoiceData): InvoiceData => {
+    const root = data as Record<string, unknown>;
+    const meta = asRecord(root.meta);
+    const value = (...keys: string[]) => {
+        for (const source of [root, meta]) {
+            for (const key of keys) if (source[key] != null) return source[key];
+        }
+        return undefined;
+    };
+    return {
+        ...data,
+        items: (value('items') ?? data.items) as unknown[],
+        weddingDate: value('weddingDate', 'wedding_date', 'eventDate', 'event_date'),
+        venue: value('venue', 'eventVenue', 'event_venue', 'location'),
+        hours: value('hours', 'eventTime', 'event_time', 'time'),
+        eventTitle: value('eventTitle', 'event_title', 'title'),
+        paymentTerms: value('paymentTerms', 'payment_terms') as InvoiceData['paymentTerms'],
+        pay_dp1: value('pay_dp1'), pay_term2: value('pay_term2'),
+        pay_term3: value('pay_term3'), pay_full: value('pay_full'),
+    };
 };
 
 // 0 => FREE
@@ -860,8 +884,9 @@ export const InvoicePDF = ({ invoice, proofs = [] }: { invoice: Invoice; proofs?
         const tz = s(data.timeZone, DEFAULT_TIMEZONE);
         const weddingDate = (data.weddingDate ?? invoice?.date ?? "") as unknown;
         const dateStr = formatDateSafe(weddingDate, tz);
-        const createdDate = invoice?.createdAt ?? invoice?.created_at ?? invoice?.date ?? weddingDate;
-        const createdDateStr = formatDateSafe(createdDate, tz);
+        const revisionDate = invoice?.updatedAt ?? invoice?.updated_at;
+        const displayDate = revisionDate ?? invoice?.createdAt ?? invoice?.created_at ?? invoice?.date ?? weddingDate;
+        const displayDateStr = formatDateSafe(displayDate, tz);
         const venue = s(data.venue, "");
         const hours = s(data.hours, ""); 
         const notes = s(data.notes, ""); 
@@ -923,10 +948,10 @@ export const InvoicePDF = ({ invoice, proofs = [] }: { invoice: Invoice; proofs?
                             </View>
                             <View style={{ flexDirection: 'row', marginBottom: 2 }}>
                                 <Text style={{ fontSize: 9, fontFamily: 'Helvetica', color: COLORS.DARK_GRAY, textAlign: 'right', marginRight: 4 }}>
-                                    Created:
+                                    {revisionDate ? 'Updated:' : 'Created:'}
                                 </Text>
                                 <Text style={{ fontSize: 9, fontFamily: 'Helvetica', color: COLORS.BLACK, textAlign: 'right' }}>
-                                    {createdDateStr}
+                                    {displayDateStr}
                                 </Text>
                             </View>
                         </View>

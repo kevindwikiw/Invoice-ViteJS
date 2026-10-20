@@ -20,13 +20,15 @@ create table if not exists invoices (
   pdf_blob bytea,
   payment_proofs text,
   is_archived integer not null default 0,
-  created_at timestamptz not null default current_timestamp
+  created_at timestamptz not null default current_timestamp,
+  updated_at timestamptz
 );
 
 -- Existing Python/Supabase databases may already have this table without the
 -- JS-specific proof column. Keep the migration additive and safe to rerun.
 alter table invoices add column if not exists pdf_blob bytea;
 alter table invoices add column if not exists payment_proofs text;
+alter table invoices add column if not exists updated_at timestamptz;
 alter table invoices add column if not exists is_archived integer not null default 0;
 
 alter table packages add column if not exists is_active integer not null default 1;

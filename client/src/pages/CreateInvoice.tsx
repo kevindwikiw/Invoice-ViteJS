@@ -38,6 +38,8 @@ import { useCreateInvoiceState } from '../hooks/useCreateInvoiceState';
 
 type PreviewDraft = {
     paymentProofs?: string;
+    createdAt?: string;
+    updatedAt?: string;
     _savePayload?: InvoicePayload;
     _formState?: {
         isManualInvoice?: boolean;
@@ -66,7 +68,7 @@ type InvoicePayload = {
     footerPhone: string;
     waTemplate: string;
     notes: string;
-    payment_proofs: string;
+    payment_proofs?: string;
 };
 
 type InvoiceConfigPayload = {
@@ -120,6 +122,44 @@ const firstText = (record: Record<string, unknown>, keys: string[]) => {
         if (typeof value === 'string' && value.trim()) return value.trim();
     }
     return '';
+};
+
+const invoiceRecord = (value: unknown): Record<string, unknown> => value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
+const legacyInvoiceValue = (data: Record<string, unknown>, keys: string[]): unknown => {
+    const meta = invoiceRecord(data.meta);
+    for (const record of [data, meta]) {
+        for (const key of keys) {
+            if (record[key] !== undefined && record[key] !== null) return record[key];
+        }
+    }
+    return undefined;
+};
+
+const editDate = (value: unknown): string => {
+    const raw = String(value ?? '').trim();
+    if (!raw) return '';
+    if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
+    const numeric = raw.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})$/);
+    if (numeric) return `${numeric[3]}-${numeric[2].padStart(2, '0')}-${numeric[1].padStart(2, '0')}`;
+    const months: Record<string, number> = { januari: 1, februari: 2, maret: 3, april: 4, mei: 5, juni: 6, juli: 7, agustus: 8, september: 9, oktober: 10, november: 11, desember: 12 };
+    const named = raw.match(/(\d{1,2})\s+([a-z]+)\s+(\d{4})/i);
+    if (named && months[named[2].toLowerCase()]) return `${named[3]}-${String(months[named[2].toLowerCase()]).padStart(2, '0')}-${named[1].padStart(2, '0')}`;
+    const parsed = new Date(raw);
+    if (Number.isNaN(parsed.getTime())) return '';
+    return `${parsed.getFullYear()}-${String(parsed.getMonth() + 1).padStart(2, '0')}-${String(parsed.getDate()).padStart(2, '0')}`;
+};
+
+const legacyPaymentTerms = (data: Record<string, unknown>): PaymentTerm[] => {
+    const terms = legacyInvoiceValue(data, ['paymentTerms', 'payment_terms']);
+    if (Array.isArray(terms) && terms.length) return normalizePaymentTerms(terms);
+    const legacy = [
+        ['dp', 'Down Payment', 'pay_dp1'],
+        ['t2', 'Termin 1', 'pay_term2'],
+        ['t3', 'Termin 2', 'pay_term3'],
+        ['full', 'Pelunasan', 'pay_full'],
+    ];
+    if (!legacy.some(([, , key]) => legacyInvoiceValue(data, [key]) !== undefined)) return [];
+    return legacy.map(([id, label, key]) => ({ id, label, amount: safeNumber(legacyInvoiceValue(data, [key])), locked: id === 'dp' || id === 'full' }));
 };
 
 const normalizeInvoiceItem = (item: unknown, index: number): InvoiceItem => {
@@ -620,17 +660,33 @@ export default function CreateInvoice() {
             setIsManualInvoice(true);
             try {
                 const rawInvoiceData = editInvoiceData.invoiceData ?? editInvoiceData.invoice_data;
-                const data = typeof rawInvoiceData === 'string' ? JSON.parse(rawInvoiceData) : rawInvoiceData;
+                const data = invoiceRecord(typeof rawInvoiceData === 'string' ? JSON.parse(rawInvoiceData) : rawInvoiceData);
                 if (data) {
-                    if (data.venue) setVenue(data.venue);
-                    if (data.weddingDate) setWeddingDate(data.weddingDate);
-                    if (data.clientPhone) setClientPhone(data.clientPhone);
-                    if (data.eventTitle) setEventTitle(data.eventTitle);
-                    if (data.hours) setHours(data.hours);
-                    if (data.cashback !== undefined) setCashback(safeNumber(data.cashback));
-                    if (Array.isArray(data.items)) setCartItems(data.items.map(normalizeInvoiceItem));
-                    if (Array.isArray(data.paymentTerms)) setPaymentTerms(normalizePaymentTerms(data.paymentTerms));
-                    if (data.notes) setNotes(data.notes);
+                    const value = (keys: string[]) => legacyInvoiceValue(data, keys);
+                    setVenue(String(value(['venue', 'eventVenue', 'event_venue', 'location']) ?? ''));
+                    setWeddingDate(editDate(value(['weddingDate', 'wedding_date', 'eventDate', 'event_date']) ?? editInvoiceData.date));
+                    setClientPhone(String(value(['clientPhone', 'client_phone']) ?? ''));
+                    setEventTitle(String(value(['eventTitle', 'event_title', 'title']) ?? ''));
+                    setHours(String(value(['hours', 'eventTime', 'event_time', 'time']) ?? ''));
+                    setCashback(safeNumber(value(['cashback'])));
+                    const items = value(['items']);
+                    if (Array.isArray(items)) setCartItems(items.map(normalizeInvoiceItem));
+                    const paymentTerms = legacyPaymentTerms(data);
+                    if (paymentTerms.length) setPaymentTerms(paymentTerms);
+                    setNotes(String(value(['notes']) ?? ''));
+                    const textField = (keys: string[], setter: (value: string) => void) => {
+                        const field = value(keys);
+                        if (field !== undefined) setter(String(field));
+                    };
+                    textField(['bankName', 'bank_name'], setBankName);
+                    textField(['bankAcc', 'bank_acc'], setBankAcc);
+                    textField(['bankHolder', 'bank_holder'], setBankHolder);
+                    textField(['terms'], setTerms);
+                    textField(['footerAddress', 'footer_address'], setFooterAddress);
+                    textField(['footerEmail', 'footer_email'], setFooterEmail);
+                    textField(['footerIG', 'footer_ig'], setFooterIG);
+                    textField(['footerPhone', 'footer_phone'], setFooterPhone);
+                    textField(['waTemplate', 'wa_template'], setWaTemplate);
                 }
                 const proofs = editInvoiceData.paymentProofs || editInvoiceData.payment_proofs;
                 if (proofs) setExistingProofUrls(typeof proofs === 'string' ? JSON.parse(proofs) : proofs);
@@ -641,11 +697,11 @@ export default function CreateInvoice() {
         }, 0);
 
         return () => window.clearTimeout(timer);
-    }, [editInvoiceData, editDataLoaded, setCartItems, setCashback, setClientName, setClientPhone, setEditDataLoaded, setEventTitle, setExistingProofUrls, setHours, setInvoiceNo, setIsManualInvoice, setNotes, setPaymentTerms, setVenue, setWeddingDate]);
+    }, [editInvoiceData, editDataLoaded, setBankAcc, setBankHolder, setBankName, setCartItems, setCashback, setClientName, setClientPhone, setEditDataLoaded, setEventTitle, setExistingProofUrls, setFooterAddress, setFooterEmail, setFooterIG, setFooterPhone, setHours, setInvoiceNo, setIsManualInvoice, setNotes, setPaymentTerms, setTerms, setVenue, setWaTemplate, setWeddingDate]);
 
     const buildInvoicePayload = () => ({
         clientName, invoiceNo: effectiveInvoiceNo, venue, weddingDate, clientPhone, eventTitle, hours, items: cartItems, paymentTerms: resolvedPaymentTerms, cashback, totalAmount: grandTotal, bankName, bankAcc, bankHolder, terms, footerAddress, footerEmail, footerIG, footerPhone, waTemplate, notes,
-        payment_proofs: JSON.stringify(existingProofUrls)
+        ...(!isEditMode ? { payment_proofs: JSON.stringify(existingProofUrls) } : {})
     });
 
     const handlePreview = async () => {
@@ -687,7 +743,8 @@ export default function CreateInvoice() {
             invoiceNo: payload.invoiceNo, 
             clientName: payload.clientName, 
             date: payload.weddingDate, 
-            createdAt: new Date().toISOString(),
+            createdAt: isEditMode ? (editInvoiceData?.createdAt ?? previewDraft?.createdAt) : new Date().toISOString(),
+            updatedAt: isEditMode ? new Date().toISOString() : null,
             totalAmount: payload.totalAmount,
             paymentProofs: JSON.stringify(combinedProofs), // To be parsed by InvoiceDetail
             invoiceData: JSON.stringify({ ...payload }), 

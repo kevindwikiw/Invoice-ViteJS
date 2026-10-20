@@ -55,6 +55,9 @@ try {
         if (!invoiceColumns.some((column) => column.name === "is_archived")) {
             sqlite.prepare("ALTER TABLE invoices ADD COLUMN is_archived INTEGER DEFAULT 0").run();
         }
+        if (!invoiceColumns.some((column) => column.name === "updated_at")) {
+            sqlite.prepare("ALTER TABLE invoices ADD COLUMN updated_at TEXT").run();
+        }
     }
 
     sqlite.run(`

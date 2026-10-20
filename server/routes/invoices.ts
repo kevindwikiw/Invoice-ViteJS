@@ -54,6 +54,8 @@ type InvoiceListRow = {
     proofCount?: number | null;
     isArchived?: boolean | number | null;
     createdAt?: string | null;
+    updatedAt?: string | null;
+    __proofsUnset?: number | boolean;
 };
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -138,7 +140,7 @@ function invoiceProofCountExpression(): string {
 function invoiceListShape(row: InvoiceListRow) {
     const metadata = invoiceMetadataSummary(row.__invoiceData, row.date || "");
     const directProofCount = Math.max(0, Number(row.proofCount || 0));
-    const fallbackProofCount = directProofCount > 0 ? 0 : legacyProofs(row.__invoiceData).length;
+    const fallbackProofCount = row.__proofsUnset ? legacyProofs(row.__invoiceData).length : 0;
 
     return {
         id: Number(row.id),
@@ -148,11 +150,12 @@ function invoiceListShape(row: InvoiceListRow) {
         totalAmount: Number(row.totalAmount || 0),
         isArchived: row.isArchived ?? false,
         createdAt: row.createdAt ?? null,
+        updatedAt: row.updatedAt ?? null,
         venue: metadata.venue,
         eventDate: metadata.eventDate,
         notes: metadata.notes,
         paymentStatus: invoicePaymentStatus(row.__invoiceData, Number(row.totalAmount || 0)),
-        proofCount: directProofCount || fallbackProofCount,
+        proofCount: directProofCount + fallbackProofCount,
     };
 }
 
@@ -197,7 +200,7 @@ function calculateInvoiceTotal(body: any): number {
 
 function exposeProofs<T extends { paymentProofs?: unknown; invoiceData?: unknown }>(invoice: T): T {
     const direct = parseProofs(invoice.paymentProofs);
-    const proofs = direct.length ? direct : legacyProofs(invoice.invoiceData);
+    const proofs = !invoice.paymentProofs ? legacyProofs(invoice.invoiceData) : direct;
     return { ...invoice, paymentProofs: JSON.stringify(proofs) };
 }
 
@@ -292,7 +295,8 @@ invoicesRouter.get("/", async (c) => {
             SELECT id, invoice_no as "invoiceNo", client_name as "clientName", date,
                    total_amount as "totalAmount", invoice_data as "__invoiceData",
                    ${invoiceProofCountExpression()}, is_archived as "isArchived",
-                   created_at as "createdAt"
+                   created_at as "createdAt", updated_at as "updatedAt",
+                   (payment_proofs IS NULL OR payment_proofs = '') as "__proofsUnset"
             FROM invoices ${where}
             ORDER BY id DESC LIMIT ? OFFSET ?
         `, [...params, safeLimit, (page - 1) * safeLimit]);
@@ -310,7 +314,7 @@ invoicesRouter.get("/:id", async (c) => {
     const user = invoicePermission(c);
     if (!user || !await hasFeaturePermission(user, "view_billing_history")) return c.json({ error: "Permission denied" }, 403);
     try {
-        const invoice = await one(`SELECT id, invoice_no as "invoiceNo", client_name as "clientName", date, total_amount as "totalAmount", invoice_data as "invoiceData", payment_proofs as "paymentProofs", is_archived as "isArchived", created_at as "createdAt" FROM invoices WHERE id = ?`, [Number(c.req.param("id"))]);
+        const invoice = await one(`SELECT id, invoice_no as "invoiceNo", client_name as "clientName", date, total_amount as "totalAmount", invoice_data as "invoiceData", payment_proofs as "paymentProofs", is_archived as "isArchived", created_at as "createdAt", updated_at as "updatedAt" FROM invoices WHERE id = ?`, [Number(c.req.param("id"))]);
         return invoice ? c.json(exposeProofs(invoice as { paymentProofs?: unknown; invoiceData?: unknown })) : c.json({ error: "Not found" }, 404);
     } catch (e) { return c.json({ error: String(e) }, 500); }
 });
@@ -359,9 +363,17 @@ invoicesRouter.delete("/:id", async (c) => {
     } catch (e) { return c.json({ error: String(e) }, 500); }
 });
 
-function buildInvoiceData(body: any): string {
+function buildInvoiceData(body: any, previous: Record<string, unknown> = {}): string {
     const { items, paymentTerms, cashback, venue, weddingDate, clientPhone, eventTitle, bankName, bankAcc, bankHolder, terms, footerAddress, footerEmail, footerIG, footerPhone, waTemplate, hours, notes } = body;
-    return JSON.stringify({ items, paymentTerms, cashback, totalAmount: calculateInvoiceTotal(body), venue, weddingDate, clientPhone, eventTitle, bankName, bankAcc, bankHolder, terms, footerAddress, footerEmail, footerIG, footerPhone, waTemplate, hours: hours || "", notes: notes || "" });
+    return JSON.stringify({ ...previous, items, paymentTerms, cashback, totalAmount: calculateInvoiceTotal(body), venue, weddingDate, clientPhone, eventTitle, bankName, bankAcc, bankHolder, terms, footerAddress, footerEmail, footerIG, footerPhone, waTemplate, hours: hours || "", notes: notes || "" });
+}
+
+function parseInvoiceObject(raw: unknown): Record<string, unknown> | null {
+    if (!raw) return {};
+    try {
+        const parsed = JSON.parse(String(raw));
+        return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : null;
+    } catch { return null; }
 }
 
 invoicesRouter.put("/:id", async (c) => {
@@ -370,14 +382,14 @@ invoicesRouter.put("/:id", async (c) => {
     try {
         const id = Number(c.req.param("id"));
         if (!Number.isInteger(id)) return c.json({ error: "Invalid ID" }, 400);
+        const existing = await one<{ invoiceData: string | null }>('SELECT invoice_data as "invoiceData" FROM invoices WHERE id = ?', [id]);
+        if (!existing) return c.json({ error: "Invoice not found" }, 404);
         const body = await c.req.json();
         const totalAmount = calculateInvoiceTotal(body);
-        const values = [body.invoiceNo, body.clientName, body.weddingDate || new Date().toISOString().split("T")[0], totalAmount, buildInvoiceData(body)];
-        if (body.payment_proofs === undefined) {
-            await run("UPDATE invoices SET invoice_no = ?, client_name = ?, date = ?, total_amount = ?, invoice_data = ? WHERE id = ?", [...values, id]);
-        } else {
-            await run("UPDATE invoices SET invoice_no = ?, client_name = ?, date = ?, total_amount = ?, invoice_data = ?, payment_proofs = ? WHERE id = ?", [...values, JSON.stringify(parseProofs(body.payment_proofs)), id]);
-        }
+        const previous = parseInvoiceObject(existing.invoiceData);
+        if (!previous) return c.json({ error: "Existing invoice data is invalid; update refused to protect its details" }, 409);
+        const values = [body.invoiceNo, body.clientName, body.weddingDate || new Date().toISOString().split("T")[0], totalAmount, buildInvoiceData(body, previous)];
+        await run("UPDATE invoices SET invoice_no = ?, client_name = ?, date = ?, total_amount = ?, invoice_data = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?", [...values, id]);
         await logInvoiceActivity({ invoiceId: id, action: "UPDATED", actor: user, details: `Updated invoice total: ${totalAmount}`, ipAddress: getClientIp(c) });
         return c.json({ id, invoiceNo: body.invoiceNo, clientName: body.clientName, totalAmount, status: "updated" });
     } catch (e) { return c.json({ error: String(e) }, 500); }
@@ -414,9 +426,9 @@ invoicesRouter.post("/:id/proofs", async (c) => {
         if (!Array.isArray(files)) files = [files];
         const validFiles = (files as File[]).filter((file) => file instanceof File && file.size > 0 && file.size <= MAX_PROOF_BYTES);
         if (!validFiles.length) return c.json({ error: "No valid files uploaded" }, 400);
-        const inv = await one<{ paymentProofs: string | null }>("SELECT payment_proofs as \"paymentProofs\" FROM invoices WHERE id = ?", [id]);
+        const inv = await one<{ paymentProofs: string | null; invoiceData: string | null }>("SELECT payment_proofs as \"paymentProofs\", invoice_data as \"invoiceData\" FROM invoices WHERE id = ?", [id]);
         if (!inv) return c.json({ error: "Invoice not found" }, 404);
-        const current = parseProofs(inv.paymentProofs);
+        const current = !inv.paymentProofs ? legacyProofs(inv.invoiceData) : parseProofs(inv.paymentProofs);
         const proofs = [...current, ...await Promise.all(validFiles.map(proofDataUrl))];
         await run("UPDATE invoices SET payment_proofs = ? WHERE id = ?", [JSON.stringify(proofs), id]);
         await logInvoiceActivity({ invoiceId: id, action: "PROOF_UPLOADED", actor: user, details: `Uploaded ${validFiles.length} proof file(s) to database`, ipAddress: getClientIp(c) });
@@ -432,9 +444,9 @@ invoicesRouter.delete("/:id/proofs", async (c) => {
         const body = await c.req.json().catch(() => ({}));
         const filename = typeof body.proof === "string" ? body.proof : "";
         if (!filename) return c.json({ error: "Proof is required" }, 400);
-        const inv = await one<{ paymentProofs: string | null }>("SELECT payment_proofs as \"paymentProofs\" FROM invoices WHERE id = ?", [id]);
+        const inv = await one<{ paymentProofs: string | null; invoiceData: string | null }>("SELECT payment_proofs as \"paymentProofs\", invoice_data as \"invoiceData\" FROM invoices WHERE id = ?", [id]);
         if (!inv) return c.json({ error: "Invoice not found" }, 404);
-        const current = parseProofs(inv.paymentProofs);
+        const current = !inv.paymentProofs ? legacyProofs(inv.invoiceData) : parseProofs(inv.paymentProofs);
         const proofs = current.filter((proof) => proof !== filename);
         await run("UPDATE invoices SET payment_proofs = ? WHERE id = ?", [JSON.stringify(proofs), id]);
         await logInvoiceActivity({ invoiceId: id, action: "PROOF_DELETED", actor: user, details: "Deleted proof from database", ipAddress: getClientIp(c) });
@@ -449,9 +461,9 @@ invoicesRouter.delete("/:id/proofs/:filename", async (c) => {
     try {
         const id = Number(c.req.param("id"));
         const filename = c.req.param("filename");
-        const inv = await one<{ paymentProofs: string | null }>("SELECT payment_proofs as \"paymentProofs\" FROM invoices WHERE id = ?", [id]);
+        const inv = await one<{ paymentProofs: string | null; invoiceData: string | null }>("SELECT payment_proofs as \"paymentProofs\", invoice_data as \"invoiceData\" FROM invoices WHERE id = ?", [id]);
         if (!inv) return c.json({ error: "Invoice not found" }, 404);
-        const proofs = parseProofs(inv.paymentProofs).filter((proof) => proof !== filename);
+        const proofs = (!inv.paymentProofs ? legacyProofs(inv.invoiceData) : parseProofs(inv.paymentProofs)).filter((proof) => proof !== filename);
         await run("UPDATE invoices SET payment_proofs = ? WHERE id = ?", [JSON.stringify(proofs), id]);
         await logInvoiceActivity({ invoiceId: id, action: "PROOF_DELETED", actor: user, details: "Deleted proof from database", ipAddress: getClientIp(c) });
         return c.json({ status: "success", proofs });

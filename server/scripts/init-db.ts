@@ -39,7 +39,8 @@ db.run(`
     invoice_data TEXT,
     pdf_blob BLOB,
     is_archived INTEGER DEFAULT 0,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP
   )
 `);
 console.log("Table 'invoices' ready.");

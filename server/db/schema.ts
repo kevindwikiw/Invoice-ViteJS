@@ -21,6 +21,7 @@ export const invoices = sqliteTable("invoices", {
     paymentProofs: text("payment_proofs"), // JSON array of base64 data URLs
     isArchived: integer("is_archived").default(0),
     createdAt: text("created_at").default(sql`CURRENT_TIMESTAMP`),
+    updatedAt: text("updated_at"),
 });
 
 export const invoiceActivityLogs = sqliteTable("invoice_activity_logs", {
