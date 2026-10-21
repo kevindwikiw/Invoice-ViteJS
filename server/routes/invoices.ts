@@ -5,6 +5,18 @@ import { hasFeaturePermission } from "../permissions";
 
 const invoicesRouter = new Hono();
 const MAX_PROOF_BYTES = 5 * 1024 * 1024;
+const INVOICE_STATS_TTL_MS = 60_000;
+
+type InvoiceStats = { total: number; totalRevenue: number; lunas: number; dp: number; unpaid: number };
+let invoiceStatsCache: { value: InvoiceStats; expiresAt: number } | null = null;
+let invoiceStatsPending: Promise<InvoiceStats> | null = null;
+let invoiceStatsVersion = 0;
+
+function invalidateInvoiceStats() {
+    invoiceStatsVersion += 1;
+    invoiceStatsCache = null;
+    invoiceStatsPending = null;
+}
 
 type AuthUser = { sub: number; email: string; name: string; role: string };
 type InvoiceActivityInput = {
@@ -255,23 +267,42 @@ invoicesRouter.get("/activity", async (c) => {
     } catch (e) { return c.json({ error: String(e) }, 500); }
 });
 
+async function computeInvoiceStats(): Promise<InvoiceStats> {
+    const allInvoices = await all<{ totalAmount: number | null; invoiceData: string | null }>("SELECT total_amount as \"totalAmount\", invoice_data as \"invoiceData\" FROM invoices");
+    let totalRevenue = 0, cntLunas = 0, cntDp = 0, cntUnpaid = 0;
+    for (const inv of allInvoices) {
+        totalRevenue += inv.totalAmount || 0;
+        const paymentTerms = invoicePaymentTerms(inv.invoiceData);
+        if (paymentTerms.length) {
+            const pelunasan = paymentTerms.find((term) => term.id === "full" || String(term.label || "").toLowerCase().includes("pelunasan"));
+            if (pelunasan && Number(pelunasan.amount || 0) > 0) cntLunas++;
+            else if (paymentTerms.some((term) => term.id !== "full" && Number(term.amount || 0) > 0)) cntDp++;
+            else cntUnpaid++;
+        } else cntUnpaid++;
+    }
+    return { total: allInvoices.length, totalRevenue, lunas: cntLunas, dp: cntDp, unpaid: cntUnpaid };
+}
+
+function getInvoiceStats(): Promise<InvoiceStats> {
+    if (invoiceStatsCache && invoiceStatsCache.expiresAt > Date.now()) return Promise.resolve(invoiceStatsCache.value);
+    if (invoiceStatsPending) return invoiceStatsPending;
+
+    const version = invoiceStatsVersion;
+    const pending = computeInvoiceStats();
+    invoiceStatsPending = pending;
+    void pending.then((value) => {
+        if (version === invoiceStatsVersion) invoiceStatsCache = { value, expiresAt: Date.now() + INVOICE_STATS_TTL_MS };
+    }, () => {}).finally(() => {
+        if (invoiceStatsPending === pending) invoiceStatsPending = null;
+    });
+    return pending;
+}
+
 invoicesRouter.get("/stats", async (c) => {
     const user = invoicePermission(c);
     if (!user || !await hasFeaturePermission(user, "view_billing_history")) return c.json({ error: "Permission denied" }, 403);
     try {
-        const allInvoices = await all<{ totalAmount: number | null; invoiceData: string | null }>("SELECT total_amount as \"totalAmount\", invoice_data as \"invoiceData\" FROM invoices ORDER BY id DESC");
-        let totalRevenue = 0, cntLunas = 0, cntDp = 0, cntUnpaid = 0;
-        for (const inv of allInvoices) {
-            totalRevenue += inv.totalAmount || 0;
-            const paymentTerms = invoicePaymentTerms(inv.invoiceData);
-            if (paymentTerms.length) {
-                const pelunasan = paymentTerms.find((term) => term.id === "full" || String(term.label || "").toLowerCase().includes("pelunasan"));
-                if (pelunasan && Number(pelunasan.amount || 0) > 0) cntLunas++;
-                else if (paymentTerms.some((term) => term.id !== "full" && Number(term.amount || 0) > 0)) cntDp++;
-                else cntUnpaid++;
-            } else cntUnpaid++;
-        }
-        return c.json({ total: allInvoices.length, totalRevenue, lunas: cntLunas, dp: cntDp, unpaid: cntUnpaid });
+        return c.json(await getInvoiceStats());
     } catch (e) { return c.json({ error: String(e) }, 500); }
 });
 
@@ -342,6 +373,7 @@ invoicesRouter.post("/batch-delete", async (c) => {
         if (!normalized.length) return c.json({ error: "No valid IDs provided" }, 400);
         const placeholders = normalized.map(() => "?").join(",");
         const result = await run(`DELETE FROM invoices WHERE id IN (${placeholders})`, normalized);
+        invalidateInvoiceStats();
         for (const id of normalized) await logInvoiceActivity({ invoiceId: id, action: "BATCH_DELETED", actor: user, details: `Invoice batch-deleted (${normalized.length} total)`, ipAddress: getClientIp(c) });
         const remaining = await one<{ cnt: number }>("SELECT COUNT(*) as cnt FROM invoices");
         if (Number(remaining?.cnt || 0) === 0) await run("UPDATE sequences SET last_value = 0 WHERE name = 'invoice'");
@@ -356,6 +388,7 @@ invoicesRouter.delete("/:id", async (c) => {
         const id = Number(c.req.param("id"));
         const inv = await one<{ invoiceNo: string | null }>("SELECT invoice_no as \"invoiceNo\" FROM invoices WHERE id = ?", [id]);
         await run("DELETE FROM invoices WHERE id = ?", [id]);
+        invalidateInvoiceStats();
         await logInvoiceActivity({ invoiceId: id, action: "DELETED", actor: user, details: `Invoice ${inv?.invoiceNo || id} deleted`, ipAddress: getClientIp(c) });
         const remaining = await one<{ cnt: number }>("SELECT COUNT(*) as cnt FROM invoices");
         if (Number(remaining?.cnt || 0) === 0) await run("UPDATE sequences SET last_value = 0 WHERE name = 'invoice'");
@@ -390,6 +423,7 @@ invoicesRouter.put("/:id", async (c) => {
         if (!previous) return c.json({ error: "Existing invoice data is invalid; update refused to protect its details" }, 409);
         const values = [body.invoiceNo, body.clientName, body.weddingDate || new Date().toISOString().split("T")[0], totalAmount, buildInvoiceData(body, previous)];
         await run("UPDATE invoices SET invoice_no = ?, client_name = ?, date = ?, total_amount = ?, invoice_data = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?", [...values, id]);
+        invalidateInvoiceStats();
         await logInvoiceActivity({ invoiceId: id, action: "UPDATED", actor: user, details: `Updated invoice total: ${totalAmount}`, ipAddress: getClientIp(c) });
         return c.json({ id, invoiceNo: body.invoiceNo, clientName: body.clientName, totalAmount, status: "updated" });
     } catch (e) { return c.json({ error: String(e) }, 500); }
@@ -409,6 +443,7 @@ invoicesRouter.post("/", async (c) => {
         } else if (!invoiceNo) return c.json({ error: "Invoice sequence configuration missing" }, 500);
         const totalAmount = calculateInvoiceTotal(body);
         const id = await insertReturningId(`INSERT INTO invoices (invoice_no, client_name, date, total_amount, invoice_data, payment_proofs) VALUES (?, ?, ?, ?, ?, ?)`, [invoiceNo, body.clientName, body.weddingDate || new Date().toISOString().split("T")[0], totalAmount, buildInvoiceData(body), JSON.stringify(parseProofs(body.payment_proofs))]);
+        invalidateInvoiceStats();
         await logInvoiceActivity({ invoiceId: id, action: "CREATED", actor: user, details: `Created invoice ${invoiceNo} for ${body.clientName}`, ipAddress: getClientIp(c) });
         return c.json({ id, invoiceNo, clientName: body.clientName, totalAmount, status: "created" });
     } catch (e) { console.error("Error creating invoice:", e); return c.json({ error: String(e) }, 500); }

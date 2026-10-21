@@ -84,3 +84,46 @@ test("invalid stored JSON refuses an update", async () => {
     expect(row.invoice_data).toBe("not-json");
     expect(row.updated_at).toBeNull();
 });
+
+test("invoice stats stay accurate after edits and deletion despite caching", async () => {
+    const getStats = async () => (await app.request("/invoices/stats")).json() as Promise<{
+        total: number; totalRevenue: number; lunas: number; dp: number; unpaid: number;
+    }>;
+
+    expect(await getStats()).toEqual({ total: 1, totalRevenue: 300, lunas: 0, dp: 1, unpaid: 0 });
+    sqlite!.exec("UPDATE invoices SET total_amount = 999 WHERE id = 1");
+    expect(await getStats()).toEqual({ total: 1, totalRevenue: 300, lunas: 0, dp: 1, unpaid: 0 });
+
+    const revised = await app.request("/invoices/1", {
+        method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({
+            invoiceNo: "INV1", clientName: "Couple", weddingDate: "2026-12-12", items: legacy.items,
+            paymentTerms: [{ id: "full", amount: 300 }], cashback: 0,
+        }),
+    });
+    expect(revised.status).toBe(200);
+    expect(await getStats()).toEqual({ total: 1, totalRevenue: 300, lunas: 1, dp: 0, unpaid: 0 });
+
+    expect((await app.request("/invoices/1", { method: "DELETE" })).status).toBe(200);
+    expect(await getStats()).toEqual({ total: 0, totalRevenue: 0, lunas: 0, dp: 0, unpaid: 0 });
+});
+
+test("creating and batch-deleting invoices invalidate cached stats", async () => {
+    expect((await update()).status).toBe(200);
+    const before = await (await app.request("/invoices/stats")).json() as { total: number };
+    expect(before.total).toBe(1);
+
+    const created = await app.request("/invoices", {
+        method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({
+            invoiceNo: "INV2", clientName: "Another Couple", weddingDate: "2026-12-13",
+            items: legacy.items, paymentTerms: [], cashback: 0,
+        }),
+    });
+    expect(created.status).toBe(200);
+    const { id } = await created.json() as { id: number };
+    expect((await (await app.request("/invoices/stats")).json() as { total: number }).total).toBe(2);
+
+    expect((await app.request("/invoices/batch-delete", {
+        method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ ids: [1, id] }),
+    })).status).toBe(200);
+    expect((await (await app.request("/invoices/stats")).json() as { total: number }).total).toBe(0);
+});

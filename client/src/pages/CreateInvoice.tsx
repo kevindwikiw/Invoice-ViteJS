@@ -642,7 +642,8 @@ export default function CreateInvoice() {
         setPaymentTerms(prev => prev.filter(t => t.id !== id));
     };
     // EDIT LOAD
-    const { data: editInvoiceData } = useQuery({
+    const [editHydrationError, setEditHydrationError] = useState(false);
+    const { data: editInvoiceData, isError: editFetchError, refetch: refetchEditInvoice } = useQuery({
         queryKey: ['invoice', editInvoiceKey],
         queryFn: async () => {
             const res = await fetchWithAuth(`/invoices/${editId}`);
@@ -696,6 +697,8 @@ export default function CreateInvoice() {
                 if (proofs) setExistingProofUrls(typeof proofs === 'string' ? JSON.parse(proofs) : proofs);
             } catch (error) {
                 console.error(error);
+                setEditHydrationError(true);
+                return;
             }
             setEditDataLoaded(true);
         }, 0);
@@ -774,10 +777,14 @@ export default function CreateInvoice() {
             queryClient.invalidateQueries({ queryKey: ['invoice', editInvoiceKey] });
             queryClient.invalidateQueries({ queryKey: ['analytics'] });
             navigate({ to: '/history' });
+        },
+        onError: () => {
+            addToast('Could not update invoice. Please try again.', 'error');
         }
     });
 
     const handleUpdate = () => {
+        if (!editDataLoaded || mutation.isPending) return;
         if (!clientName || cartItems.length === 0) {
             setShowValidation(true);
             addToast('Please fill Client Name and add some items', 'error');
@@ -883,7 +890,23 @@ export default function CreateInvoice() {
         );
     }
 
-    if (isLoadingPackages) return <div className="h-screen flex items-center justify-center bg-[var(--bg-deep)]"><Loader2 className="animate-spin text-[var(--accent)]" /></div>;
+    if (isEditMode && !editDataLoaded) {
+        if (editFetchError || editHydrationError) {
+            return (
+                <div className="flex min-h-screen items-center justify-center bg-[var(--bg-deep)] px-4 text-[var(--text-primary)]">
+                    <div role="alert" className="w-full max-w-md border border-[var(--border)] bg-[var(--bg-card)] p-6 text-center">
+                        <AlertCircle size={28} className="mx-auto mb-4 text-rose-400" aria-hidden="true" />
+                        <h1 className="font-display text-xl">Could not open invoice</h1>
+                        <p className="mt-2 text-sm text-[var(--text-muted)]">Your invoice has not been changed. Try loading it again.</p>
+                        <button type="button" onClick={() => { setEditHydrationError(false); void refetchEditInvoice(); }} className="mt-5 rounded-md bg-[var(--accent)] px-4 py-2 text-sm font-semibold text-[var(--bg-deep)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--text-primary)]">Retry</button>
+                    </div>
+                </div>
+            );
+        }
+        return <div role="status" className="flex h-screen items-center justify-center bg-[var(--bg-deep)] text-[var(--text-muted)]"><Loader2 className="mr-2 animate-spin text-[var(--accent)]" aria-hidden="true" />Loading invoice</div>;
+    }
+
+    if (isLoadingPackages) return <div role="status" className="flex h-screen items-center justify-center bg-[var(--bg-deep)] text-[var(--text-muted)]"><Loader2 className="mr-2 animate-spin text-[var(--accent)]" aria-hidden="true" />Loading packages</div>;
 
     return (
         <div className="flex flex-col md:flex-row-reverse md:gap-0 h-screen overflow-hidden bg-[var(--bg-deep)] text-[var(--text-primary)]">
@@ -1246,12 +1269,13 @@ export default function CreateInvoice() {
                             </button>
                             <button 
                                 onClick={isEditMode ? handleUpdate : handlePreview} 
+                                disabled={isEditMode && mutation.isPending}
                                 className={clsx(
-                                    "px-8 py-3 bg-[var(--accent)] text-[var(--bg-deep)] text-xs font-black uppercase tracking-widest rounded-xl flex items-center gap-2 transition-all hover:scale-[1.02] active:scale-95",
+                                    "px-8 py-3 bg-[var(--accent)] text-[var(--bg-deep)] text-xs font-black uppercase tracking-widest rounded-xl flex items-center gap-2 transition-all hover:scale-[1.02] active:scale-95 disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:scale-100",
                                     (missingFields.length > 0 || cartItems.length === 0) && "opacity-70"
                                 )}
                             >
-                                <Save size={16} /> {isEditMode ? 'Update' : 'Create'}
+                                {mutation.isPending && isEditMode ? <Loader2 size={16} className="animate-spin" aria-hidden="true" /> : <Save size={16} aria-hidden="true" />} {isEditMode ? (mutation.isPending ? 'Updating...' : 'Update') : 'Create'}
                             </button>
                         </div>
                     </section>

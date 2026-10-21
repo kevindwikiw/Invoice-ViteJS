@@ -6,7 +6,7 @@ import { fetchWithAuth, parsePaymentProofs, resolveProofDataUrls } from '../lib/
 import { useToast } from '../context/ToastContext'
 import {
     Search, FileClock, Eye, Pencil, Trash2, Loader2, Plus, Filter, MoreHorizontal, Archive, RotateCcw, Check,
-    ChevronLeft, ChevronRight, Download, X, Paperclip, CalendarDays, MapPin,
+    ChevronLeft, ChevronRight, Download, X, Paperclip, CalendarDays, MapPin, AlertCircle,
 } from 'lucide-react'
 import clsx from 'clsx'
 import {
@@ -247,7 +247,7 @@ export default function InvoiceHistory() {
         enabled: canViewHistory,
     })
 
-    const { data: invoicePage, isLoading: listLoading, isFetching: listFetching } = useQuery<InvoiceListApiResponse>({
+    const { data: invoicePage, isLoading: listLoading, isFetching: listFetching, isError: listError, refetch: refetchInvoices } = useQuery<InvoiceListApiResponse>({
         queryKey: ['invoices', 'list', debouncedSearch, limit, page],
         queryFn: async () => {
             const params = new URLSearchParams()
@@ -631,15 +631,18 @@ export default function InvoiceHistory() {
                                 <div className="relative shrink-0" ref={refineRef}>
                                     <button
                                         onClick={() => setShowRefine((prev) => !prev)}
+                                        aria-expanded={showRefine}
+                                        aria-controls="history-refine-panel"
                                         className="flex h-10 items-center gap-2 bg-[var(--bg-elevated)] border border-[var(--border)] rounded-lg px-4 label-xs text-[var(--text-secondary)] hover:border-[var(--accent)]/40 transition-colors"
                                     >
                                         <Filter size={14} className="text-[var(--text-muted)]" />
                                         Refine
                                     </button>
                                     <div
+                                        id="history-refine-panel"
                                         className={clsx(
                                             'absolute left-0 top-full mt-2 z-[999] w-[min(calc(100vw-3rem),18rem)] rounded-xl border border-[var(--border)] bg-[var(--bg-card)] p-3 origin-top-left transition-all duration-200',
-                                            showRefine ? 'opacity-100 scale-100 pointer-events-auto' : 'opacity-0 scale-95 pointer-events-none'
+                                            showRefine ? 'opacity-100 scale-100 pointer-events-auto' : 'hidden'
                                         )}
                                     >
                                         <div className="space-y-3">
@@ -653,7 +656,7 @@ export default function InvoiceHistory() {
                                                         setLimit(Number(e.target.value))
                                                         changePage(1)
                                                     }}
-                                                    className="w-full bg-[var(--bg-deep)] border border-[var(--border)] rounded-lg px-3 py-2 text-xs text-[var(--text-primary)] outline-none"
+                                                    className="w-full bg-[var(--bg-deep)] border border-[var(--border)] rounded-lg px-3 py-2 text-xs text-[var(--text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]"
                                                 >
                                                     <option value={10}>Show 10 Rows</option>
                                                     <option value={25}>Show 25 Rows</option>
@@ -668,7 +671,7 @@ export default function InvoiceHistory() {
                                                     name="historyStatus"
                                                     value={refineStatus}
                                                     onChange={(e) => setRefineStatus(e.target.value as typeof refineStatus)}
-                                                    className="w-full bg-[var(--bg-deep)] border border-[var(--border)] rounded-lg px-3 py-2 text-xs text-[var(--text-primary)] outline-none"
+                                                    className="w-full bg-[var(--bg-deep)] border border-[var(--border)] rounded-lg px-3 py-2 text-xs text-[var(--text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]"
                                                 >
                                                     <option value="all">All</option>
                                                     <option value="lunas">Lunas</option>
@@ -684,7 +687,7 @@ export default function InvoiceHistory() {
                                                     name="historyNotes"
                                                     value={refineNotes}
                                                     onChange={(e) => setRefineNotes(e.target.value as typeof refineNotes)}
-                                                    className="w-full bg-[var(--bg-deep)] border border-[var(--border)] rounded-lg px-3 py-2 text-xs text-[var(--text-primary)] outline-none"
+                                                    className="w-full bg-[var(--bg-deep)] border border-[var(--border)] rounded-lg px-3 py-2 text-xs text-[var(--text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]"
                                                 >
                                                     <option value="all">All</option>
                                                     <option value="with">With Notes</option>
@@ -700,7 +703,7 @@ export default function InvoiceHistory() {
                                                         aria-label="Amount comparison mode"
                                                         value={refineAmountMode}
                                                         onChange={(e) => setRefineAmountMode(e.target.value as typeof refineAmountMode)}
-                                                        className="bg-[var(--bg-deep)] border border-[var(--border)] rounded-lg px-2.5 py-2 text-xs text-[var(--text-primary)] outline-none"
+                                                        className="bg-[var(--bg-deep)] border border-[var(--border)] rounded-lg px-2.5 py-2 text-xs text-[var(--text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]"
                                                     >
                                                         <option value="all">Any</option>
                                                         <option value="gt">More Than</option>
@@ -713,7 +716,7 @@ export default function InvoiceHistory() {
                                                         value={refineAmountValue}
                                                         onChange={(e) => setRefineAmountValue(e.target.value)}
                                                         placeholder="e.g. 10000000"
-                                                        className="bg-[var(--bg-deep)] border border-[var(--border)] rounded-lg px-3 py-2 text-xs text-[var(--text-primary)] outline-none"
+                                                        className="bg-[var(--bg-deep)] border border-[var(--border)] rounded-lg px-3 py-2 text-xs text-[var(--text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]"
                                                     />
                                                 </div>
                                             </div>
@@ -928,9 +931,16 @@ export default function InvoiceHistory() {
                     </div>
                     {/* Rows */}
                     {listLoading ? (
-                        <div className="flex items-center justify-center py-24 gap-3 md:col-span-full">
+                        <div role="status" className="flex items-center justify-center py-24 gap-3 md:col-span-full">
                             <Loader2 size={24} className="animate-spin text-[var(--accent)]" />
                             <span className="text-xs uppercase tracking-[0.2em] font-medium text-[var(--text-muted)] font-sans" style={{ fontFamily: 'var(--font-body)' }}>Loading Invoices...</span>
+                        </div>
+                    ) : listError && !invoicePage ? (
+                        <div role="alert" className="py-20 text-center text-[var(--text-muted)] md:col-span-full">
+                            <AlertCircle size={24} className="mx-auto mb-3 text-rose-400" aria-hidden="true" />
+                            <p className="text-sm font-semibold text-[var(--text-primary)]">Could not load invoices</p>
+                            <p className="mt-1 text-xs">Your invoice records have not been changed.</p>
+                            <button type="button" onClick={() => void refetchInvoices()} className="mt-4 rounded-md border border-[var(--border)] px-4 py-2 text-xs font-semibold text-[var(--text-primary)] hover:border-[var(--accent)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]">Retry</button>
                         </div>
                     ) : visibleInvoices.length === 0 ? (
                         <div className="text-center py-24 text-[var(--text-muted)] md:col-span-full">
@@ -938,7 +948,7 @@ export default function InvoiceHistory() {
                                 <FileClock className="opacity-40" size={24} />
                             </div>
                             <p className="text-sm font-medium uppercase tracking-[0.1em] text-[var(--text-primary)] font-sans" style={{ fontFamily: 'var(--font-body)' }}>No Invoices Found</p>
-                            <p className="text-[10px] mt-1 opacity-60 uppercase tracking-widest font-sans" style={{ fontFamily: 'var(--font-body)' }}>Create your first invoice to get started!</p>
+                            <p className="text-[10px] mt-1 opacity-60 uppercase tracking-widest font-sans" style={{ fontFamily: 'var(--font-body)' }}>{debouncedSearch || hasRefineFilters || activeView !== 'all' ? 'Try another search or filter.' : 'Create your first invoice to get started!'}</p>
                         </div>
                     ) : (
                         <div className="divide-y divide-[var(--border)]/60 md:col-span-full md:grid md:grid-cols-subgrid">
@@ -1100,6 +1110,7 @@ export default function InvoiceHistory() {
                                                     e.stopPropagation()
                                                     setOpenRowMenuId(prev => (prev === id ? null : id))
                                                 }}
+                                                aria-expanded={openRowMenuId === id}
                                                 className="inline-flex h-10 w-10 items-center justify-center rounded-md border border-[var(--border)] bg-[var(--bg-card)] text-[var(--text-muted)] transition-colors hover:border-[var(--accent)]/40 hover:text-[var(--accent)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)] md:h-8 md:w-8"
                                                 title="More actions"
                                                 aria-label={`More actions for ${invoiceNo}`}
@@ -1126,7 +1137,7 @@ export default function InvoiceHistory() {
                                                 onClick={(e) => e.stopPropagation()}
                                                 className={clsx(
                                                     "absolute right-0 top-full mt-1 z-[70] min-w-[156px] rounded-lg border border-[var(--border)] bg-[var(--bg-card)] p-1.5 origin-top-right transition-all duration-200",
-                                                    openRowMenuId === id ? "opacity-100 scale-100 pointer-events-auto" : "opacity-0 scale-95 pointer-events-none"
+                                                    openRowMenuId === id ? "opacity-100 scale-100 pointer-events-auto" : "hidden"
                                                 )}
                                             >
                                                 <button
