@@ -1,5 +1,5 @@
 # Build the React/Rsbuild frontend and run the Bun/Hono API in one Fly app.
-FROM oven/bun:1.3.7 AS build
+FROM oven/bun:1.4.4 AS build
 
 WORKDIR /app
 COPY package.json bun.lock ./
@@ -13,7 +13,7 @@ COPY client ./client
 COPY server ./server
 RUN cd client && bun run build
 
-FROM oven/bun:1.3.7-slim AS runtime
+FROM oven/bun:1.4.4-slim AS runtime
 
 WORKDIR /app
 COPY package.json bun.lock ./
