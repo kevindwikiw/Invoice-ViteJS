@@ -397,8 +397,8 @@ invoicesRouter.delete("/:id", async (c) => {
 });
 
 function buildInvoiceData(body: any, previous: Record<string, unknown> = {}): string {
-    const { items, paymentTerms, cashback, venue, weddingDate, clientPhone, eventTitle, bankName, bankAcc, bankHolder, terms, footerAddress, footerEmail, footerIG, footerPhone, waTemplate, hours, notes } = body;
-    return JSON.stringify({ ...previous, items, paymentTerms, cashback, totalAmount: calculateInvoiceTotal(body), venue, weddingDate, clientPhone, eventTitle, bankName, bankAcc, bankHolder, terms, footerAddress, footerEmail, footerIG, footerPhone, waTemplate, hours: hours || "", notes: notes || "" });
+    const { items, paymentTerms, cashback, venue, weddingDate, pricingCity, clientPhone, eventTitle, bankName, bankAcc, bankHolder, terms, footerAddress, footerEmail, footerIG, footerPhone, waTemplate, hours, notes } = body;
+    return JSON.stringify({ ...previous, items, paymentTerms, cashback, totalAmount: calculateInvoiceTotal(body), venue, weddingDate, ...(pricingCity !== undefined ? { pricingCity } : {}), clientPhone, eventTitle, bankName, bankAcc, bankHolder, terms, footerAddress, footerEmail, footerIG, footerPhone, waTemplate, hours: hours || "", notes: notes || "" });
 }
 
 function parseInvoiceObject(raw: unknown): Record<string, unknown> | null {

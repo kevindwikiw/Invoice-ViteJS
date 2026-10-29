@@ -60,6 +60,21 @@ try {
         }
     }
 
+    const packagesTable = sqlite
+        .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'packages'")
+        .get() as { name: string } | null;
+    if (packagesTable) {
+        sqlite.run(`
+            CREATE TABLE IF NOT EXISTS package_prices (
+                package_id INTEGER NOT NULL REFERENCES packages(id) ON DELETE CASCADE,
+                city TEXT NOT NULL,
+                year INTEGER NOT NULL,
+                price INTEGER NOT NULL CHECK (price >= 0),
+                PRIMARY KEY (package_id, city, year)
+            )
+        `);
+    }
+
     sqlite.run(`
         CREATE TABLE IF NOT EXISTS invoice_activity_logs (
             id INTEGER PRIMARY KEY AUTOINCREMENT,

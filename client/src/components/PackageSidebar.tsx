@@ -1,15 +1,22 @@
 import { useMemo, useState } from 'react';
-import { Check, ChevronDown, ChevronLeft, ChevronRight, Package, Plus, Search, X } from 'lucide-react';
+import { CalendarDays, Check, ChevronDown, ChevronLeft, ChevronRight, Package, Plus, Search, X } from 'lucide-react';
 import clsx from 'clsx';
 
 import { CATEGORIES, CATEGORY_LABELS, ITEMS_PER_PAGE } from '../constants/invoice';
 import { packageCategoryTone, packageDisplayName, packageRowId } from '../lib/packageCatalog';
-import type { PackageData } from '../types/invoice';
+import type { CatalogPackage } from '../types/invoice';
 
 interface PackageSidebarProps {
-    packages: PackageData[];
+    packages: CatalogPackage[];
+    pricingContextLabel: string;
+    pricingContextReady: boolean;
+    pricingPromptLabel: string;
+    onCompletePricingContext: () => void;
+    missingTariffs: boolean;
+    canManagePackages: boolean;
     selectedPackageIds: Set<string>;
-    onAdd: (pkg: PackageData) => void;
+    onAdd: (pkg: CatalogPackage) => void;
+    onConfigurePrice: (pkg: CatalogPackage) => void;
     onRemove: (rowId: string) => void;
     onOpenCatalog: () => void;
 }
@@ -20,8 +27,15 @@ interface QuickCatalogProps extends PackageSidebarProps {
 
 function QuickCatalog({
     packages,
+    pricingContextLabel,
+    pricingContextReady,
+    pricingPromptLabel,
+    onCompletePricingContext,
+    missingTariffs,
+    canManagePackages,
     selectedPackageIds,
     onAdd,
+    onConfigurePrice,
     onRemove,
     onOpenCatalog,
     compact = false,
@@ -47,7 +61,7 @@ function QuickCatalog({
         return packages
             .filter((pkg) => activeCategory === 'All Categories' || pkg.category === activeCategory)
             .filter((pkg) => !query || pkg.name.toLowerCase().includes(query) || pkg.description.toLowerCase().includes(query))
-            .sort((a, b) => b.price - a.price);
+            .sort((a, b) => (b.catalogPrice ?? -1) - (a.catalogPrice ?? -1));
     }, [activeCategory, packages, searchQuery]);
 
     const totalPages = Math.max(1, Math.ceil(filteredPackages.length / ITEMS_PER_PAGE));
@@ -68,6 +82,19 @@ function QuickCatalog({
                     <Package size={14} />
                     Open Full Catalog
                 </button>
+                {pricingContextReady ? (
+                    <p className="mt-2 text-center text-xs font-medium text-[var(--text-muted)]">{pricingContextLabel}</p>
+                ) : (
+                    <button type="button" onClick={onCompletePricingContext} className="mt-3 flex w-full items-center justify-center gap-2 rounded-lg border border-[var(--accent)]/25 bg-[var(--accent)]/[0.06] px-3 py-2.5 text-center text-xs font-medium text-[var(--accent)] transition-colors hover:bg-[var(--accent)]/[0.12] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]">
+                        <CalendarDays size={14} className="shrink-0" aria-hidden="true" />
+                        <span>{pricingPromptLabel}</span>
+                    </button>
+                )}
+                {missingTariffs && !canManagePackages && (
+                    <p className="mt-1 text-center text-xs text-[var(--text-muted)]">
+                        Minta admin mengatur harga paket
+                    </p>
+                )}
 
                 <div className="relative mt-3 min-w-0">
                     <label htmlFor={compact ? 'mobile-package-search' : 'package-search'} className="sr-only">Search packages</label>
@@ -164,16 +191,22 @@ function QuickCatalog({
                                     )}
                                 </div>
                                 <div className="shrink-0 text-right">
-                                    <p className="font-display text-sm font-medium tabular-nums text-[var(--text-primary)]">
-                                        Rp {pkg.price.toLocaleString('id-ID')}
-                                    </p>
-                                    <button
+                                    {pricingContextReady && <p className={clsx('max-w-32 text-xs font-medium leading-snug tabular-nums', pkg.catalogPrice === null ? 'font-sans text-[var(--text-muted)]' : 'font-display text-[var(--text-primary)]')}>
+                                        {pkg.catalogPriceLabel}
+                                    </p>}
+                                    {(pricingContextReady || isAdded) && <button
                                         type="button"
                                         aria-pressed={isAdded}
-                                        onClick={() => isAdded ? onRemove(rowId) : onAdd(pkg)}
+                                        aria-label={pkg.catalogPrice === null && !isAdded && canManagePackages ? `Isi harga ${pkg.name}` : undefined}
+                                        disabled={!isAdded && pkg.catalogPrice === null && !canManagePackages}
+                                        onClick={() => isAdded ? onRemove(rowId) : pkg.catalogPrice === null ? onConfigurePrice(pkg) : onAdd(pkg)}
                                         className={clsx(
-                                            'group/action mt-2 inline-flex min-w-[64px] items-center justify-center gap-1 rounded-md border px-2 py-1 text-[8px] font-bold uppercase tracking-[0.1em] transition-colors',
-                                            isAdded
+                                            'group/action mt-2 inline-flex min-w-[64px] items-center justify-center gap-1 rounded-md border px-2 py-1 text-[9px] font-bold uppercase tracking-[0.1em] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]',
+                                            !isAdded && pkg.catalogPrice === null && !canManagePackages
+                                                ? 'cursor-not-allowed border-[var(--border)] text-[var(--text-muted)] opacity-50'
+                                                : !isAdded && pkg.catalogPrice === null
+                                                ? 'border-[var(--accent)]/40 bg-[var(--accent)]/[0.08] text-[var(--accent)] hover:bg-[var(--accent)]/[0.16]'
+                                                : isAdded
                                                 ? 'border-emerald-500/35 bg-emerald-500/10 text-emerald-600 hover:border-rose-500/35 hover:bg-rose-500/10 hover:text-rose-500 dark:text-emerald-400'
                                                 : 'border-[var(--border)] text-[var(--text-muted)] hover:border-[var(--accent)]/50 hover:text-[var(--accent)]',
                                         )}
@@ -186,9 +219,9 @@ function QuickCatalog({
                                                 <span className="hidden group-hover/action:inline">Remove</span>
                                             </>
                                         ) : (
-                                            <><Plus size={10} /> Add</>
+                                            pkg.catalogPrice === null ? (canManagePackages ? 'Isi harga' : 'Minta admin') : <><Plus size={10} /> Add</>
                                         )}
-                                    </button>
+                                    </button>}
                                 </div>
                             </div>
                             {details.length > 0 && (

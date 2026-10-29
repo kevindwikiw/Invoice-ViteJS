@@ -15,6 +15,8 @@ type SequenceState = {
 type CatalogPackage = {
     id: number;
     name: string;
+    price: number;
+    prices?: Array<{ city: string; year: number; price: number }>;
 };
 
 async function authenticatedRequest<T>(
@@ -80,15 +82,25 @@ test('critical invoice workflow', async ({ page }) => {
             const dialog = page.getByRole('dialog', { name: 'Package Catalog' });
             await expect(dialog).toBeVisible();
 
-            const firstPackage = packages[0];
+            const currentYear = new Date().getFullYear();
+            const firstPackage = packages.find((pkg) => currentYear === 2026
+                ? pkg.price > 0
+                : pkg.prices?.some((price) => price.city === 'Bandung' && price.year === currentYear));
             if (!firstPackage) {
                 await dialog.getByRole('button', { name: 'Cancel' }).click();
                 await expect(dialog).not.toBeVisible();
                 return;
             }
 
+            await dialog.getByRole('button', { name: 'Cancel' }).click();
+            await page.getByRole('button', { name: 'Kota Acara', exact: true }).click();
+            await page.getByRole('option', { name: 'Bandung' }).click();
+            await page.locator('#event-date').click();
+            await page.getByRole('button', { name: '15', exact: true }).first().click();
+            await page.getByRole('button', { name: 'Open Full Catalog' }).click();
+            await expect(dialog).toBeVisible();
             await dialog.getByPlaceholder('Search package name or details...').fill(firstPackage.name);
-            await dialog.getByLabel(`Add ${firstPackage.name}`).first().check();
+            await dialog.getByText(firstPackage.name, { exact: true }).last().click();
             await dialog.getByRole('button', { name: 'Apply 1 Change' }).click();
             await expect(dialog).not.toBeVisible();
             await expect(page.getByText(firstPackage.name, { exact: true }).first()).toBeVisible();

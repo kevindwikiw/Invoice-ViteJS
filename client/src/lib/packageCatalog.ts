@@ -1,5 +1,46 @@
 import type { InvoiceItem, PackageData } from '../types/invoice';
 
+export const PRICING_CITIES = ['Bandung', 'Jakarta'] as const;
+
+export function pricingCitiesFromPackages(packages: PackageData[]): string[] {
+    const cities = new Map<string, string>(PRICING_CITIES.map((city) => [city.toLocaleLowerCase('id-ID'), city]));
+    for (const pkg of packages) {
+        for (const entry of pkg.prices ?? []) {
+            const city = entry.city.trim();
+            if (city) cities.set(city.toLocaleLowerCase('id-ID'), city);
+        }
+    }
+    return [...cities.values()].sort((a, b) => a.localeCompare(b, 'id-ID'));
+}
+
+export function canonicalPricingCity(value: string, cities: readonly string[]): string | null {
+    const normalized = value.trim().toLocaleLowerCase('id-ID');
+    return cities.find((city) => city.toLocaleLowerCase('id-ID') === normalized) ?? null;
+}
+
+export function eventPricingYear(eventDate: string): number | null {
+    const match = /^(\d{4})-\d{2}-\d{2}$/.exec(eventDate);
+    return match ? Number(match[1]) : null;
+}
+
+export function resolvePackagePrice(pkg: PackageData, city: string, year: number | null): number | null {
+    if (!city.trim() || year === null) return null;
+    if (year === 2026) {
+        return Number.isSafeInteger(pkg.price) && (pkg.price > 0 || (pkg.price === 0 && pkg.category === 'Free / Complimentary'))
+            ? pkg.price : null;
+    }
+    const canonicalCity = canonicalPricingCity(city, pkg.prices?.map((entry) => entry.city) ?? []);
+    if (!canonicalCity) return null;
+    return pkg.prices?.find((entry) => entry.city.toLocaleLowerCase('id-ID') === canonicalCity.toLocaleLowerCase('id-ID') && entry.year === year)?.price ?? null;
+}
+
+export function packagePriceLabel(pkg: PackageData, city: string, year: number | null): string {
+    const price = resolvePackagePrice(pkg, city, year);
+    if (price !== null) return `Rp ${price.toLocaleString('id-ID')}`;
+    if (!city.trim() || year === null) return '';
+    return 'Harga belum diisi';
+}
+
 export const PACKAGE_CATEGORY_TONES: Record<string, string> = {
     Wedding: 'border-rose-500/25 bg-rose-500/10 text-rose-600 dark:text-rose-300',
     'Bundling Package': 'border-violet-500/25 bg-violet-500/10 text-violet-600 dark:text-violet-300',
@@ -70,7 +111,7 @@ function uniqueItemId(packageId: number): string {
     return `item_${packageId}_${suffix}`;
 }
 
-export function invoiceItemFromPackage(pkg: PackageData): InvoiceItem {
+export function invoiceItemFromPackage(pkg: PackageData, selectedPrice = pkg.price): InvoiceItem {
     const bundleSections = parsePackageBundleDescription(pkg.description);
     const isBundle = bundleSections.length > 0;
 
@@ -79,7 +120,7 @@ export function invoiceItemFromPackage(pkg: PackageData): InvoiceItem {
         name: pkg.name,
         desc: pkg.name,
         details: isBundle ? undefined : pkg.description,
-        price: pkg.price,
+        price: selectedPrice,
         qty: 1,
         isBundle,
         _rowId: packageRowId(pkg),

@@ -215,6 +215,50 @@ textarea {
     width: 100%;
 }
 
+.invoice-overview-fields input,
+.invoice-overview-fields select {
+    font-family: var(--font-display);
+    font-weight: 500;
+}
+
+.event-location-combo input {
+    border: 0;
+    background: transparent;
+    padding: 0;
+    font-family: var(--font-display);
+    font-weight: 500;
+    transition: none;
+}
+
+.event-location-combo {
+    grid-template-columns: max(72px, 15%) minmax(0, 1fr);
+}
+
+.event-location-combo .event-location-divider {
+    position: absolute;
+    left: calc(16px + max(72px, (100% - 32px) * 0.15));
+}
+
+.event-location-combo .event-city-picker {
+    width: 100%;
+    min-width: 0;
+    height: 100%;
+}
+
+.event-location-combo .event-city-picker > button {
+    font-size: 13px;
+}
+
+.event-location-combo .event-city-picker > button svg {
+    display: none;
+}
+
+.event-location-combo .event-venue-input {
+    width: 100%;
+    min-width: 0;
+    padding-left: 14px;
+}
+
 input:focus,
 select:focus,
 textarea:focus {
@@ -463,4 +507,316 @@ textarea::placeholder {
     .gallery-unlock-loading,
     .gallery-unlock-progress { animation: none; }
     .gallery-unlock-progress > span { animation: gallery-unlock-sweep 2.4s linear infinite; }
+}
+
+/* Package editor pricing: one calm surface for the base price and city rates. */
+.package-pricing {
+    overflow: hidden;
+    border: 1px solid var(--border);
+    border-radius: 18px;
+    background: var(--bg-card);
+}
+
+.package-pricing__heading {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 18px 20px 0;
+}
+
+.package-pricing__eyebrow,
+.package-pricing__section-title {
+    color: var(--text-muted);
+    font-family: var(--font-body);
+    font-size: 10px;
+    font-weight: 750;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    white-space: nowrap;
+}
+
+.package-pricing__heading-rule {
+    height: 1px;
+    flex: 1;
+    background: var(--border);
+}
+
+.package-pricing__base {
+    display: flex;
+    align-items: end;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 12px 20px 19px;
+}
+
+.package-pricing__base-copy {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.package-pricing__year {
+    color: var(--text-primary);
+    font-family: var(--font-display);
+    font-size: 23px;
+    font-weight: 600;
+    line-height: 1.1;
+}
+
+.package-pricing__subtext {
+    color: var(--text-muted);
+    font-size: 11px;
+    line-height: 1.4;
+}
+
+.package-pricing__amount {
+    display: flex;
+    width: min(230px, 48%);
+    min-width: 150px;
+    align-items: baseline;
+    gap: 8px;
+    border-bottom: 1px solid var(--border);
+    padding: 0 0 5px;
+    transition: border-color 150ms ease;
+}
+
+.package-pricing__amount:focus-within {
+    border-color: var(--accent);
+}
+
+.package-pricing__amount > span {
+    color: var(--accent);
+    font-size: 11px;
+    font-weight: 700;
+}
+
+.package-pricing__amount input,
+.package-pricing__city-amount input,
+.package-pricing__year-add input {
+    min-width: 0;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
+    outline: none;
+}
+
+.package-pricing__amount input {
+    width: 100%;
+    padding: 0;
+    color: var(--text-primary);
+    font-family: var(--font-display);
+    font-size: 23px;
+    font-weight: 600;
+    line-height: 1.1;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+}
+
+.package-pricing__city-heading {
+    display: flex;
+    min-height: 64px;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    border-top: 1px solid var(--border);
+    padding: 12px 20px;
+    background: var(--bg-elevated);
+}
+
+.package-pricing__city-copy {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.package-pricing__year-add {
+    display: flex;
+    height: 36px;
+    flex-shrink: 0;
+    align-items: center;
+    overflow: hidden;
+    border: 1px solid var(--border);
+    border-radius: 9px;
+    background: var(--bg-card);
+}
+
+.package-pricing__year-add:focus-within {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 2px var(--accent-muted);
+}
+
+.package-pricing__year-add input {
+    width: 62px;
+    height: 100%;
+    padding: 0 8px;
+    color: var(--text-primary);
+    font-size: 12px;
+    text-align: center;
+    font-variant-numeric: tabular-nums;
+}
+
+.package-pricing__year-add button {
+    display: flex;
+    height: 100%;
+    align-items: center;
+    gap: 5px;
+    border-left: 1px solid var(--border);
+    padding: 0 11px;
+    color: var(--accent);
+    font-size: 11px;
+    font-weight: 700;
+    white-space: nowrap;
+    transition: background-color 150ms ease, transform 130ms cubic-bezier(0.23, 1, 0.32, 1);
+}
+
+.package-pricing__year-add button:hover {
+    background: var(--accent-muted);
+}
+
+.package-pricing__year-add button:focus-visible,
+.package-pricing__row-year button:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: -2px;
+}
+
+.package-pricing__years {
+    background: var(--bg-card);
+}
+
+.package-pricing__year-row {
+    display: grid;
+    grid-template-columns: 80px repeat(2, minmax(0, 1fr));
+    gap: 12px;
+    align-items: center;
+    border-top: 1px solid var(--border);
+    padding: 15px 20px;
+}
+
+.package-pricing__row-year {
+    display: flex;
+    min-width: 0;
+    align-items: center;
+    justify-content: space-between;
+    gap: 4px;
+    color: var(--text-primary);
+    font-family: var(--font-display);
+    font-size: 16px;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+}
+
+.package-pricing__row-year button {
+    display: grid;
+    width: 26px;
+    height: 26px;
+    flex-shrink: 0;
+    place-items: center;
+    border-radius: 6px;
+    color: var(--text-muted);
+    transition: background-color 150ms ease, color 150ms ease, transform 130ms cubic-bezier(0.23, 1, 0.32, 1);
+}
+
+.package-pricing__row-year button:hover {
+    background: rgba(239, 68, 68, 0.1);
+    color: #d55;
+}
+
+.package-pricing__city-field {
+    min-width: 0;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 8px 11px;
+    background: var(--bg-deep);
+    transition: border-color 150ms ease, box-shadow 150ms ease;
+}
+
+.package-pricing__city-field:focus-within {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 2px var(--accent-muted);
+}
+
+.package-pricing__city-field label {
+    display: block;
+    margin-bottom: 2px;
+    color: var(--text-muted);
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+}
+
+.package-pricing__city-amount {
+    display: flex;
+    min-width: 0;
+    align-items: baseline;
+    gap: 5px;
+}
+
+.package-pricing__city-amount > span {
+    color: var(--text-muted);
+    font-size: 10px;
+}
+
+.package-pricing__city-amount input {
+    width: 100%;
+    padding: 0;
+    color: var(--text-primary);
+    font-size: 13px;
+    font-weight: 600;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+}
+
+.package-pricing__amount input::placeholder,
+.package-pricing__city-amount input::placeholder,
+.package-pricing__year-add input::placeholder {
+    color: var(--text-muted);
+    font-weight: 400;
+    opacity: 1;
+}
+
+.package-pricing__empty {
+    margin: 0;
+    border-top: 1px solid var(--border);
+    padding: 17px 20px;
+    color: var(--text-muted);
+    font-size: 12px;
+}
+
+.package-pricing__error {
+    margin: 0;
+    border-top: 1px solid var(--border);
+    padding: 10px 20px;
+    color: #d55;
+    font-size: 12px;
+}
+
+@media (max-width: 520px) {
+    .package-pricing__heading { padding: 16px 16px 0; }
+    .package-pricing__base { padding: 12px 16px 16px; }
+    .package-pricing__amount { min-width: 120px; }
+    .package-pricing__amount input { font-size: 19px; }
+    .package-pricing__city-heading { flex-wrap: wrap; padding: 12px 16px; }
+    .package-pricing__year-row { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; padding: 12px 16px; }
+    .package-pricing__row-year { grid-column: 1 / -1; }
+    .package-pricing__empty { padding: 14px 16px; }
+}
+
+@media (hover: hover) and (pointer: fine) {
+    .package-pricing__year-add button:active:not(:focus-visible),
+    .package-pricing__row-year button:active:not(:focus-visible) { transform: scale(0.97); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .package-pricing__year-add button,
+    .package-pricing__row-year button { transition-duration: 0ms; }
+}
+
+.set-package-price-input {
+    width: 100%;
+    border: 0;
+    background: transparent;
+    padding: 0;
+    outline: none;
 }

@@ -21,6 +21,7 @@ export function useCreateInvoiceState(hasPreviewDraft: boolean) {
     const [mergeCustomPrice, setMergeCustomPrice] = useState(0);
 
     const [weddingDate, setWeddingDate] = useState('');
+    const [pricingCity, setPricingCity] = useState('');
     const [venue, setVenue] = useState('');
     const [clientName, setClientName] = useState('');
     const [clientPhone, setClientPhone] = useState('');
@@ -60,7 +61,7 @@ export function useCreateInvoiceState(hasPreviewDraft: boolean) {
         isManualInvoice, setIsManualInvoice, showSeqModal, setShowSeqModal, configLastValue, setConfigLastValue,
         selectedRowIds, setSelectedRowIds, showMergeModal, setShowMergeModal, mergeTitle, setMergeTitle,
         mergePriceMode, setMergePriceMode, showSaveConfirm, setShowSaveConfirm, mergeCustomPrice, setMergeCustomPrice,
-        weddingDate, setWeddingDate, venue, setVenue, clientName, setClientName, clientPhone, setClientPhone,
+        weddingDate, setWeddingDate, pricingCity, setPricingCity, venue, setVenue, clientName, setClientName, clientPhone, setClientPhone,
         eventTitle, setEventTitle, hours, setHours, notes, setNotes, showNotes, setShowNotes,
         showConfigSection, setShowConfigSection, showInvoiceDefaults, setShowInvoiceDefaults, showValidation, setShowValidation,
         activeTab, setActiveTab, bankName, setBankName, bankAcc, setBankAcc, bankHolder, setBankHolder,

@@ -12,6 +12,7 @@ import {
 
 import { PackageSidebar } from '../components/PackageSidebar';
 import { PackageCatalogModal } from '../components/PackageCatalogModal';
+import { SetPackagePriceModal } from '../components/SetPackagePriceModal';
 import { SequenceModal } from '../components/SequenceModal';
 import { MergeModal } from '../components/MergeModal';
 import { SaveConfirmModal } from '../components/SaveConfirmModal';
@@ -19,8 +20,9 @@ import { BillItems } from '../components/BillItems';
 import { PaymentDetails } from '../components/PaymentDetails';
 import { DatePicker } from '../components/DatePicker';
 import { TimeRangePicker } from '../components/TimeRangePicker';
+import { PricingCityPicker } from '../components/PricingCityPicker';
 import { compressImage } from '../utils/image';
-import { invoiceItemFromPackage, packageRowId, parsePackageBundleDescription } from '../lib/packageCatalog';
+import { canonicalPricingCity, eventPricingYear, invoiceItemFromPackage, packagePriceLabel, packageRowId, parsePackageBundleDescription, pricingCitiesFromPackages, resolvePackagePrice } from '../lib/packageCatalog';
 
 // Utility
 const safeNumber = (value: unknown, fallback = 0) => {
@@ -51,6 +53,7 @@ type InvoicePayload = {
     invoiceNo: string;
     venue: string;
     weddingDate: string;
+    pricingCity?: string;
     clientPhone: string;
     eventTitle: string;
     hours: string;
@@ -225,6 +228,7 @@ export default function CreateInvoice() {
     const editInvoiceKey = editId == null ? '' : String(editId);
     const [previewDraft] = useState<PreviewDraft | null>(restorePreviewDraft);
     const [showPackageCatalog, setShowPackageCatalog] = useState(false);
+    const [editingPricePackage, setEditingPricePackage] = useState<PackageData | null>(null);
     const [fillRemainingSnapshot, setFillRemainingSnapshot] = useState<number | null>(null);
 
     const {
@@ -232,7 +236,7 @@ export default function CreateInvoice() {
         isManualInvoice, setIsManualInvoice, showSeqModal, setShowSeqModal, configLastValue, setConfigLastValue,
         selectedRowIds, setSelectedRowIds, showMergeModal, setShowMergeModal, mergeTitle, setMergeTitle,
         mergePriceMode, setMergePriceMode, showSaveConfirm, setShowSaveConfirm, mergeCustomPrice, setMergeCustomPrice,
-        weddingDate, setWeddingDate, venue, setVenue, clientName, setClientName, clientPhone, setClientPhone,
+        weddingDate, setWeddingDate, pricingCity, setPricingCity, venue, setVenue, clientName, setClientName, clientPhone, setClientPhone,
         eventTitle, setEventTitle, hours, setHours, notes, setNotes, showNotes, setShowNotes,
         showConfigSection, setShowConfigSection, showInvoiceDefaults, setShowInvoiceDefaults, showValidation, setShowValidation,
         activeTab, setActiveTab, bankName, setBankName, bankAcc, setBankAcc, bankHolder, setBankHolder,
@@ -326,6 +330,7 @@ export default function CreateInvoice() {
             setClientName(draft.clientName || '');
             setVenue(draft.venue || '');
             setWeddingDate(draft.weddingDate || '');
+            setPricingCity(draft.pricingCity || '');
             setClientPhone(draft.clientPhone || '');
             setEventTitle(draft.eventTitle || '');
             setHours(draft.hours || '');
@@ -360,7 +365,7 @@ export default function CreateInvoice() {
         }, 0);
 
         return () => window.clearTimeout(timer);
-    }, [previewDraft, setBankAcc, setBankHolder, setBankName, setCartItems, setCashback, setClientName, setClientPhone, setEventTitle, setExistingProofUrls, setFooterAddress, setFooterEmail, setFooterIG, setFooterPhone, setHours, setInvoiceNo, setIsManualInvoice, setNotes, setPaymentProofs, setPaymentTerms, setTerms, setVenue, setWaTemplate, setWeddingDate]);
+    }, [previewDraft, setBankAcc, setBankHolder, setBankName, setCartItems, setCashback, setClientName, setClientPhone, setEventTitle, setExistingProofUrls, setFooterAddress, setFooterEmail, setFooterIG, setFooterPhone, setHours, setInvoiceNo, setIsManualInvoice, setNotes, setPaymentProofs, setPaymentTerms, setPricingCity, setTerms, setVenue, setWaTemplate, setWeddingDate]);
 
 
     // Fetch Packages & Sequence
@@ -373,13 +378,37 @@ export default function CreateInvoice() {
         },
         staleTime: 5 * 60 * 1000,
         gcTime: 30 * 60 * 1000,
-        refetchOnWindowFocus: false,
+        refetchOnWindowFocus: 'always',
         enabled: canAccessInvoiceForm,
     });
     const packages = useMemo(
         () => Array.isArray(packagesData) ? packagesData : [],
         [packagesData],
     );
+    const availablePricingCities = useMemo(() => pricingCitiesFromPackages(packages), [packages]);
+    const pricingYear = eventPricingYear(weddingDate);
+    const catalogPackages = useMemo(() => packages.map((pkg) => ({
+        ...pkg,
+        catalogPrice: resolvePackagePrice(pkg, pricingCity, pricingYear),
+        catalogPriceLabel: packagePriceLabel(pkg, pricingCity, pricingYear),
+    })), [packages, pricingCity, pricingYear]);
+    const canonicalCity = canonicalPricingCity(pricingCity, availablePricingCities);
+    const pricingContextLabel = pricingYear && canonicalCity
+        ? (pricingYear === 2026 ? '2026 · harga semua kota' : `${canonicalCity} · ${pricingYear}`)
+        : '';
+    const pricingContextReady = pricingYear !== null && canonicalCity !== null;
+    const pricingPromptLabel = !pricingYear && !canonicalCity
+        ? 'Tentukan Tanggal & Kota'
+        : !pricingYear ? 'Tentukan tanggal acara' : 'Pilih kota acara';
+    const openPricingField = () => {
+        setShowPackageCatalog(false);
+        const target = document.getElementById(pricingYear ? 'pricing-city' : 'event-date');
+        target?.scrollIntoView({ block: 'center' });
+        target?.focus();
+        target?.click();
+    };
+    const missingTariffs = pricingYear !== null && pricingYear >= 2027 && !!canonicalCity
+        && catalogPackages.some((pkg) => pkg.catalogPrice === null);
 
     // Fetch Sequence
     const seqQuery = useQuery<SequenceResponse | null>({
@@ -471,7 +500,23 @@ export default function CreateInvoice() {
     const addPackageToCart = (pkg: PackageData) => {
         const rowId = packageRowId(pkg);
         if (selectedCatalogIds.has(rowId)) return;
-        setCartItems((previous) => [...previous, invoiceItemFromPackage(pkg)]);
+        const price = resolvePackagePrice(pkg, pricingCity, pricingYear);
+        if (price === null) return;
+        setCartItems((previous) => [...previous, invoiceItemFromPackage(pkg, price)]);
+    };
+
+    const changePricingContext = (nextDate: string, nextCity: string) => {
+        const yearChanged = eventPricingYear(nextDate) !== pricingYear;
+        const cityChanged = canonicalPricingCity(nextCity, availablePricingCities) !== canonicalPricingCity(pricingCity, availablePricingCities);
+        const needsReselection = yearChanged || (cityChanged && pricingYear !== 2026);
+        if (needsReselection && selectedAvailableCatalogItems.length > 0) {
+            if (!window.confirm('Changing the tariff city or event year removes selected catalog packages. Choose them again with the new prices. Continue?')) return;
+            const removedIds = new Set(selectedAvailableCatalogItems.map((item) => item.id));
+            setCartItems((previous) => previous.filter((item) => !removedIds.has(item.id)));
+            setSelectedRowIds((previous) => new Set([...previous].filter((id) => !removedIds.has(id))));
+        }
+        setWeddingDate(nextDate);
+        setPricingCity(nextCity);
     };
 
     const removeFromCart = (rowId: string) => {
@@ -497,7 +542,10 @@ export default function CreateInvoice() {
         );
         const additions = packages
             .filter((pkg) => selectedIds.has(packageRowId(pkg)) && !previousIds.has(packageRowId(pkg)))
-            .map(invoiceItemFromPackage);
+            .flatMap((pkg) => {
+                const price = resolvePackagePrice(pkg, pricingCity, pricingYear);
+                return price === null ? [] : [invoiceItemFromPackage(pkg, price)];
+            });
 
         setCartItems((previous) => [
             ...previous.filter((item) => (
@@ -519,6 +567,46 @@ export default function CreateInvoice() {
         const addedCount = [...selectedIds].filter((id) => !previousIds.has(id)).length;
         const removedCount = [...previousIds].filter((id) => !selectedIds.has(id)).length;
         addToast(`Package catalog updated: ${addedCount} added, ${removedCount} removed`, 'success');
+    };
+
+    const configurePackagePrice = (pkg: PackageData, pendingSelectedIds?: Set<string>) => {
+        if (!hasPermission('manage_packages') || !pricingYear || !canonicalCity) return;
+        if (pendingSelectedIds) {
+            const selectionChanged = pendingSelectedIds.size !== selectedCatalogIds.size
+                || [...pendingSelectedIds].some((id) => !selectedCatalogIds.has(id));
+            if (selectionChanged) applyPackageCatalogSelection(pendingSelectedIds);
+        }
+        setShowPackageCatalog(false);
+        setEditingPricePackage(pkg);
+    };
+
+    const saveConfiguredPrice = async (price: number) => {
+        const pkg = editingPricePackage;
+        if (!pkg || !pricingYear || !canonicalCity) return;
+        const response = await fetchWithAuth(`/packages/${pkg.id}/price`, {
+            method: 'PATCH',
+            body: JSON.stringify({ city: canonicalCity, year: pricingYear, price }),
+        });
+        if (!response.ok) {
+            const result = await response.json().catch(() => null) as { error?: string } | null;
+            throw new Error(result?.error || 'Harga gagal disimpan. Coba lagi.');
+        }
+        queryClient.setQueryData<PackageData[]>(['packages'], (previous) => previous?.map((item) => item.id === pkg.id
+            ? {
+                ...item,
+                price: pricingYear === 2026 ? price : item.price,
+                prices: pricingYear === 2026 ? item.prices : [
+                    ...(item.prices ?? []).filter((entry) => !(entry.city.toLocaleLowerCase('id-ID') === canonicalCity.toLocaleLowerCase('id-ID') && entry.year === pricingYear)),
+                    { city: canonicalCity, year: pricingYear, price },
+                ],
+            }
+            : item));
+        void queryClient.invalidateQueries({ queryKey: ['packages'] });
+        if (!selectedCatalogIds.has(packageRowId(pkg))) {
+            setCartItems((previous) => [...previous, invoiceItemFromPackage(pkg, price)]);
+        }
+        setEditingPricePackage(null);
+        addToast('Harga disimpan dan paket ditambahkan ke invoice.', 'success');
     };
 
     const updateCartItem = <Key extends keyof InvoiceItem>(id: string, field: Key, value: InvoiceItem[Key]) => {
@@ -666,6 +754,7 @@ export default function CreateInvoice() {
                     const value = (keys: string[]) => legacyInvoiceValue(data, keys);
                     setVenue(String(value(['venue', 'eventVenue', 'event_venue', 'location']) ?? ''));
                     setWeddingDate(editDate(value(['weddingDate', 'wedding_date', 'eventDate', 'event_date']) ?? editInvoiceData.date));
+                    setPricingCity(String(value(['pricingCity']) ?? ''));
                     setClientPhone(String(value(['clientPhone', 'client_phone']) ?? ''));
                     setEventTitle(String(value(['eventTitle', 'event_title', 'title']) ?? ''));
                     setHours(String(value(['hours', 'eventTime', 'event_time', 'time']) ?? ''));
@@ -704,10 +793,10 @@ export default function CreateInvoice() {
         }, 0);
 
         return () => window.clearTimeout(timer);
-    }, [editInvoiceData, editDataLoaded, setBankAcc, setBankHolder, setBankName, setCartItems, setCashback, setClientName, setClientPhone, setEditDataLoaded, setEventTitle, setExistingProofUrls, setFooterAddress, setFooterEmail, setFooterIG, setFooterPhone, setHours, setInvoiceNo, setIsManualInvoice, setNotes, setPaymentTerms, setTerms, setVenue, setWaTemplate, setWeddingDate]);
+    }, [editInvoiceData, editDataLoaded, setBankAcc, setBankHolder, setBankName, setCartItems, setCashback, setClientName, setClientPhone, setEditDataLoaded, setEventTitle, setExistingProofUrls, setFooterAddress, setFooterEmail, setFooterIG, setFooterPhone, setHours, setInvoiceNo, setIsManualInvoice, setNotes, setPaymentTerms, setPricingCity, setTerms, setVenue, setWaTemplate, setWeddingDate]);
 
     const buildInvoicePayload = () => ({
-        clientName, invoiceNo: effectiveInvoiceNo, venue, weddingDate, clientPhone, eventTitle, hours, items: cartItems, paymentTerms: resolvedPaymentTerms, cashback, totalAmount: grandTotal, bankName, bankAcc, bankHolder, terms, footerAddress, footerEmail, footerIG, footerPhone, waTemplate, notes,
+        clientName, invoiceNo: effectiveInvoiceNo, venue, weddingDate, pricingCity, clientPhone, eventTitle, hours, items: cartItems, paymentTerms: resolvedPaymentTerms, cashback, totalAmount: grandTotal, bankName, bankAcc, bankHolder, terms, footerAddress, footerEmail, footerIG, footerPhone, waTemplate, notes,
         ...(!isEditMode ? { payment_proofs: JSON.stringify(existingProofUrls) } : {})
     });
 
@@ -911,19 +1000,43 @@ export default function CreateInvoice() {
     return (
         <div className="flex flex-col md:flex-row-reverse md:gap-0 h-screen overflow-hidden bg-[var(--bg-deep)] text-[var(--text-primary)]">
             <PackageSidebar 
-                packages={packages}
+                packages={catalogPackages}
+                pricingContextLabel={pricingContextLabel}
+                pricingContextReady={pricingContextReady}
+                pricingPromptLabel={pricingPromptLabel}
+                onCompletePricingContext={openPricingField}
+                missingTariffs={missingTariffs}
+                canManagePackages={hasPermission('manage_packages')}
                 selectedPackageIds={selectedCatalogIds}
                 onAdd={addPackageToCart}
+                onConfigurePrice={configurePackagePrice}
                 onRemove={removeFromCart}
                 onOpenCatalog={() => setShowPackageCatalog(true)}
             />
 
             {showPackageCatalog && (
                 <PackageCatalogModal
-                    packages={packages}
+                    packages={catalogPackages}
+                    pricingContextLabel={pricingContextLabel}
+                    pricingContextReady={pricingContextReady}
+                    pricingPromptLabel={pricingPromptLabel}
+                    onCompletePricingContext={openPricingField}
+                    missingTariffs={missingTariffs}
+                    canManagePackages={hasPermission('manage_packages')}
                     initialSelectedIds={selectedCatalogIds}
                     onApply={applyPackageCatalogSelection}
+                    onConfigurePrice={configurePackagePrice}
                     onClose={() => setShowPackageCatalog(false)}
+                />
+            )}
+
+            {editingPricePackage && pricingYear && canonicalCity && (
+                <SetPackagePriceModal
+                    pkg={editingPricePackage}
+                    city={canonicalCity}
+                    year={pricingYear}
+                    onSave={saveConfiguredPrice}
+                    onClose={() => setEditingPricePackage(null)}
                 />
             )}
 
@@ -943,7 +1056,7 @@ export default function CreateInvoice() {
                             <h2 className="text-xl font-medium tracking-tight text-[var(--text-primary)] font-display">Project Overview</h2>
                             <div className="label-xs text-[var(--accent)] mt-1">CLIENT & SESSION INFORMATION</div>
                         </div>
-                        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                        <div className="invoice-overview-fields grid grid-cols-1 md:grid-cols-3 gap-6">
                             {/* 1. Client Name (Slot 1) */}
                             <div className="space-y-1.5 text-left" id="client-name-section">
                                 <label htmlFor="client-name" className={FORM_LABEL_CLASS}>Client Name</label>
@@ -965,19 +1078,23 @@ export default function CreateInvoice() {
                                 {showValidation && !clientName && <p className="text-[10px] text-red-500 font-bold tracking-wide mt-1">This field is required</p>}
                             </div>
                             
-                            {/* 2. Venue / Location (Slot 2) */}
+                            {/* 2. One location field with separate city and venue values */}
                             <div className="space-y-1.5 text-left">
-                                <label htmlFor="event-venue" className={FORM_LABEL_CLASS}>Venue / Location</label>
-                                <input id="event-venue" name="venue" type="text" value={venue} onChange={(e) => setVenue(e.target.value)} className="w-full bg-transparent border border-[var(--border)] rounded-xl px-4 py-3 text-sm focus:border-[var(--accent)] outline-none transition-all font-display placeholder:opacity-50" placeholder="e.g. Ayana Bali, Rooftop Hall" />
+                                <label htmlFor="event-venue" className={FORM_LABEL_CLASS}>Location / Venue</label>
+                                <div className="event-location-combo relative grid h-[48px] w-full items-center rounded-xl border border-[var(--border)] bg-transparent px-4 transition-colors focus-within:border-[var(--accent)]">
+                                    <PricingCityPicker value={pricingCity} cities={availablePricingCities} onChange={(city) => changePricingContext(weddingDate, city)} />
+                                    <span aria-hidden="true" className="event-location-divider h-5 w-px bg-[var(--border)]" />
+                                    <input id="event-venue" className="event-venue-input" name="venue" type="text" value={venue} onChange={(event) => setVenue(event.target.value)} placeholder="Nama venue" />
+                                </div>
                             </div>
 
                             {/* 3. Event Date (Slot 3) */}
                             <div className="space-y-1.5 text-left">
                                 <label htmlFor="event-date" className={FORM_LABEL_CLASS}>Event Date</label>
-                                <DatePicker id="event-date" name="eventDate" value={weddingDate} onChange={setWeddingDate} />
+                                <DatePicker id="event-date" name="eventDate" value={weddingDate} onChange={(value) => changePricingContext(value, pricingCity)} />
                             </div>
 
-                            {/* 4. WhatsApp (Slot 4) */}
+                            {/* 4. WhatsApp */}
                             <div className="space-y-1.5 text-left">
                                 <label htmlFor="client-phone" className={FORM_LABEL_CLASS}>WhatsApp / Phone</label>
                                 <input id="client-phone" name="clientPhone" type="tel" autoComplete="tel" value={clientPhone} onChange={(e) => setClientPhone(e.target.value.replace(/[^0-9]/g, ''))} className="w-full bg-transparent border border-[var(--border)] rounded-xl px-4 py-3 text-sm focus:border-[var(--accent)] outline-none transition-all font-display" placeholder="62..." />

@@ -14,6 +14,8 @@ import {
     SEARCH_INPUT_CLASS,
 } from '../constants/uiContract';
 import { FORM_LABEL_CLASS, PANEL_CARD_CLASS } from '../constants/invoice';
+import { PRICING_CITIES } from '../lib/packageCatalog';
+import type { PackagePrice } from '../types/invoice';
 
 // ============ TYPES ============
 interface PackageData {
@@ -23,6 +25,7 @@ interface PackageData {
     category: string;
     description: string;
     isActive: number;
+    prices: PackagePrice[];
 }
 
 interface BundleItem {
@@ -33,8 +36,9 @@ interface BundleItem {
 interface PackageInput {
     name: string;
     category: string;
-    price: number;
     description: string;
+    price: number;
+    prices: PackagePrice[];
 }
 
 const errorMessage = (error: unknown) => error instanceof Error ? error.message : String(error);
@@ -117,6 +121,13 @@ function generateBundleDescription(items: BundleItem[]): string {
 
 // ============ UTILS ============
 const formatPrice = (n: number) => new Intl.NumberFormat('id-ID').format(n);
+const lowestPrice = (pkg: PackageData) => {
+    const prices = [
+        ...(pkg.price > 0 || (pkg.price === 0 && pkg.category === 'Free / Complimentary') ? [pkg.price] : []),
+        ...pkg.prices.filter((entry) => entry.year >= 2027).map((entry) => entry.price),
+    ];
+    return prices.length ? Math.min(...prices) : -1;
+};
 
 async function fetchJSON<T>(url: string, init?: RequestInit): Promise<T> {
     const res = await fetchWithAuth(url, init);
@@ -212,9 +223,9 @@ export default function PackagesPage() {
             data = data.filter(p => p.name.toLowerCase().includes(q) || p.description.toLowerCase().includes(q));
         }
 
-        return data.sort((a, b) => {
-            if (sort === 'price-desc') return b.price - a.price;
-            if (sort === 'price-asc') return a.price - b.price;
+        return [...data].sort((a, b) => {
+            if (sort === 'price-desc') return lowestPrice(b) - lowestPrice(a);
+            if (sort === 'price-asc') return lowestPrice(a) - lowestPrice(b);
             return a.name.localeCompare(b.name);
         });
     }, [packages, filter, search, sort]);
@@ -492,7 +503,7 @@ const PricingCard = memo(function PricingCard({ pkg, canManage, canDelete, onEdi
     const isActive = pkg.isActive === 1;
     const lines = useMemo(() => pkg.description.split('\n').filter(Boolean), [pkg.description]);
     const formattedTitle = useMemo(() => pkg.name.split(' ').map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase()).join(' '), [pkg.name]);
-    const priceText = useMemo(() => formatPrice(pkg.price), [pkg.price]);
+    const minPrice = lowestPrice(pkg);
 
     const isBundle = pkg.category === "Bundling Package" || pkg.description.includes('**');
     const bundleSections = useMemo(() => isBundle ? parseBundleDescription(pkg.description) : [], [isBundle, pkg.description]);
@@ -519,9 +530,12 @@ const PricingCard = memo(function PricingCard({ pkg, canManage, canDelete, onEdi
                     </span>
                 </div>
 
-                <div className="flex items-baseline gap-1.5 pt-1">
-                    <span className="label-xs text-[var(--accent)] opacity-60 tracking-[0.2em]">IDR</span>
-                    <span className="text-3xl text-[var(--accent)] font-semibold tracking-tight font-display">{priceText}</span>
+                <div className="pt-1">
+                    <div className="text-lg text-[var(--accent)] font-semibold tracking-tight font-display">
+                        {minPrice >= 0 ? `From Rp ${formatPrice(minPrice)}` : 'Tarif belum diisi'}
+                    </div>
+                    {pkg.price > 0 && <div className="mt-1 text-xs text-[var(--text-muted)]">2026 (semua kota): Rp {formatPrice(pkg.price)}</div>}
+                    {pkg.prices.some((entry) => entry.year >= 2027) && <div className="mt-1 text-xs text-[var(--text-muted)]">{pkg.prices.filter((entry) => entry.year >= 2027).length} tarif kota/tahun</div>}
                 </div>
             </div>
 
@@ -688,9 +702,17 @@ const FormModal = memo(function FormModal({ pkg, cat, onClose, onSubmit, loading
     const [formData, setFormData] = useState({
         name: pkg?.name || '',
         category: initialCategory,
-        price: pkg?.price || 0,
         description: initialDesc
     });
+    const [years, setYears] = useState<number[]>(() => pkg
+        ? [...new Set(pkg.prices.filter((entry) => entry.year >= 2027).map((entry) => entry.year))].sort((a, b) => a - b)
+        : [2027]);
+    const [newYear, setNewYear] = useState('');
+    const [price2026Draft, setPrice2026Draft] = useState(() => pkg ? String(pkg.price) : '');
+    const [priceDraft, setPriceDraft] = useState<Record<string, string>>(() => Object.fromEntries(
+        (pkg?.prices || []).map((entry) => [`${entry.city}:${entry.year}`, String(entry.price)]),
+    ));
+    const [priceError, setPriceError] = useState('');
 
     const [modalTab, setModalTab] = useState<'editor' | 'preview'>('editor');
 
@@ -760,21 +782,66 @@ const FormModal = memo(function FormModal({ pkg, cat, onClose, onSubmit, loading
     const previewMockPackage: PackageData = useMemo(() => ({
         id: 0,
         name: formData.name || 'Package Preview Name',
-        price: formData.price || 0,
+        price: Number(price2026Draft || 0),
         category: formData.category,
         description: previewDescription,
-        isActive: 1
-    }), [formData.name, formData.price, formData.category, previewDescription]);
+        isActive: 1,
+        prices: Object.entries(priceDraft).filter(([, value]) => value !== '').map(([key, value]) => {
+            const [city, year] = key.split(':');
+            return { city, year: Number(year), price: Number(value) };
+        }),
+    }), [formData.name, formData.category, price2026Draft, previewDescription, priceDraft]);
 
     const handleSubmit = () => {
+        if (!formData.name.trim()) {
+            setPriceError('Enter a package name.');
+            return;
+        }
+        const price2026 = Number(price2026Draft);
+        if (price2026Draft === '' || !Number.isSafeInteger(price2026) || price2026 < 0 || (price2026 === 0 && formData.category !== 'Free / Complimentary')) {
+            setPriceError('Isi harga 2026. Rp 0 hanya untuk paket Free / Complimentary.');
+            return;
+        }
+        const prices = Object.entries(priceDraft).filter(([, value]) => value !== '').map(([key, value]) => {
+            const [city, year] = key.split(':');
+            return { city, year: Number(year), price: Number(value) };
+        });
+        if (prices.some((entry) => !Number.isSafeInteger(entry.price) || entry.price < 0)) {
+            setPriceError('Enter a valid whole IDR amount for each tariff.');
+            return;
+        }
+        setPriceError('');
         const finalDescription = (isBundleCat && editorMode === 'builder')
             ? generateBundleDescription(bundleItems)
             : formData.description;
 
         onSubmit({
             ...formData,
-            description: finalDescription
+            price: price2026,
+            description: finalDescription,
+            prices,
         });
+    };
+
+    const removeYear = (year: number) => {
+        const hasPrices = PRICING_CITIES.some((city) => priceDraft[`${city}:${year}`] !== undefined && priceDraft[`${city}:${year}`] !== '');
+        if (hasPrices && !window.confirm(`Hapus semua harga tahun ${year} dari paket ini? Perubahan disimpan saat paket di-update.`)) return;
+        setYears((current) => current.filter((item) => item !== year));
+        setPriceDraft((current) => Object.fromEntries(
+            Object.entries(current).filter(([key]) => !key.endsWith(`:${year}`)),
+        ));
+        setPriceError('');
+    };
+
+    const addYear = () => {
+        const year = Number(newYear);
+        if (!Number.isInteger(year) || year < 2027 || year > 2100 || years.includes(year)) {
+            setPriceError('Masukkan tahun baru antara 2027 dan 2100 yang belum ada.');
+            return;
+        }
+        setYears((current) => [...current, year].sort((a, b) => a - b));
+        setNewYear('');
+        setPriceError('');
     };
 
     return (
@@ -849,22 +916,97 @@ const FormModal = memo(function FormModal({ pkg, cat, onClose, onSubmit, loading
                                     options={CATEGORIES}
                                     onChange={handleCategoryChange}
                                 />
-                                <div className="group/field">
-                                    <label htmlFor="package-price" className={FORM_LABEL_CLASS + " mb-2"}>Price (IDR)</label>
-                                    <div className="relative">
-                                        <span className="absolute left-5 top-1/2 -translate-y-1/2 label-xs font-bold text-[var(--accent)] opacity-60 pointer-events-none">IDR</span>
+                            </div>
+
+                            <section className="package-pricing" aria-labelledby="package-pricing-title">
+                                <div className="package-pricing__heading">
+                                    <span id="package-pricing-title" className="package-pricing__eyebrow">Harga Paket</span>
+                                    <span className="package-pricing__heading-rule" aria-hidden="true" />
+                                </div>
+
+                                <div className="package-pricing__base">
+                                    <div className="package-pricing__base-copy">
+                                        <label htmlFor="package-price-2026" className="package-pricing__year">2026</label>
+                                        <span className="package-pricing__subtext">Satu harga untuk semua kota</span>
+                                    </div>
+                                    <div className="package-pricing__amount">
+                                        <span aria-hidden="true">Rp</span>
                                         <input
-                                            id="package-price"
-                                            name="packagePrice"
-                                            aria-label="Package Price in IDR"
-                                            className="w-full bg-[var(--bg-elevated)]/50 border border-[var(--border)] rounded-2xl pl-14 pr-5 py-4 text-base font-semibold text-[var(--text-primary)] font-display text-right outline-none focus:border-[var(--accent)] focus:bg-[var(--bg-elevated)] transition-colors tracking-tight placeholder:text-[var(--text-muted)] placeholder:text-xs placeholder:opacity-50"
-                                            value={formData.price > 0 ? formData.price.toLocaleString('id-ID') : ''}
-                                            onChange={e => setFormData({ ...formData, price: Number(e.target.value.replace(/\D/g, '')) })}
+                                            id="package-price-2026"
+                                            name="price2026"
+                                            type="text"
+                                            inputMode="numeric"
+                                            autoComplete="off"
+                                            aria-label="Harga 2026 (semua kota)"
+                                            value={price2026Draft === '' ? '' : Number(price2026Draft).toLocaleString('id-ID')}
+                                            onChange={(event) => setPrice2026Draft(event.target.value.replace(/\D/g, ''))}
                                             placeholder="0"
                                         />
                                     </div>
                                 </div>
-                            </div>
+
+                                <div className="package-pricing__city-heading">
+                                    <div className="package-pricing__city-copy">
+                                        <span className="package-pricing__section-title">Tarif per kota</span>
+                                        <span className="package-pricing__subtext">Mulai 2027</span>
+                                    </div>
+                                    <div className="package-pricing__year-add">
+                                        <input
+                                            type="text"
+                                            inputMode="numeric"
+                                            maxLength={4}
+                                            name="tariffYear"
+                                            autoComplete="off"
+                                            value={newYear}
+                                            onChange={(event) => setNewYear(event.target.value.replace(/\D/g, ''))}
+                                            onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); addYear(); } }}
+                                            aria-label="New tariff year"
+                                            placeholder="2027"
+                                        />
+                                        <button type="button" onClick={addYear} aria-label="Add Year" title="Tambah tahun tarif">
+                                            <Plus size={14} aria-hidden="true" />
+                                            <span>Tambah Tahun</span>
+                                        </button>
+                                    </div>
+                                </div>
+
+                                {years.length > 0 ? (
+                                    <div className="package-pricing__years">
+                                        {years.map((year) => (
+                                            <div key={year} className="package-pricing__year-row" role="group" aria-label={`Tarif ${year}`}>
+                                                <div className="package-pricing__row-year">
+                                                    <span>{year}</span>
+                                                    <button type="button" onClick={() => removeYear(year)} aria-label={`Delete ${year} tariffs`} title={`Hapus tarif ${year}`}>
+                                                        <Trash2 size={14} aria-hidden="true" />
+                                                    </button>
+                                                </div>
+                                                {PRICING_CITIES.map((city) => (
+                                                    <div key={city} className="package-pricing__city-field">
+                                                        <label htmlFor={`price-${city.toLowerCase()}-${year}`}>{city}</label>
+                                                        <div className="package-pricing__city-amount">
+                                                            <span aria-hidden="true">Rp</span>
+                                                            <input
+                                                                id={`price-${city.toLowerCase()}-${year}`}
+                                                                type="text"
+                                                                inputMode="numeric"
+                                                                autoComplete="off"
+                                                                name={`price-${city.toLowerCase()}-${year}`}
+                                                                aria-label={`${city} ${year} price`}
+                                                                value={priceDraft[`${city}:${year}`] === undefined ? '' : Number(priceDraft[`${city}:${year}`]).toLocaleString('id-ID')}
+                                                                onChange={(event) => setPriceDraft((current) => ({ ...current, [`${city}:${year}`]: event.target.value.replace(/\D/g, '') }))}
+                                                                placeholder="Belum diisi"
+                                                            />
+                                                        </div>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        ))}
+                                    </div>
+                                ) : (
+                                    <p className="package-pricing__empty">Belum ada tarif per kota. Tambahkan tahun untuk mulai mengisi.</p>
+                                )}
+                                {priceError && <p role="alert" className="package-pricing__error">{priceError}</p>}
+                            </section>
 
                             {/* BUNDLE / DETAILS SECTION HEADER */}
                             <div className="space-y-4 pt-2">

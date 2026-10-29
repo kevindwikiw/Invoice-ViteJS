@@ -1,4 +1,4 @@
-import { sqliteTable, integer, text, real, blob } from "drizzle-orm/sqlite-core";
+import { sqliteTable, integer, text, real, blob, primaryKey } from "drizzle-orm/sqlite-core";
 import { sql } from "drizzle-orm";
 
 export const packages = sqliteTable("packages", {
@@ -9,6 +9,13 @@ export const packages = sqliteTable("packages", {
     description: text("description"),
     isActive: integer("is_active").default(1),
 });
+
+export const packagePrices = sqliteTable("package_prices", {
+    packageId: integer("package_id").notNull(),
+    city: text("city").notNull(),
+    year: integer("year").notNull(),
+    price: integer("price").notNull(),
+}, (table) => [primaryKey({ columns: [table.packageId, table.city, table.year] })]);
 
 export const invoices = sqliteTable("invoices", {
     id: integer("id").primaryKey({ autoIncrement: true }),

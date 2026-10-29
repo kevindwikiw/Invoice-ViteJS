@@ -23,4 +23,13 @@ export interface PackageData {
     price: number;
     description: string;
     category: string;
+    prices?: PackagePrice[];
 }
+
+export interface PackagePrice {
+    city: string;
+    year: number;
+    price: number;
+}
+
+export type CatalogPackage = PackageData & { catalogPrice: number | null; catalogPriceLabel: string };

@@ -23,7 +23,7 @@ const legacy = {
 beforeAll(() => {
     sqlite!.exec(`CREATE TABLE invoices (id INTEGER PRIMARY KEY, invoice_no TEXT, client_name TEXT, date TEXT, total_amount REAL,
         invoice_data TEXT, payment_proofs TEXT, is_archived INTEGER DEFAULT 0, created_at TEXT DEFAULT CURRENT_TIMESTAMP, updated_at TEXT);
-        CREATE TABLE user_permissions (user_id INTEGER, permission_key TEXT, effect TEXT);
+        CREATE TABLE IF NOT EXISTS user_permissions (user_id INTEGER, permission_key TEXT, effect TEXT);
         CREATE TABLE invoice_activity_logs (id INTEGER PRIMARY KEY, invoice_id INTEGER, action TEXT, actor_id INTEGER,
         actor_email TEXT, actor_name TEXT, actor_role TEXT, details TEXT, ip_address TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP);
         CREATE TABLE sequences (name TEXT, prefix TEXT, padding INTEGER, last_value INTEGER);`);
@@ -75,6 +75,25 @@ test("new-format invoice retains its fields while only the revision date changes
     expect(invoice.updatedAt).toBeTruthy();
     expect(JSON.parse(invoice.invoiceData).customField).toBe("keep");
     expect(JSON.parse(invoice.paymentProofs)).toEqual([]);
+});
+
+test("invoice retains the selected package price and tariff city", async () => {
+    const response = await app.request("/invoices/1", {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+            invoiceNo: "INV1", clientName: "Couple", venue: "Ballroom", weddingDate: "2027-06-12",
+            pricingCity: "Jakarta", items: [{ id: "item_7", desc: "Best Offer", price: 17_000_000, qty: 1, _rowId: "7" }],
+            paymentTerms: [], cashback: 0,
+        }),
+    });
+    expect(response.status).toBe(200);
+    const invoice = await (await app.request("/invoices/1")).json() as { invoiceData: string; totalAmount: number };
+    const data = JSON.parse(invoice.invoiceData);
+    expect(data.pricingCity).toBe("Jakarta");
+    expect(data.venue).toBe("Ballroom");
+    expect(data.items[0].price).toBe(17_000_000);
+    expect(invoice.totalAmount).toBe(17_000_000);
 });
 
 test("invalid stored JSON refuses an update", async () => {

@@ -1,26 +1,36 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Check, ChevronLeft, ChevronRight, Package, Search, X } from 'lucide-react';
+import { CalendarDays, Check, ChevronLeft, ChevronRight, Package, Search, X } from 'lucide-react';
 import clsx from 'clsx';
 
 import { CATEGORIES, CATEGORY_LABELS } from '../constants/invoice';
 import { packageCategoryTone, packageDisplayName, packageRowId } from '../lib/packageCatalog';
-import type { PackageData } from '../types/invoice';
+import type { CatalogPackage } from '../types/invoice';
 
 interface PackageCatalogModalProps {
-    packages: PackageData[];
+    packages: CatalogPackage[];
+    pricingContextLabel: string;
+    pricingContextReady: boolean;
+    pricingPromptLabel: string;
+    onCompletePricingContext: () => void;
+    missingTariffs: boolean;
+    canManagePackages: boolean;
+    onConfigurePrice: (pkg: CatalogPackage, selectedIds: Set<string>) => void;
     initialSelectedIds: Set<string>;
     onApply: (selectedIds: Set<string>) => void;
     onClose: () => void;
 }
 
 interface PackageOptionProps {
-    pkg: PackageData;
+    pkg: CatalogPackage;
+    pricingContextReady: boolean;
+    canManagePackages: boolean;
     checked: boolean;
     onToggle: (id: string) => void;
+    onConfigurePrice: (pkg: CatalogPackage) => void;
 }
 
-function PackageOption({ pkg, checked, onToggle }: PackageOptionProps) {
+function PackageOption({ pkg, pricingContextReady, canManagePackages, checked, onToggle, onConfigurePrice }: PackageOptionProps) {
     const rowId = packageRowId(pkg);
     const details = pkg.description
         .split('\n')
@@ -28,12 +38,14 @@ function PackageOption({ pkg, checked, onToggle }: PackageOptionProps) {
         .filter(Boolean);
 
     return (
-        <label
+        <div
             className={clsx(
-                'group block cursor-pointer border-b border-[var(--border)]/60 px-4 py-4 transition-colors last:border-b-0',
+                'relative border-b border-[var(--border)]/60 transition-colors last:border-b-0',
+                pkg.catalogPrice === null && !checked ? (pricingContextReady && !canManagePackages ? 'cursor-not-allowed opacity-55' : 'cursor-default') : 'cursor-pointer',
                 checked ? 'bg-[var(--accent)]/[0.07]' : 'hover:bg-[var(--bg-elevated)]/40',
             )}
         >
+          <label className="group block px-4 py-4">
             <div className="flex items-start gap-3">
                 <span
                     className={clsx(
@@ -48,19 +60,20 @@ function PackageOption({ pkg, checked, onToggle }: PackageOptionProps) {
                 <input
                     type="checkbox"
                     checked={checked}
+                    disabled={pkg.catalogPrice === null && !checked}
                     onChange={() => onToggle(rowId)}
                     className="sr-only"
                     aria-label={`${checked ? 'Remove' : 'Add'} ${pkg.name}`}
                 />
 
                 <div className="min-w-0 flex-1">
-                    <div className="grid grid-cols-[minmax(0,1fr)_7.25rem] items-start gap-x-4">
+                    <div className={clsx('grid items-start gap-x-4', pricingContextReady ? 'grid-cols-[minmax(0,1fr)_7.25rem]' : 'grid-cols-1')}>
                         <h3 className="min-w-0 break-words font-display text-[15px] font-medium normal-case leading-[1.35] tracking-[-0.01em] text-[var(--text-primary)] [overflow-wrap:anywhere]">
                             {packageDisplayName(pkg.name)}
                         </h3>
-                        <span className="w-[7.25rem] whitespace-nowrap text-right text-sm font-semibold tabular-nums text-[var(--accent)]">
-                            Rp {pkg.price.toLocaleString('id-ID')}
-                        </span>
+                        {pricingContextReady && <span className={clsx('w-[7.25rem] text-right text-xs font-semibold leading-snug tabular-nums', pkg.catalogPrice === null ? 'text-[var(--text-muted)]' : 'text-[var(--accent)]')}>
+                            {pkg.catalogPriceLabel}
+                        </span>}
                     </div>
                     {details.length > 0 && (
                         <div className="mt-2 space-y-1">
@@ -79,12 +92,25 @@ function PackageOption({ pkg, checked, onToggle }: PackageOptionProps) {
                     )}
                 </div>
             </div>
-        </label>
+          </label>
+          {pricingContextReady && pkg.catalogPrice === null && !checked && canManagePackages && (
+              <button type="button" onClick={() => onConfigurePrice(pkg)} className="absolute right-4 top-12 rounded-md border border-[var(--accent)]/40 bg-[var(--bg-card)] px-2.5 py-1 text-[10px] font-semibold text-[var(--accent)] transition-colors hover:bg-[var(--accent)]/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]">
+                  Isi harga
+              </button>
+          )}
+        </div>
     );
 }
 
 export function PackageCatalogModal({
     packages,
+    pricingContextLabel,
+    pricingContextReady,
+    pricingPromptLabel,
+    onCompletePricingContext,
+    missingTariffs,
+    canManagePackages,
+    onConfigurePrice,
     initialSelectedIds,
     onApply,
     onClose,
@@ -128,10 +154,10 @@ export function PackageCatalogModal({
     }, [normalizedSearch, packages]);
 
     const packagesByCategory = useMemo(() => {
-        const grouped = new Map<string, PackageData[]>();
+        const grouped = new Map<string, CatalogPackage[]>();
         availableCategories.forEach((category) => grouped.set(category, []));
         filteredPackages.forEach((pkg) => grouped.get(pkg.category)?.push(pkg));
-        grouped.forEach((items) => items.sort((a, b) => b.price - a.price));
+        grouped.forEach((items) => items.sort((a, b) => (b.catalogPrice ?? -1) - (a.catalogPrice ?? -1)));
         return grouped;
     }, [availableCategories, filteredPackages]);
 
@@ -142,7 +168,7 @@ export function PackageCatalogModal({
     const removedCount = [...initialAvailableSelection].filter((id) => !draftSelectedIds.has(id)).length;
     const changeCount = addedCount + removedCount;
     const selectedTotal = packages.reduce(
-        (total, pkg) => total + (draftSelectedIds.has(packageRowId(pkg)) ? pkg.price : 0),
+        (total, pkg) => total + (draftSelectedIds.has(packageRowId(pkg)) ? (pkg.catalogPrice ?? 0) : 0),
         0,
     );
 
@@ -203,6 +229,8 @@ export function PackageCatalogModal({
     }, [normalizedSearch, selectedCategories]);
 
     const togglePackage = (id: string) => {
+        const pkg = packages.find((item) => packageRowId(item) === id);
+        if (pkg?.catalogPrice === null && !draftSelectedIds.has(id)) return;
         setDraftSelectedIds((previous) => {
             const next = new Set(previous);
             if (next.has(id)) next.delete(id);
@@ -253,9 +281,12 @@ export function PackageCatalogModal({
                             <h2 id="package-catalog-title" className="font-display text-2xl font-medium tracking-tight sm:text-3xl">
                                 Package Catalog
                             </h2>
-                            <p className="label-xs mt-1 text-[var(--accent)]">
-                                Select services for this invoice
-                            </p>
+                            {pricingContextReady ? <p className="label-xs mt-1 text-[var(--accent)]">{pricingContextLabel}</p> : (
+                                <button type="button" onClick={onCompletePricingContext} className="mt-2 inline-flex items-center gap-1.5 rounded-md text-xs font-medium text-[var(--accent)] transition-colors hover:opacity-75 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]">
+                                    <CalendarDays size={13} aria-hidden="true" />{pricingPromptLabel}
+                                </button>
+                            )}
+                            {missingTariffs && !canManagePackages && <p className="mt-2 text-xs text-[var(--text-muted)]">Minta admin mengatur harga paket</p>}
                         </div>
                         <button
                             type="button"
@@ -361,8 +392,11 @@ export function PackageCatalogModal({
                                 <PackageOption
                                     key={pkg.id}
                                     pkg={pkg}
+                                    pricingContextReady={pricingContextReady}
+                                    canManagePackages={canManagePackages}
                                     checked={draftSelectedIds.has(packageRowId(pkg))}
                                     onToggle={togglePackage}
+                                    onConfigurePrice={(target) => onConfigurePrice(target, draftSelectedIds)}
                                 />
                             ))}
                         </div>
@@ -427,8 +461,11 @@ export function PackageCatalogModal({
                                                 <PackageOption
                                                     key={pkg.id}
                                                     pkg={pkg}
+                                                    pricingContextReady={pricingContextReady}
+                                                    canManagePackages={canManagePackages}
                                                     checked={draftSelectedIds.has(packageRowId(pkg))}
                                                     onToggle={togglePackage}
+                                                    onConfigurePrice={(target) => onConfigurePrice(target, draftSelectedIds)}
                                                 />
                                             ))}
                                         </div>
