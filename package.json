@@ -4,8 +4,7 @@
   "packageManager": "bun@1.4.4",
   "workspaces": [
     "client",
-    "server",
-    "marketing"
+    "server"
   ],
   "overrides": {
     "esbuild": ">=0.25.4"
@@ -13,11 +12,9 @@
   "scripts": {
     "dev:client": "bun --cwd client dev",
     "dev:server": "bun --cwd server dev",
-    "dev:marketing": "bun --cwd marketing dev",
     "build": "bun --cwd client build",
-    "build:marketing": "bun --cwd marketing build",
     "lint": "bun --cwd client lint",
-    "typecheck": "bun --cwd client typecheck && bun --cwd server tsc --noEmit && bun --cwd marketing typecheck",
+    "typecheck": "bun --cwd client typecheck && bun --cwd server tsc --noEmit",
     "test": "bun --cwd client test:smoke"
   }
 }
