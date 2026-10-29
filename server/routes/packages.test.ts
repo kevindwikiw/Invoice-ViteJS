@@ -20,6 +20,18 @@ beforeAll(() => {
 
 beforeEach(() => sqlite!.exec("DELETE FROM package_prices; DELETE FROM packages"));
 
+test("legacy packages remain visible before the price table migration", async () => {
+    sqlite!.exec("INSERT INTO packages (name, price, category, description) VALUES ('Best Offer', 14500000, 'Wedding', 'Coverage')");
+    sqlite!.exec("DROP TABLE package_prices");
+    try {
+        const response = await request("GET", "/packages");
+        expect(response.status).toBe(200);
+        expect(await response.json()).toMatchObject([{ name: "Best Offer", price: 14500000, prices: [] }]);
+    } finally {
+        sqlite!.exec("CREATE TABLE package_prices (package_id INTEGER NOT NULL, city TEXT NOT NULL, year INTEGER NOT NULL, price INTEGER NOT NULL, PRIMARY KEY (package_id, city, year))");
+    }
+});
+
 const request = (method: string, path: string, body?: unknown) => app.request(path, {
     method,
     headers: { "content-type": "application/json" },

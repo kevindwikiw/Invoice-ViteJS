@@ -265,7 +265,14 @@ export default function PackagesPage() {
 
     return (
         <div className={`${PAGE_SHELL_CLASS} text-[var(--text-primary)]`}>
-            {isLoading ? (
+            {query.isError ? (
+                <div className="mx-auto flex min-h-72 max-w-lg flex-col items-center justify-center rounded-xl border border-[var(--border)] bg-[var(--bg-card)] px-6 text-center">
+                    <Package size={28} className="mb-4 text-[var(--text-muted)]" />
+                    <h2 className="font-display text-xl text-[var(--text-primary)]">Paket gagal dimuat</h2>
+                    <p className="mt-2 text-sm text-[var(--text-muted)]">Data paket belum bisa diambil. Coba lagi sebentar.</p>
+                    <button type="button" onClick={() => void query.refetch()} className="mt-5 rounded-lg border border-[var(--border)] px-4 py-2 text-sm font-semibold text-[var(--text-primary)] hover:bg-[var(--bg-elevated)]">Coba lagi</button>
+                </div>
+            ) : isLoading ? (
                 <div className="h-96 flex items-center justify-center">
                     <Loader2 className="animate-spin text-[var(--accent)]" size={32} />
                 </div>

@@ -6,6 +6,13 @@ const packagesRouter = new Hono();
 type PackagePrice = { city: string; year: number; price: number };
 type PackageInput = { name: string; category: string; description: string; prices?: PackagePrice[]; price?: number };
 
+function isMissingPriceTable(error: unknown): boolean {
+    if (!error || typeof error !== "object") return false;
+    const databaseError = error as { code?: string; message?: string };
+    return databaseError.code === "42P01" && /package_prices/.test(databaseError.message ?? "")
+        || /no such table: package_prices/i.test(databaseError.message ?? "");
+}
+
 function parseInput(value: unknown): PackageInput {
     if (!value || typeof value !== "object") throw new Error("Invalid package data");
     const input = value as Record<string, unknown>;
@@ -89,14 +96,18 @@ packagesRouter.get("/", async (c) => {
         const includeAll = c.req.query("all") === "true";
         if (includeAll && !await canManagePackages(c)) return c.json({ error: "Permission denied" }, 403);
         const where = includeAll ? "" : " WHERE is_active = 1";
-        const [packages, prices] = await Promise.all([
-            all<{ id: number; name: string; price: number; category: string; description: string; isActive: number }>(
-                `SELECT id, name, price, category, description, is_active as "isActive" FROM packages${where} ORDER BY id DESC`,
-            ),
-            all<{ packageId: number; city: string; year: number; price: number }>(
+        const packages = await all<{ id: number; name: string; price: number; category: string; description: string; isActive: number }>(
+            `SELECT id, name, price, category, description, is_active as "isActive" FROM packages${where} ORDER BY id DESC`,
+        );
+        let prices: Array<{ packageId: number; city: string; year: number; price: number }> = [];
+        try {
+            prices = await all<{ packageId: number; city: string; year: number; price: number }>(
                 `SELECT pp.package_id as "packageId", pp.city, pp.year, pp.price FROM package_prices pp JOIN packages p ON p.id = pp.package_id${includeAll ? "" : " WHERE p.is_active = 1"} ORDER BY pp.year, pp.city`,
-            ),
-        ]);
+            );
+        } catch (error) {
+            if (!isMissingPriceTable(error)) throw error;
+            console.warn("package_prices is missing; returning legacy packages without city tariffs. Apply migration 004_package_prices.sql.");
+        }
         const byPackage = new Map<number, PackagePrice[]>();
         for (const { packageId, city, year, price } of prices) {
             const entries = byPackage.get(packageId) ?? [];
