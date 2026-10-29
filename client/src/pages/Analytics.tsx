@@ -247,8 +247,27 @@ const RevenueChart = memo(({ data, target }: { data: { month: string; amount: nu
 });
 
 // === HEATMAP COMPONENT (Optimized 60FPS Render) ===
+type CalendarDay = { date: Date; iso: string; data: { count: number; items: Booking[] } };
+
+function CalendarDayDetails({ day }: { day: CalendarDay }) {
+    return <>
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--border)]/60 pb-2">
+            <span className="label-xs font-display font-bold text-[var(--accent)]">{day.date.toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' })}</span>
+            <span className={clsx('label-2xs rounded-full px-2 py-0.5 font-bold', day.data.count > 0 ? 'border border-emerald-500/20 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400' : 'text-[var(--text-muted)]')}>
+                {day.data.count > 0 ? `${day.data.count} ${day.data.count === 1 ? 'Booking' : 'Bookings'}` : 'Available'}
+            </span>
+        </div>
+        {day.data.count === 0 ? <p className="pt-2 text-center text-[11px] text-[var(--text-muted)]">No events booked for this date</p> :
+            <div className="space-y-2 pt-2">{day.data.items.map((item) => <div key={item.id} className="min-w-0 space-y-1">
+                <div className="flex min-w-0 items-start justify-between gap-3 text-xs font-bold text-[var(--text-primary)]"><span className="min-w-0 break-words font-display">{item.client_name}</span><span className="shrink-0 text-[10px] text-[var(--accent)]">{formatPrice(item.amount)}</span></div>
+                <div className="flex items-center gap-1 text-[10px] text-[var(--text-muted)]"><MapPin size={10} className="shrink-0 text-[var(--accent)]" /><span className="min-w-0 break-words">{item.venue || 'No Venue Specified'}</span></div>
+            </div>)}</div>}
+    </>;
+}
+
 const CalendarHeatmap = memo(({ bookings, year }: { bookings: Booking[], year: number }) => {
     const [hoveredIso, setHoveredIso] = useState<string | null>(null);
+    const [selectedIso, setSelectedIso] = useState<string | null>(null);
 
     const days = useMemo(() => {
         const d = [];
@@ -298,6 +317,7 @@ const CalendarHeatmap = memo(({ bookings, year }: { bookings: Booking[], year: n
                 const monthDays = days.filter(d => d.date.getMonth() === m);
                 const monthName = new Date(year, m, 1).toLocaleString('default', { month: 'long' });
                 const firstDayIndex = monthDays[0]?.date.getDay() ?? 0;
+                const selectedDay = monthDays.find((day) => day.iso === selectedIso);
 
                 return (
                     <div key={m} className="bg-[var(--bg-elevated)]/30 border border-[var(--border)] rounded-xl p-3.5">
@@ -310,14 +330,17 @@ const CalendarHeatmap = memo(({ bookings, year }: { bookings: Booking[], year: n
                                 <div key={`pad-${i}`} />
                             ))}
                             {monthDays.map(day => (
-                                <div
+                                <button
+                                    type="button"
                                     key={day.iso}
-                                    onMouseEnter={() => setHoveredIso(day.iso)}
-                                    onMouseLeave={() => setHoveredIso(null)}
+                                    aria-label={`${day.date.toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' })}, ${day.data.count} booking`}
+                                    aria-pressed={selectedIso === day.iso}
+                                    onPointerEnter={(event) => { if (event.pointerType === 'mouse') setHoveredIso(day.iso); }}
+                                    onPointerLeave={(event) => { if (event.pointerType === 'mouse') setHoveredIso(null); }}
+                                    onClick={() => setSelectedIso((current) => current === day.iso ? null : day.iso)}
                                     className={clsx(
-                                        "aspect-square rounded text-[9px] flex items-center justify-center cursor-pointer transition-transform duration-100 hover:scale-125 relative group",
-                                        "hover:z-[80]",
-                                        day.iso === hoveredIso && "z-[80]",
+                                        "relative flex aspect-square items-center justify-center rounded text-[9px] transition-transform duration-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)] sm:hover:z-[80] sm:hover:scale-125",
+                                        day.iso === hoveredIso && "sm:z-[80]",
                                         getIntensity(day.data.count),
                                         day.data.count > 0
                                             ? "text-[var(--text-primary)] font-bold shadow-sm"
@@ -328,47 +351,14 @@ const CalendarHeatmap = memo(({ bookings, year }: { bookings: Booking[], year: n
 
                                     {/* Luxury Hover Popover Tooltip - Conditionally Rendered for 60FPS Speed */}
                                     {hoveredIso === day.iso && (
-                                        <div className="flex flex-col absolute bottom-full mb-2.5 left-1/2 -translate-x-1/2 z-[70] bg-[var(--bg-card)] border border-[var(--border)] p-3.5 rounded-2xl shadow-2xl whitespace-nowrap min-w-[180px] pointer-events-none animate-in fade-in zoom-in-95 duration-100">
-                                            <div className="flex items-center justify-between gap-3 pb-2 border-b border-[var(--border)]/60">
-                                                <span className="label-xs text-[var(--accent)] font-bold font-display">
-                                                    {day.date.toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' })}
-                                                </span>
-                                                {day.data.count > 0 ? (
-                                                    <span className="label-2xs font-bold text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded-full border border-emerald-500/20">
-                                                        {day.data.count} {day.data.count === 1 ? 'Booking' : 'Bookings'}
-                                                    </span>
-                                                ) : (
-                                                    <span className="label-2xs text-[var(--text-muted)] opacity-60">Available</span>
-                                                )}
-                                            </div>
-
-                                            {day.data.count === 0 ? (
-                                                <div className="text-[11px] text-[var(--text-muted)] italic pt-1.5 text-center">
-                                                    No events booked for this date
-                                                </div>
-                                            ) : (
-                                                <div className="space-y-2 pt-2">
-                                                    {day.data.items.map(item => (
-                                                        <div key={item.id} className="space-y-1">
-                                                            <div className="text-xs font-bold text-[var(--text-primary)] font-display flex items-center justify-between gap-3">
-                                                                <span className="truncate">{item.client_name}</span>
-                                                                <span className="text-[10px] font-bold text-[var(--accent)] font-mono-var shrink-0">
-                                                                    {formatPrice(item.amount)}
-                                                                </span>
-                                                            </div>
-                                                            <div className="flex items-center gap-1 text-[10px] text-[var(--text-muted)]">
-                                                                <MapPin size={10} className="text-[var(--accent)] shrink-0" />
-                                                                <span className="truncate">{item.venue || 'No Venue Specified'}</span>
-                                                            </div>
-                                                        </div>
-                                                    ))}
-                                                </div>
-                                            )}
+                                        <div className="pointer-events-none absolute bottom-full left-1/2 z-[70] mb-2.5 hidden min-w-[180px] -translate-x-1/2 flex-col whitespace-nowrap rounded-2xl border border-[var(--border)] bg-[var(--bg-card)] p-3.5 text-left shadow-2xl sm:flex">
+                                            <CalendarDayDetails day={day} />
                                         </div>
                                     )}
-                                </div>
+                                </button>
                             ))}
                         </div>
+                        {selectedDay && <div role="region" aria-label={`Bookings for ${selectedDay.date.toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' })}`} className="mt-3 min-w-0 rounded-xl border border-[var(--border)] bg-[var(--bg-card)] p-3 shadow-sm sm:hidden"><CalendarDayDetails day={selectedDay} /></div>}
                     </div>
                 );
             })}
