@@ -96,6 +96,22 @@ test("invoice retains the selected package price and tariff city", async () => {
     expect(invoice.totalAmount).toBe(17_000_000);
 });
 
+test("invoice history includes city and filters across paginated rows", async () => {
+    sqlite!.prepare("INSERT INTO invoices (id, invoice_no, client_name, invoice_data) VALUES (2, 'INV2', 'Bandung Client', ?)")
+        .run(JSON.stringify({ venue: "Grand Ballroom", pricingCity: "Bandung" }));
+    sqlite!.prepare("INSERT INTO invoices (id, invoice_no, client_name, invoice_data) VALUES (3, 'INV3', 'Jakarta Client', ?)")
+        .run(JSON.stringify({ venue: "Hall", pricingCity: "Jakarta" }));
+    const response = await app.request("/invoices?city=bandung&limit=1&page=2");
+    expect(response.status).toBe(200);
+    const page = await response.json() as { total: number; page: number; items: Array<{ invoiceNo: string; venue: string; pricingCity: string }> };
+    expect(page.total).toBe(1);
+    expect(page.page).toBe(1);
+    expect(page.items).toMatchObject([{ invoiceNo: "INV2", venue: "Grand Ballroom", pricingCity: "Bandung" }]);
+    const all = await (await app.request("/invoices?limit=10")).json() as { total: number; items: Array<{ pricingCity: string }> };
+    expect(all.total).toBe(3);
+    expect(all.items.find((item) => !item.pricingCity)).toBeTruthy();
+});
+
 test("invalid stored JSON refuses an update", async () => {
     sqlite!.exec("UPDATE invoices SET invoice_data = 'not-json' WHERE id = 1");
     expect((await update()).status).toBe(409);

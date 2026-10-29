@@ -103,7 +103,7 @@ function invoiceText(value: unknown): string {
 }
 
 function invoiceMetadataSummary(invoiceData: unknown, fallbackDate = "") {
-    if (typeof invoiceData !== "string" || !invoiceData) return { venue: "", eventDate: fallbackDate, notes: "" };
+    if (typeof invoiceData !== "string" || !invoiceData) return { venue: "", pricingCity: "", eventDate: fallbackDate, notes: "" };
 
     try {
         const data = asRecord(JSON.parse(invoiceData));
@@ -112,11 +112,12 @@ function invoiceMetadataSummary(invoiceData: unknown, fallbackDate = "") {
 
         return {
             venue: invoiceText(value("venue", "venue")),
+            pricingCity: invoiceText(value("pricingCity", "pricing_city")),
             eventDate: invoiceText(value("weddingDate", "wedding_date")) || fallbackDate,
             notes: invoiceText(value("notes", "notes")),
         };
     } catch {
-        return { venue: "", eventDate: fallbackDate, notes: "" };
+        return { venue: "", pricingCity: "", eventDate: fallbackDate, notes: "" };
     }
 }
 
@@ -164,6 +165,7 @@ function invoiceListShape(row: InvoiceListRow) {
         createdAt: row.createdAt ?? null,
         updatedAt: row.updatedAt ?? null,
         venue: metadata.venue,
+        pricingCity: metadata.pricingCity,
         eventDate: metadata.eventDate,
         notes: metadata.notes,
         paymentStatus: invoicePaymentStatus(row.__invoiceData, Number(row.totalAmount || 0)),
@@ -311,13 +313,25 @@ invoicesRouter.get("/", async (c) => {
     if (!user || !await hasFeaturePermission(user, "view_billing_history")) return c.json({ error: "Permission denied" }, 403);
     try {
         const search = (c.req.query("search") || "").trim().toLowerCase();
+        const city = (c.req.query("city") || "").trim();
+        if (city.length > 64) return c.json({ error: "Invalid city filter" }, 400);
         const safeLimit = Math.min(Math.max(parseInt(c.req.query("limit") || "50"), 1), 200);
         const requestedPage = Math.max(parseInt(c.req.query("page") || "1"), 1);
         const pattern = `%${search}%`;
-        const where = search
-            ? "WHERE LOWER(COALESCE(invoice_no, '')) LIKE ? OR LOWER(COALESCE(client_name, '')) LIKE ? OR LOWER(COALESCE(invoice_data, '')) LIKE ?"
-            : "";
-        const params = search ? [pattern, pattern, pattern] : [];
+        const conditions: string[] = [];
+        const params: unknown[] = [];
+        if (search) {
+            conditions.push("(LOWER(COALESCE(invoice_no, '')) LIKE ? OR LOWER(COALESCE(client_name, '')) LIKE ? OR LOWER(COALESCE(invoice_data, '')) LIKE ?)");
+            params.push(pattern, pattern, pattern);
+        }
+        if (city) {
+            const cityExpression = databaseDriver === "postgres"
+                ? "COALESCE(invoice_data::jsonb ->> 'pricingCity', invoice_data::jsonb ->> 'pricing_city', invoice_data::jsonb -> 'meta' ->> 'pricingCity', '')"
+                : "CASE WHEN json_valid(invoice_data) THEN COALESCE(json_extract(invoice_data, '$.pricingCity'), json_extract(invoice_data, '$.pricing_city'), json_extract(invoice_data, '$.meta.pricingCity'), '') ELSE '' END";
+            conditions.push(`LOWER(TRIM(${cityExpression})) = ?`);
+            params.push(city.toLowerCase());
+        }
+        const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
         const summary = await one<{ total: number }>(`SELECT COUNT(*) as total FROM invoices ${where}`, params);
         const total = Number(summary?.total || 0);
         const totalPages = Math.max(1, Math.ceil(total / safeLimit));

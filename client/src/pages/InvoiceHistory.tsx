@@ -21,6 +21,7 @@ import {
 import { PANEL_CARD_CLASS } from '../constants/invoice'
 import { useDebouncedValue } from '../hooks/useDebouncedValue'
 import { SectionHeading } from '../components/SectionHeading'
+import { PRICING_CITIES } from '../lib/packageCatalog'
 
 const INVOICE_GRID_TRACKS_CLASS = 'md:min-w-[1040px] md:grid-cols-[40px_minmax(210px,1.7fr)_max-content_minmax(150px,1.2fr)_minmax(150px,1.3fr)_max-content_max-content_144px] md:gap-x-4';
 
@@ -41,6 +42,7 @@ type InvoicePaymentStatus = 'LUNAS' | 'DP' | 'DP+TERMIN' | 'UNPAID'
 
 type InvoiceMetadata = {
     venue: string
+    pricingCity: string
     eventDate: string
     notes: string
     paymentTerms: PaymentTerm[]
@@ -56,6 +58,7 @@ type InvoiceListItem = {
     totalAmount?: number | null
     total_amount?: number | null
     venue?: string | null
+    pricingCity?: string | null
     eventDate?: string | null
     event_date?: string | null
     notes?: string | null
@@ -106,7 +109,7 @@ function textValue(value: unknown): string {
 }
 
 function extractInvoiceMetadata(invoiceData: unknown, fallbackDate = ''): InvoiceMetadata {
-    if (!invoiceData) return { venue: '', eventDate: fallbackDate, notes: '', paymentTerms: [] }
+    if (!invoiceData) return { venue: '', pricingCity: '', eventDate: fallbackDate, notes: '', paymentTerms: [] }
     try {
         const data = typeof invoiceData === 'string' ? JSON.parse(invoiceData) : invoiceData
         const root = asRecord(data)
@@ -140,12 +143,13 @@ function extractInvoiceMetadata(invoiceData: unknown, fallbackDate = ''): Invoic
         const text = (raw: unknown) => raw == null ? '' : String(raw).trim()
         return {
             venue: text(value('venue', 'venue')),
+            pricingCity: text(value('pricingCity', 'pricing_city')),
             eventDate: text(value('weddingDate', 'wedding_date')) || fallbackDate,
             notes: text(value('notes', 'notes')),
             paymentTerms,
         }
     } catch {
-        return { venue: '', eventDate: fallbackDate, notes: '', paymentTerms: [] }
+        return { venue: '', pricingCity: '', eventDate: fallbackDate, notes: '', paymentTerms: [] }
     }
 }
 
@@ -165,9 +169,10 @@ function normalizeStatus(value: unknown): InvoicePaymentStatus | null {
 
 function invoiceMetadataForList(invoice: InvoiceListItem): InvoiceMetadata {
     const venue = textValue(invoice.venue)
+    const pricingCity = textValue(invoice.pricingCity)
     const eventDate = textValue(invoice.eventDate ?? invoice.event_date)
     const notes = textValue(invoice.notes)
-    if (venue || eventDate || notes) return { venue, eventDate: eventDate || invoice.date || '', notes, paymentTerms: [] }
+    if (venue || pricingCity || eventDate || notes) return { venue, pricingCity, eventDate: eventDate || invoice.date || '', notes, paymentTerms: [] }
     return extractInvoiceMetadata(invoice.invoiceData ?? invoice.invoice_data, invoice.date ?? '')
 }
 
@@ -206,6 +211,7 @@ export default function InvoiceHistory() {
     const [showRefine, setShowRefine] = useState(false)
     const [refineStatus, setRefineStatus] = useState<'all' | 'lunas' | 'dp' | 'dp+termin' | 'unpaid'>('all')
     const [refineNotes, setRefineNotes] = useState<'all' | 'with' | 'without'>('all')
+    const [refineCity, setRefineCity] = useState('all')
     const [refineAmountMode, setRefineAmountMode] = useState<'all' | 'gt' | 'lt'>('all')
     const [refineAmountValue, setRefineAmountValue] = useState('')
     const [headerStatusFilters, setHeaderStatusFilters] = useState<Array<'lunas' | 'dp' | 'dp+termin' | 'unpaid'>>([])
@@ -248,10 +254,11 @@ export default function InvoiceHistory() {
     })
 
     const { data: invoicePage, isLoading: listLoading, isFetching: listFetching, isError: listError, refetch: refetchInvoices } = useQuery<InvoiceListApiResponse>({
-        queryKey: ['invoices', 'list', debouncedSearch, limit, page],
+        queryKey: ['invoices', 'list', debouncedSearch, refineCity, limit, page],
         queryFn: async () => {
             const params = new URLSearchParams()
             if (debouncedSearch) params.set('search', debouncedSearch)
+            if (refineCity !== 'all') params.set('city', refineCity)
             params.set('limit', String(limit))
             params.set('page', String(page))
             const res = await fetchWithAuth(`/invoices?${params}`)
@@ -461,6 +468,7 @@ export default function InvoiceHistory() {
 
     const hasRefineFilters =
         refineStatus !== 'all' ||
+        refineCity !== 'all' ||
         refineNotes !== 'all' ||
         (refineAmountMode !== 'all' && parsedRefineAmount > 0) ||
         headerStatusFilters.length > 0 ||
@@ -470,6 +478,8 @@ export default function InvoiceHistory() {
 
     const clearAllFilters = () => {
         setRefineStatus('all')
+        setRefineCity('all')
+        setPage(1)
         setRefineNotes('all')
         setRefineAmountMode('all')
         setRefineAmountValue('')
@@ -665,6 +675,18 @@ export default function InvoiceHistory() {
                                                 </select>
                                             </div>
                                             <div>
+                                                <label htmlFor="history-city-select" className="block mb-1.5 text-[10px] font-medium uppercase tracking-[0.2em] text-[var(--text-muted)]">Kota Acara</label>
+                                                <select
+                                                    id="history-city-select"
+                                                    value={refineCity}
+                                                    onChange={(event) => { setRefineCity(event.target.value); changePage(1) }}
+                                                    className="w-full bg-[var(--bg-deep)] border border-[var(--border)] rounded-lg px-3 py-2 text-xs text-[var(--text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]"
+                                                >
+                                                    <option value="all">Semua Kota</option>
+                                                    {PRICING_CITIES.map((city) => <option key={city} value={city}>{city}</option>)}
+                                                </select>
+                                            </div>
+                                            <div>
                                                 <label htmlFor="history-status-select" className="block mb-1.5 text-[10px] font-medium uppercase tracking-[0.2em] text-[var(--text-muted)]">Status</label>
                                                 <select
                                                     id="history-status-select"
@@ -770,6 +792,11 @@ export default function InvoiceHistory() {
                                 {refineStatus !== 'all' && (
                                     <span className="inline-flex items-center px-2.5 py-1 rounded-lg text-[10px] font-bold uppercase tracking-[0.14em] border border-[var(--border)] text-[var(--text-secondary)] bg-[var(--bg-elevated)]">
                                         Status: {refineStatus === 'dp+termin' ? 'DP + Termin' : refineStatus.toUpperCase()}
+                                    </span>
+                                )}
+                                {refineCity !== 'all' && (
+                                    <span className="inline-flex items-center px-2.5 py-1 rounded-lg text-[10px] font-bold uppercase tracking-[0.14em] border border-[var(--border)] text-[var(--text-secondary)] bg-[var(--bg-elevated)]">
+                                        Kota: {refineCity}
                                     </span>
                                 )}
                                 {refineNotes !== 'all' && (
@@ -963,6 +990,7 @@ export default function InvoiceHistory() {
                                     .join(' ')
                                 const metadata = invoiceMetadataForList(inv)
                                 const venue = metadata.venue || '-'
+                                const pricingCity = metadata.pricingCity
                                 const eventDate = metadata.eventDate || '-'
                                 const id = inv.id
                                 const isChecked = selected.has(id)
@@ -1033,7 +1061,8 @@ export default function InvoiceHistory() {
                                         {/* Venue */}
                                         <div className="col-start-2 col-span-2 row-start-2 flex min-w-0 items-center gap-2 text-[var(--text-muted)] md:col-auto md:row-auto md:col-span-1 md:justify-center">
                                             <MapPin size={13} className="shrink-0 md:hidden" aria-hidden="true" />
-                                            <span className="block w-full truncate text-left text-xs text-[var(--text-secondary)] md:text-center" title={venue}>
+                                            {pricingCity && <span className="shrink-0 rounded border border-[var(--accent)]/25 bg-[var(--accent)]/5 px-1.5 py-0.5 text-[10px] font-semibold text-[var(--accent)]" title={`Kota acara: ${pricingCity}`}>{pricingCity}</span>}
+                                            <span className="block min-w-0 truncate text-left text-xs text-[var(--text-secondary)]" title={venue}>
                                                 {venue}
                                             </span>
                                         </div>
