@@ -68,6 +68,29 @@ const exampleGallery = {
     selectionDurationHours: 72, selectionDurationDays: 3, addonStatus: 'none',
 };
 
+test('gallery list uses mobile cards without horizontal scrolling', async ({ page }) => {
+    await page.addInitScript((storedUser) => localStorage.setItem('orbit_user', JSON.stringify(storedUser)), user);
+    await page.route('**/api/users/1/permissions', (route) => route.fulfill({ json: { userId: 1, role: 'admin', permissions: [], permissionOverrides: {}, featurePermissions: user.featurePermissions } }));
+    await page.route('**/api/galleries?*', (route) => route.fulfill({ json: { items: [{ ...exampleGallery, status: 'open', editResultsStatus: 'draft', selectionCount: 7 }], total: 1, totalPages: 1 } }));
+    for (const width of [320, 390]) {
+        await page.setViewportSize({ width, height: 844 });
+        await page.goto('/galleries');
+        const card = page.getByRole('article', { name: exampleGallery.title });
+        await expect(card).toBeVisible();
+        await expect(card.getByText('Submitted')).toBeVisible();
+        await expect(card.getByText('7', { exact: true })).toBeVisible();
+        await expect(page.locator('table')).toBeHidden();
+        expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+        const box = await card.boundingBox();
+        expect(box).not.toBeNull();
+        expect(box!.x + box!.width).toBeLessThanOrEqual(width);
+        if (width === 390) await page.screenshot({ path: 'test-results/client-galleries-mobile-cards.png', fullPage: true, animations: 'disabled' });
+        await page.getByRole('tab', { name: 'Wedding', exact: true }).click();
+        await expect(card.getByText('Access ends')).toBeVisible();
+        expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+    }
+});
+
 test('Selection Events row keeps both statuses and client links independent', async ({ page }) => {
     const gallery = { ...exampleGallery, status: 'open', editResultsStatus: 'closed', editResultsFolderId: 'edited-folder', hasEditResults: true, editResultsPhotoCount: 9 };
     const queries: URL[] = [];
@@ -169,6 +192,7 @@ test('Selection Events row keeps both statuses and client links independent', as
         expect(statusBox!.y + statusBox!.height).toBeLessThanOrEqual(height);
         await page.keyboard.press('Escape');
     }
+    await page.setViewportSize({ width: 1280, height: 844 });
     await page.reload();
     await expect(page.getByRole('tab', { name: 'Selection Events', exact: true })).toHaveAttribute('aria-selected', 'true');
     const keyboardLinkButton = page.getByRole('button', { name: `${gallery.title} Photo Selection client link actions` });

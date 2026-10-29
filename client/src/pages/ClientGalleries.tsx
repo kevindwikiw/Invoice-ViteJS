@@ -194,16 +194,16 @@ function Pager({ page, totalPages, total, limit, onChange }: { page: number; tot
   const firstItem = (page - 1) * limit + 1;
   const lastItem = Math.min(page * limit, total);
   return (
-    <footer className="flex flex-col gap-3 border-t border-[var(--border)] px-6 py-3 sm:flex-row sm:items-center sm:justify-between">
+    <footer className="flex flex-col gap-3 border-t border-[var(--border)] px-4 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-6">
       <span className="inline-flex items-center gap-2 text-[10px] font-medium text-[var(--text-muted)]">
         Showing {firstItem}-{lastItem} of {total} galleries
       </span>
-      <div className="flex items-center gap-2">
+      <div className="flex w-full items-center justify-between gap-2 sm:w-auto">
         <button
           type="button"
           disabled={page <= 1}
           onClick={() => onChange(page - 1)}
-          className="inline-flex h-8 cursor-pointer items-center gap-1.5 rounded-lg border border-[var(--border)] px-3 text-[9px] font-bold uppercase tracking-[0.12em] text-[var(--text-secondary)] transition-colors hover:border-[var(--accent)]/40 hover:text-[var(--text-primary)] disabled:cursor-not-allowed disabled:opacity-40"
+          className="inline-flex h-11 cursor-pointer items-center gap-1.5 rounded-lg border border-[var(--border)] px-3 text-[10px] font-bold uppercase tracking-[0.08em] text-[var(--text-secondary)] transition-colors hover:border-[var(--accent)]/40 hover:text-[var(--text-primary)] disabled:cursor-not-allowed disabled:opacity-40 sm:h-8 sm:text-[9px]"
         >
           <ChevronLeft size={13} />
           Previous
@@ -215,7 +215,7 @@ function Pager({ page, totalPages, total, limit, onChange }: { page: number; tot
           type="button"
           disabled={page >= totalPages}
           onClick={() => onChange(page + 1)}
-          className="inline-flex h-8 cursor-pointer items-center gap-1.5 rounded-lg border border-[var(--border)] px-3 text-[9px] font-bold uppercase tracking-[0.12em] text-[var(--text-secondary)] transition-colors hover:border-[var(--accent)]/40 hover:text-[var(--text-primary)] disabled:cursor-not-allowed disabled:opacity-40"
+          className="inline-flex h-11 cursor-pointer items-center gap-1.5 rounded-lg border border-[var(--border)] px-3 text-[10px] font-bold uppercase tracking-[0.08em] text-[var(--text-secondary)] transition-colors hover:border-[var(--accent)]/40 hover:text-[var(--text-primary)] disabled:cursor-not-allowed disabled:opacity-40 sm:h-8 sm:text-[9px]"
         >
           Next
           <ChevronRight size={13} />
@@ -334,7 +334,7 @@ function GalleryFilters({ filter, setFilter, scope }: { filter: 'all' | GalleryS
           onClick={() => setFilter(option.value)}
           className={clsx(
             SEGMENT_BUTTON_BASE_CLASS,
-            'max-sm:min-w-0 max-sm:flex-1 max-sm:px-2 focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)]',
+            'max-sm:min-w-0 max-sm:min-h-10 max-sm:flex-1 max-sm:px-2 max-sm:text-[11px] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)]',
             filter === option.value ? 'bg-[var(--accent)]/10 text-[var(--accent)] shadow-sm font-bold' : SEGMENT_BUTTON_INACTIVE_CLASS
           )}
         >
@@ -374,7 +374,7 @@ function DownloadMenu({
         onClick={() => setOpen((value) => !value)}
         className={
           className ||
-          'inline-flex h-8 w-8 cursor-pointer items-center justify-center rounded-lg border border-[var(--border)] hover:border-[var(--accent)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)] disabled:cursor-not-allowed disabled:opacity-40'
+          'inline-flex h-11 w-11 cursor-pointer items-center justify-center rounded-lg border border-[var(--border)] hover:border-[var(--accent)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)] disabled:cursor-not-allowed disabled:opacity-40 md:h-8 md:w-8'
         }
       >
         <Download size={13} />
@@ -404,7 +404,7 @@ function ClientLinkMenu({ gallery, mode, direction = 'up' }: { gallery: GalleryS
         aria-expanded={open}
         onKeyDown={(event) => { if (['Enter', ' ', 'ArrowDown'].includes(event.key)) { markKeyboardOpen(); if (event.key === 'ArrowDown') { event.preventDefault(); setOpen(true); } } }}
         onClick={() => setOpen((value) => !value)}
-        className="inline-flex h-8 w-8 cursor-pointer items-center justify-center rounded-lg border border-[var(--border)] hover:border-[var(--accent)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)]"
+        className="inline-flex h-11 w-11 cursor-pointer items-center justify-center rounded-lg border border-[var(--border)] hover:border-[var(--accent)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)] md:h-8 md:w-8"
       >
         <ExternalLink size={13} />
       </button>
@@ -459,7 +459,7 @@ function MaintenanceMenu({
         disabled={pending}
         onClick={() => setOpen((value) => !value)}
         className={clsx(
-          'inline-flex h-8 w-8 cursor-pointer items-center justify-center rounded-lg border border-[var(--border)] transition-colors hover:border-[var(--accent)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)] disabled:cursor-not-allowed disabled:opacity-40',
+          'inline-flex h-11 w-11 cursor-pointer items-center justify-center rounded-lg border border-[var(--border)] transition-colors hover:border-[var(--accent)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)] disabled:cursor-not-allowed disabled:opacity-40 md:h-8 md:w-8',
           open && 'border-[var(--accent)] bg-[var(--bg-elevated)]'
         )}
       >
@@ -569,6 +569,13 @@ function GalleryTable({
   editedResetPendingId: number | null;
   deletePendingId: number | null;
 }) {
+  const [isMobile, setIsMobile] = useState(() => window.matchMedia('(max-width: 767px)').matches);
+  useEffect(() => {
+    const media = window.matchMedia('(max-width: 767px)');
+    const update = () => setIsMobile(media.matches);
+    media.addEventListener('change', update);
+    return () => media.removeEventListener('change', update);
+  }, []);
   if (!galleries.length) {
     return (
       <div className="border-t border-[var(--border)] px-6 py-16 text-center">
@@ -588,7 +595,45 @@ function GalleryTable({
     );
   }
   return (
-    <div className="overflow-x-auto min-h-[300px]">
+    <>
+      {isMobile ? <div className="space-y-3 p-3">
+        {galleries.map((gallery, index) => {
+          const selection = mode === 'selection';
+          const area: GalleryMode = selection ? 'selection' : 'edited';
+          return <article key={gallery.id} aria-label={gallery.title} className={clsx('min-w-0 rounded-xl border border-[var(--border)] bg-[var(--bg-card)] p-4', selectedId === gallery.id && 'border-[var(--accent)]/50')}>
+            <div className="flex min-w-0 items-start justify-between gap-3">
+              <div className="min-w-0 flex-1">
+                <p className="mb-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-[var(--text-muted)]">{selection ? 'Selection Event' : 'Wedding Gallery'}</p>
+                <button type="button" onClick={() => onSelect(gallery.id, area)} className="block min-h-9 max-w-full break-words text-left font-display text-lg font-medium leading-snug text-[var(--text-primary)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)]">{gallery.title}</button>
+              </div>
+              <GalleryStatusMenu gallery={selection ? gallery : { ...gallery, status: gallery.editResultsStatus ?? 'draft' }} area={area} pending={statusPendingId === gallery.id && statusPendingArea === area} pendingStatus={statusPendingId === gallery.id && statusPendingArea === area ? statusPendingStatus : null} busy={statusBusy} onExpiredOpen={() => onExpiredOpen(gallery)} onChange={(status) => onStatusChange(gallery.id, status, area)} />
+            </div>
+            {selection ? <>
+              <div className="mt-4 grid grid-cols-3 gap-2 border-y border-[var(--border)] py-3">
+                <div><span className="block text-[10px] text-[var(--text-muted)]">Source</span><GalleryCountButton gallery={gallery} area="selection" count={gallery.photoCount || 0} onSelect={onSelect} /></div>
+                <div><span className="block text-[10px] text-[var(--text-muted)]">Submitted</span><span className="flex min-h-11 items-center text-xs font-semibold tabular-nums text-[var(--text-primary)]">{gallery.selectionCount}</span></div>
+                <div><span className="block text-[10px] text-[var(--text-muted)]">Limit</span><span className="flex min-h-11 items-center text-xs font-semibold tabular-nums text-[var(--text-primary)]">{gallery.maxSelections || 'Unlimited'}</span></div>
+              </div>
+              <div className="mt-3 flex items-center justify-between gap-2 text-xs"><span className="text-[var(--text-muted)]">Selection deadline</span><span className={gallery.isExpired ? 'font-semibold text-[var(--text-primary)]' : 'text-[var(--text-secondary)]'}>{deadlineLabel(gallery)}</span></div>
+              <div className="mt-4 space-y-2 border-t border-[var(--border)] pt-3">
+                <div className="flex items-center justify-between gap-2"><span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-[var(--text-muted)]">Edited Photos</span><GalleryCountButton gallery={gallery} area="edited" count={gallery.editResultsPhotoCount || 0} onSelect={onSelect} /></div>
+                <div className="flex items-center justify-between gap-2">
+                  <GalleryStatusMenu gallery={{ ...gallery, status: gallery.editResultsStatus ?? 'draft' }} area="edited" pending={statusPendingId === gallery.id && statusPendingArea === 'edited'} pendingStatus={statusPendingId === gallery.id && statusPendingArea === 'edited' ? statusPendingStatus : null} busy={statusBusy} onExpiredOpen={() => onExpiredOpen(gallery)} onChange={(status) => onStatusChange(gallery.id, status, 'edited')} />
+                  <div role="group" aria-label={`${gallery.title} Edited Photos actions`} className="flex items-center gap-2"><ClientLinkMenu gallery={gallery} mode="edited" direction={index < 2 ? 'down' : 'up'} /><MaintenanceMenu gallery={gallery} area="edited" onUnlock={onResetEdited} onDelete={onDelete} unlockPending={editedResetPendingId === gallery.id} deletePending={deletePendingId === gallery.id} direction={index < 2 ? 'down' : 'up'} /></div>
+                </div>
+              </div>
+            </> : <div className="mt-4 grid grid-cols-2 gap-3 border-y border-[var(--border)] py-3 text-xs"><div><span className="block text-[10px] text-[var(--text-muted)]">Edited photos</span><GalleryCountButton gallery={gallery} area="edited" count={gallery.editResultsPhotoCount || 0} onSelect={onSelect} /></div><div><span className="block text-[10px] text-[var(--text-muted)]">Access ends</span><span className="mt-2 block text-[var(--text-secondary)]">{!gallery.hasEditResults ? 'Not published' : gallery.editResultsExpiresAt ? formatDateValue(gallery.editResultsExpiresAt, dateFormat, 'Expired') : 'Unlimited'}</span></div></div>}
+            <div className="mt-3 flex items-center justify-between gap-2">
+              <span className="text-[10px] text-[var(--text-muted)]">{selection ? 'Gallery actions' : `Published ${formatDateValue(gallery.editResultsPublishedAt, dateFormat, 'Never')}`}</span>
+              <div role="group" aria-label={`${gallery.title} ${selection ? 'Photo Selection' : 'Edited Photos'} actions`} className="flex items-center gap-2">
+                <ClientLinkMenu gallery={gallery} mode={area} direction={index < 2 ? 'down' : 'up'} />
+                {selection && <DownloadMenu gallery={gallery} direction={index < 2 ? 'down' : 'up'} />}
+                <MaintenanceMenu gallery={gallery} area={area} onUnlock={area === 'selection' ? onResetPin : onResetEdited} onDelete={onDelete} unlockPending={area === 'selection' ? resetPendingId === gallery.id : editedResetPendingId === gallery.id} deletePending={deletePendingId === gallery.id} direction={index < 2 ? 'down' : 'up'} />
+              </div>
+            </div>
+          </article>;
+        })}
+      </div> : <div className="min-h-[300px] overflow-x-auto">
       <table className={clsx('w-full text-left text-xs', mode === 'selection' ? 'min-w-[960px] table-fixed' : 'min-w-[900px]')}>
         {mode === 'selection' ? (
           <colgroup>
@@ -675,7 +720,8 @@ function GalleryTable({
           ))}
         </tbody>
       </table>
-    </div>
+    </div>}
+    </>
   );
 }
 const globalPreviewFields = [
@@ -1638,16 +1684,16 @@ export default function ClientGalleries() {
   return (
     <div className={PAGE_SHELL_CLASS}>
       <div className="mx-auto max-w-7xl space-y-6">
-        <header className="mb-10 flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+        <header className="mb-6 flex flex-col gap-4 sm:mb-10 sm:flex-row sm:items-end sm:justify-between">
           <div>
             <h1 className="mb-2 font-display text-2xl font-medium tracking-tight text-[var(--text-primary)] sm:text-3xl md:text-4xl">Client Galleries</h1>
             <p className="label-xs font-sans text-[var(--text-muted)]">GOOGLE DRIVE WORKSPACE / CLIENT SELECTION CONTROL</p>
           </div>
-          <div className="flex flex-wrap gap-2">
+          <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap">
             <button
               type="button"
               onClick={() => setContactOpen(true)}
-              className="inline-flex h-10 cursor-pointer items-center gap-2 rounded-lg border border-[var(--border)] px-3 text-[10px] font-bold uppercase hover:border-[var(--accent)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)]"
+              className="inline-flex h-11 cursor-pointer items-center justify-center gap-2 rounded-lg border border-[var(--border)] px-3 text-[10px] font-bold uppercase hover:border-[var(--accent)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)] sm:h-10"
             >
               <Settings2 size={13} />
               Admin WhatsApp
@@ -1655,7 +1701,7 @@ export default function ClientGalleries() {
             <button
               type="button"
               onClick={() => mode === 'preview' ? void qc.invalidateQueries({ queryKey: ['gallery-contact'] }) : void query.refetch()}
-              className="inline-flex h-10 cursor-pointer items-center gap-2 rounded-lg border border-[var(--border)] px-3 text-[10px] font-bold uppercase hover:border-[var(--accent)]"
+              className="inline-flex h-11 cursor-pointer items-center justify-center gap-2 rounded-lg border border-[var(--border)] px-3 text-[10px] font-bold uppercase hover:border-[var(--accent)] sm:h-10"
             >
               <RefreshCw size={13} aria-hidden="true" className={clsx((query.isFetching || pagePreviewSaving) && 'animate-spin')} />
               Refresh
@@ -1663,7 +1709,7 @@ export default function ClientGalleries() {
             <button
               type="button"
               onClick={() => setCreateOpen(true)}
-              className="inline-flex h-10 cursor-pointer items-center gap-2 rounded-lg bg-[var(--accent)] px-4 text-[10px] font-black uppercase text-[var(--bg-deep)]"
+              className="col-span-2 inline-flex h-11 cursor-pointer items-center justify-center gap-2 rounded-lg bg-[var(--accent)] px-4 text-[11px] font-black uppercase text-[var(--bg-deep)] transition-transform duration-150 active:scale-[0.98] sm:h-10"
             >
               <Plus size={14} />
               Create gallery
