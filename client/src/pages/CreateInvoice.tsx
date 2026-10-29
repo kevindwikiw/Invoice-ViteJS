@@ -394,7 +394,7 @@ export default function CreateInvoice() {
     })), [packages, pricingCity, pricingYear]);
     const canonicalCity = canonicalPricingCity(pricingCity, availablePricingCities);
     const pricingContextLabel = pricingYear && canonicalCity
-        ? (pricingYear === 2026 ? '2026 · harga semua kota' : `${canonicalCity} · ${pricingYear}`)
+        ? (pricingYear === 2026 ? '2026 · Harga Semua Kota' : `${canonicalCity} · ${pricingYear}`)
         : '';
     const pricingContextReady = pricingYear !== null && canonicalCity !== null;
     const pricingPromptLabel = !pricingYear && !canonicalCity
