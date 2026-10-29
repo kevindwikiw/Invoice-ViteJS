@@ -77,7 +77,11 @@ test('gallery list uses mobile cards without horizontal scrolling', async ({ pag
         await page.goto('/galleries');
         const card = page.getByRole('article', { name: exampleGallery.title });
         await expect(card).toBeVisible();
-        await expect(card.getByText('Submitted')).toBeVisible();
+        const selectionSection = card.getByRole('region', { name: `${exampleGallery.title} Photo Selection` });
+        const editedSection = card.getByRole('region', { name: `${exampleGallery.title} Edited Photos` });
+        await expect(selectionSection.getByRole('button', { name: `${exampleGallery.title} Photo Selection status: Open` })).toBeVisible();
+        await expect(editedSection.getByRole('button', { name: `${exampleGallery.title} Edited Photos status: Draft` })).toBeVisible();
+        await expect(selectionSection.getByText('Submitted')).toBeVisible();
         await expect(card.getByText('7', { exact: true })).toBeVisible();
         await expect(page.locator('table')).toBeHidden();
         expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
@@ -86,6 +90,7 @@ test('gallery list uses mobile cards without horizontal scrolling', async ({ pag
         expect(box!.x + box!.width).toBeLessThanOrEqual(width);
         if (width === 390) await page.screenshot({ path: 'test-results/client-galleries-mobile-cards.png', fullPage: true, animations: 'disabled' });
         await page.getByRole('tab', { name: 'Wedding', exact: true }).click();
+        await expect(card.getByRole('region', { name: `${exampleGallery.title} Photo Selection` })).toHaveCount(0);
         await expect(card.getByText('Access ends')).toBeVisible();
         expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
     }

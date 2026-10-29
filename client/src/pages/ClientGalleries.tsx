@@ -601,36 +601,32 @@ function GalleryTable({
           const selection = mode === 'selection';
           const area: GalleryMode = selection ? 'selection' : 'edited';
           return <article key={gallery.id} aria-label={gallery.title} className={clsx('min-w-0 rounded-xl border border-[var(--border)] bg-[var(--bg-card)] p-4', selectedId === gallery.id && 'border-[var(--accent)]/50')}>
-            <div className="flex min-w-0 items-start justify-between gap-3">
-              <div className="min-w-0 flex-1">
-                <p className="mb-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-[var(--text-muted)]">{selection ? 'Selection Event' : 'Wedding Gallery'}</p>
-                <button type="button" onClick={() => onSelect(gallery.id, area)} className="block min-h-9 max-w-full break-words text-left font-display text-lg font-medium leading-snug text-[var(--text-primary)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)]">{gallery.title}</button>
-              </div>
-              <GalleryStatusMenu gallery={selection ? gallery : { ...gallery, status: gallery.editResultsStatus ?? 'draft' }} area={area} pending={statusPendingId === gallery.id && statusPendingArea === area} pendingStatus={statusPendingId === gallery.id && statusPendingArea === area ? statusPendingStatus : null} busy={statusBusy} onExpiredOpen={() => onExpiredOpen(gallery)} onChange={(status) => onStatusChange(gallery.id, status, area)} />
+            <div className="min-w-0 pb-3">
+              <p className="mb-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-[var(--text-muted)]">{selection ? 'Selection Event' : 'Wedding Gallery'}</p>
+              <button type="button" onClick={() => onSelect(gallery.id, area)} className="block min-h-9 max-w-full break-words text-left font-display text-lg font-medium leading-snug text-[var(--text-primary)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)]">{gallery.title}</button>
             </div>
-            {selection ? <>
-              <div className="mt-4 grid grid-cols-3 gap-2 border-y border-[var(--border)] py-3">
+            {selection && <section aria-label={`${gallery.title} Photo Selection`} className="border-t border-[var(--border)] py-3">
+              <div className="flex items-center justify-between gap-3">
+                <h3 className="text-[10px] font-bold uppercase tracking-[0.14em] text-[var(--accent)]">Photo Selection</h3>
+                <GalleryStatusMenu gallery={gallery} area="selection" pending={statusPendingId === gallery.id && statusPendingArea === 'selection'} pendingStatus={statusPendingId === gallery.id && statusPendingArea === 'selection' ? statusPendingStatus : null} busy={statusBusy} onExpiredOpen={() => onExpiredOpen(gallery)} onChange={(status) => onStatusChange(gallery.id, status, 'selection')} />
+              </div>
+              <div className="mt-2 grid grid-cols-3 gap-2">
                 <div><span className="block text-[10px] text-[var(--text-muted)]">Source</span><GalleryCountButton gallery={gallery} area="selection" count={gallery.photoCount || 0} onSelect={onSelect} /></div>
                 <div><span className="block text-[10px] text-[var(--text-muted)]">Submitted</span><span className="flex min-h-11 items-center text-xs font-semibold tabular-nums text-[var(--text-primary)]">{gallery.selectionCount}</span></div>
                 <div><span className="block text-[10px] text-[var(--text-muted)]">Limit</span><span className="flex min-h-11 items-center text-xs font-semibold tabular-nums text-[var(--text-primary)]">{gallery.maxSelections || 'Unlimited'}</span></div>
               </div>
-              <div className="mt-3 flex items-center justify-between gap-2 text-xs"><span className="text-[var(--text-muted)]">Selection deadline</span><span className={gallery.isExpired ? 'font-semibold text-[var(--text-primary)]' : 'text-[var(--text-secondary)]'}>{deadlineLabel(gallery)}</span></div>
-              <div className="mt-4 space-y-2 border-t border-[var(--border)] pt-3">
-                <div className="flex items-center justify-between gap-2"><span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-[var(--text-muted)]">Edited Photos</span><GalleryCountButton gallery={gallery} area="edited" count={gallery.editResultsPhotoCount || 0} onSelect={onSelect} /></div>
-                <div className="flex items-center justify-between gap-2">
-                  <GalleryStatusMenu gallery={{ ...gallery, status: gallery.editResultsStatus ?? 'draft' }} area="edited" pending={statusPendingId === gallery.id && statusPendingArea === 'edited'} pendingStatus={statusPendingId === gallery.id && statusPendingArea === 'edited' ? statusPendingStatus : null} busy={statusBusy} onExpiredOpen={() => onExpiredOpen(gallery)} onChange={(status) => onStatusChange(gallery.id, status, 'edited')} />
-                  <div role="group" aria-label={`${gallery.title} Edited Photos actions`} className="flex items-center gap-2"><ClientLinkMenu gallery={gallery} mode="edited" direction={index < 2 ? 'down' : 'up'} /><MaintenanceMenu gallery={gallery} area="edited" onUnlock={onResetEdited} onDelete={onDelete} unlockPending={editedResetPendingId === gallery.id} deletePending={deletePendingId === gallery.id} direction={index < 2 ? 'down' : 'up'} /></div>
-                </div>
+              <div className="flex items-center justify-between gap-2 text-xs"><span className="text-[var(--text-muted)]">Deadline</span><span className={gallery.isExpired ? 'font-semibold text-[var(--text-primary)]' : 'text-[var(--text-secondary)]'}>{deadlineLabel(gallery)}</span></div>
+              <div className="mt-2 flex items-center justify-between gap-2"><span className="text-[10px] text-[var(--text-muted)]">Selection actions</span><div role="group" aria-label={`${gallery.title} Photo Selection actions`} className="flex items-center gap-2"><ClientLinkMenu gallery={gallery} mode="selection" direction={index < 2 ? 'down' : 'up'} /><DownloadMenu gallery={gallery} direction={index < 2 ? 'down' : 'up'} /><MaintenanceMenu gallery={gallery} area="selection" onUnlock={onResetPin} onDelete={onDelete} unlockPending={resetPendingId === gallery.id} deletePending={deletePendingId === gallery.id} direction={index < 2 ? 'down' : 'up'} /></div></div>
+            </section>}
+            <section aria-label={`${gallery.title} Edited Photos`} className="border-t border-[var(--border)] pt-3">
+              <div className="flex items-center justify-between gap-3">
+                <h3 className="text-[10px] font-bold uppercase tracking-[0.14em] text-[var(--accent)]">Edited Photos</h3>
+                <GalleryStatusMenu gallery={{ ...gallery, status: gallery.editResultsStatus ?? 'draft' }} area="edited" pending={statusPendingId === gallery.id && statusPendingArea === 'edited'} pendingStatus={statusPendingId === gallery.id && statusPendingArea === 'edited' ? statusPendingStatus : null} busy={statusBusy} onExpiredOpen={() => onExpiredOpen(gallery)} onChange={(status) => onStatusChange(gallery.id, status, 'edited')} />
               </div>
-            </> : <div className="mt-4 grid grid-cols-2 gap-3 border-y border-[var(--border)] py-3 text-xs"><div><span className="block text-[10px] text-[var(--text-muted)]">Edited photos</span><GalleryCountButton gallery={gallery} area="edited" count={gallery.editResultsPhotoCount || 0} onSelect={onSelect} /></div><div><span className="block text-[10px] text-[var(--text-muted)]">Access ends</span><span className="mt-2 block text-[var(--text-secondary)]">{!gallery.hasEditResults ? 'Not published' : gallery.editResultsExpiresAt ? formatDateValue(gallery.editResultsExpiresAt, dateFormat, 'Expired') : 'Unlimited'}</span></div></div>}
-            <div className="mt-3 flex items-center justify-between gap-2">
-              <span className="text-[10px] text-[var(--text-muted)]">{selection ? 'Gallery actions' : `Published ${formatDateValue(gallery.editResultsPublishedAt, dateFormat, 'Never')}`}</span>
-              <div role="group" aria-label={`${gallery.title} ${selection ? 'Photo Selection' : 'Edited Photos'} actions`} className="flex items-center gap-2">
-                <ClientLinkMenu gallery={gallery} mode={area} direction={index < 2 ? 'down' : 'up'} />
-                {selection && <DownloadMenu gallery={gallery} direction={index < 2 ? 'down' : 'up'} />}
-                <MaintenanceMenu gallery={gallery} area={area} onUnlock={area === 'selection' ? onResetPin : onResetEdited} onDelete={onDelete} unlockPending={area === 'selection' ? resetPendingId === gallery.id : editedResetPendingId === gallery.id} deletePending={deletePendingId === gallery.id} direction={index < 2 ? 'down' : 'up'} />
-              </div>
-            </div>
+              <div className="mt-2 grid grid-cols-2 gap-3 text-xs"><div><span className="block text-[10px] text-[var(--text-muted)]">Photos</span><GalleryCountButton gallery={gallery} area="edited" count={gallery.editResultsPhotoCount || 0} onSelect={onSelect} /></div><div><span className="block text-[10px] text-[var(--text-muted)]">Access ends</span><span className="mt-2 block text-[var(--text-secondary)]">{!gallery.hasEditResults ? 'Not published' : gallery.editResultsExpiresAt ? formatDateValue(gallery.editResultsExpiresAt, dateFormat, 'Expired') : 'Unlimited'}</span></div></div>
+              <div className="mt-2 flex items-center justify-between gap-2"><span className="text-[10px] text-[var(--text-muted)]">Edited actions</span><div role="group" aria-label={`${gallery.title} Edited Photos actions`} className="flex items-center gap-2"><ClientLinkMenu gallery={gallery} mode="edited" direction={index < 2 ? 'down' : 'up'} /><MaintenanceMenu gallery={gallery} area="edited" onUnlock={onResetEdited} onDelete={onDelete} unlockPending={editedResetPendingId === gallery.id} deletePending={deletePendingId === gallery.id} direction={index < 2 ? 'down' : 'up'} /></div></div>
+              {!selection && <p className="mt-1 text-[10px] text-[var(--text-muted)]">Published {formatDateValue(gallery.editResultsPublishedAt, dateFormat, 'Never')}</p>}
+            </section>
           </article>;
         })}
       </div> : <div className="min-h-[300px] overflow-x-auto">
