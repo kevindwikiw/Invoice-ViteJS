@@ -62,7 +62,7 @@ export function SetPackagePriceModal({ pkg, city, year, onSave, onClose }: SetPa
                 <div className="flex items-start justify-between gap-4">
                     <div className="min-w-0">
                         <p className="label-xs text-[var(--accent)]">{city} · {year}</p>
-                        <h2 id="set-package-price-title" className="mt-1 font-display text-2xl font-medium">Isi harga paket</h2>
+                        <h2 id="set-package-price-title" className="mt-1 font-display text-2xl font-medium">Isi Harga Paket</h2>
                         <p className="mt-1 truncate text-sm text-[var(--text-secondary)]" title={pkg.name}>{pkg.name}</p>
                     </div>
                     <button type="button" onClick={onClose} disabled={saving} aria-label="Tutup" className="grid h-8 w-8 shrink-0 place-items-center rounded-lg text-[var(--text-muted)] hover:bg-[var(--bg-elevated)] hover:text-[var(--text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]"><X size={17} aria-hidden="true" /></button>

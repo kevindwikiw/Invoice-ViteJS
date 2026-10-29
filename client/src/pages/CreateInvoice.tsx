@@ -399,7 +399,7 @@ export default function CreateInvoice() {
     const pricingContextReady = pricingYear !== null && canonicalCity !== null;
     const pricingPromptLabel = !pricingYear && !canonicalCity
         ? 'Tentukan Tanggal & Kota'
-        : !pricingYear ? 'Tentukan tanggal acara' : 'Pilih kota acara';
+        : !pricingYear ? 'Tentukan tanggal acara' : 'Pilih Kota Acara';
     const openPricingField = () => {
         setShowPackageCatalog(false);
         const target = document.getElementById(pricingYear ? 'pricing-city' : 'event-date');
