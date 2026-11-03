@@ -676,7 +676,7 @@ test('edited results folder can be published with an admin-defined password', as
         } else await route.fulfill({ json: { gallery, photos: [], selections: [] } });
     });
     await page.route('**/api/galleries/7/edit-results/publish', (route) => {
-        expect(route.request().postDataJSON()).toEqual({ password: 'pass' });
+        expect(route.request().postDataJSON()).toEqual({ password: 'my wedding photos 2026' });
         gallery = { ...gallery, hasEditResults: true, editResultsPhotoCount: 2, editResultsPublishedAt: '2026-10-01T00:00:00.000Z' };
         return route.fulfill({ status: 201, json: { publishedAt: gallery.editResultsPublishedAt, photoCount: 2 } });
     });
@@ -690,11 +690,11 @@ test('edited results folder can be published with an admin-defined password', as
     await dialog.getByRole('button', { name: 'Save Edited Photos' }).click();
     await expect.poll(() => gallery.editResultsFolderId).toBe('https://drive.google.com/drive/folders/edited-folder');
     await expect.poll(() => gallery.editResultsZipFileId).toBe('https://drive.google.com/file/d/edited-archive/view');
-    await dialog.getByLabel('Password for publication').fill('pass');
+    await dialog.getByLabel('Password for publication').fill('my wedding photos 2026');
     await expect(dialog.getByLabel('Password for publication')).toHaveAttribute('type', 'password');
     await dialog.getByRole('button', { name: 'Show password', exact: true }).click();
     await expect(dialog.getByLabel('Password for publication')).toHaveAttribute('type', 'text');
-    await expect(dialog.getByLabel('Password for publication')).toHaveValue('pass');
+    await expect(dialog.getByLabel('Password for publication')).toHaveValue('my wedding photos 2026');
     await dialog.getByRole('button', { name: 'Hide password', exact: true }).click();
     await expect(dialog.getByLabel('Password for publication')).toHaveAttribute('type', 'password');
     await dialog.getByRole('button', { name: 'Show password', exact: true }).click();

@@ -1081,7 +1081,12 @@ adminGalleriesRouter.patch("/:id", async (c) => {
         return c.json({ error: "Publish edited photos before opening access.", code: "EDIT_RESULTS_NOT_PUBLISHED" }, 400);
     }
     const reopenEdited = body.editResultsStatus === "open" && (existing.editResultsStatus !== "open" || editResultsExpired(existing.editResultsExpiresAt));
-    const editedExpiresAt = reopenEdited ? editResultsExpiryFromDuration(editResultsAccessDurationHours, new Date().toISOString()) : existing.editResultsExpiresAt || null;
+    const existingEditDuration = existing.editResultsAccessDurationHours === undefined
+        ? DEFAULT_EDIT_RESULTS_ACCESS_DURATION_HOURS
+        : existing.editResultsAccessDurationHours;
+    const editDurationChanged = editResultsAccessDurationHours !== existingEditDuration;
+    const refreshEditedExpiry = reopenEdited || (editedStatus === "open" && editDurationChanged && !editResultsExpired(existing.editResultsExpiresAt));
+    const editedExpiresAt = refreshEditedExpiry ? editResultsExpiryFromDuration(editResultsAccessDurationHours, new Date().toISOString()) : existing.editResultsExpiresAt || null;
     const rotateEditedVersion = editedStatus !== existing.editResultsStatus || reopenEdited;
     const durationWasProvided = body.selectionDurationHours !== undefined || body.selectionDurationDays !== undefined;
     const requestedDurationHours = body.selectionDurationHours ?? (body.selectionDurationDays === undefined ? undefined : Number(body.selectionDurationDays) * 24);
@@ -1493,8 +1498,8 @@ adminGalleriesRouter.post("/:id/edit-results/publish", async (c) => {
     if (!gallery.editResultsFolderId) return c.json({ error: "Set an edited photos Drive folder before publishing." }, 400);
     const body = await c.req.json().catch(() => ({})) as { password?: unknown };
     const password = String(body.password || "").trim();
-    if (password.length < 1 || password.length > 4) {
-        return c.json({ error: "Edited Photos password must be between 1 and 4 characters." }, 400);
+    if (password.length < 4 || password.length > 64 || Buffer.byteLength(password, "utf8") > 72) {
+        return c.json({ error: "Edited Photos password must be 4-64 characters and no more than 72 UTF-8 bytes." }, 400);
     }
 
     try {
@@ -1538,7 +1543,7 @@ adminGalleriesRouter.post("/:id/edit-results/password", async (c) => {
     if (!gallery.keyHash || !Number(gallery.photoCount)) return c.json({ error: "Publish Edited Photos before changing its password." }, 409);
     const body = await c.req.json().catch(() => ({})) as { password?: unknown };
     const password = String(body.password || "").trim();
-    if (password.length < 1 || password.length > 4) return c.json({ error: "Edited Photos password must be between 1 and 4 characters." }, 400);
+    if (password.length < 4 || password.length > 64 || Buffer.byteLength(password, "utf8") > 72) return c.json({ error: "Edited Photos password must be 4-64 characters and no more than 72 UTF-8 bytes." }, 400);
     const keyHash = await Bun.password.hash(password, { algorithm: "bcrypt", cost: 10 });
     await galleryRun('UPDATE galleries SET edit_results_key_hash = ?, edit_results_version = edit_results_version + 1, updated_at = CURRENT_TIMESTAMP WHERE id = ?', [keyHash, id]);
     return c.json({ changed: true, warning: "Existing ZIP download tickets remain valid for up to 15 minutes." }, 200, { "Cache-Control": "no-store" });
