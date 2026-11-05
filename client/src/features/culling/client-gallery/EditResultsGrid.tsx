@@ -436,12 +436,12 @@ export function EditResultsGrid({
     }, [token, unavailable]);
     const archiveJobInProgress = folderArchiveMutation.isPending || ['queued', 'running'].includes(folderArchiveStatus.data?.status ?? '');
     const headerFolderId = folderId ?? '__all__';
-    const headerScope: EditFolderArchiveScope = 'direct';
+    const headerScope: EditFolderArchiveScope = folderId ? 'direct' : 'subtree';
     const headerArchiveTarget = folderArchiveTarget?.folderId === headerFolderId && folderArchiveTarget.scope === headerScope;
     const headerArchiveStarting = folderArchiveMutation.isPending && folderArchiveMutation.variables?.folderId === headerFolderId && folderArchiveMutation.variables?.scope === headerScope;
     const headerArchivePending = headerArchiveStarting || Boolean(headerArchiveTarget && archiveJobInProgress) || pendingDownload === `folder-archive:${headerScope}:${headerFolderId}`;
-    const archiveAction = !unavailable && token && results.isSuccess && hasDirectPhotos ? (
-        <ArchiveDownloadAction key={`${galleryId}:${token}`} folder={Boolean(folderId)} pending={headerArchivePending} progress={headerArchiveTarget && folderArchiveStatus.data?.total ? `${folderArchiveStatus.data.processed ?? 0}/${folderArchiveStatus.data.total}` : undefined} onDownload={() => folderId && currentFolder ? downloadFolder(folderId, currentFolder.name, 'direct') : downloadFolder('__all__', 'Edited Photos', 'direct')} />
+    const archiveAction = !unavailable && token && results.isSuccess && (folderId ? hasDirectPhotos : hasDirectPhotos || childFolders.length > 0) ? (
+        <ArchiveDownloadAction key={`${galleryId}:${token}`} folder={Boolean(folderId)} pending={headerArchivePending} progress={headerArchiveTarget && folderArchiveStatus.data?.total ? `${folderArchiveStatus.data.processed ?? 0}/${folderArchiveStatus.data.total}` : undefined} onDownload={() => folderId && currentFolder ? downloadFolder(folderId, currentFolder.name, 'direct') : downloadFolder('__all__', 'Edited Photos', 'subtree')} />
     ) : null;
     const accessLabel = accessExpired ? 'Access expired' : unavailable ? 'Access unavailable' : expiry ? expiryLabel(expiry) : null;
     const showGalleryToolbar = Boolean(token && !unavailable && results.isSuccess && !expired);
@@ -551,12 +551,15 @@ export function EditResultsGrid({
                     {childFolders.map((folder) => {
                         const contents = folderContents.get(folder.id) ?? { items: 0, folders: 0 };
                         const details = [contents.items > 0 ? `${contents.items} ${contents.items === 1 ? 'item' : 'items'}` : null, contents.folders > 0 ? `${contents.folders} ${contents.folders === 1 ? 'folder' : 'folders'}` : null].filter(Boolean).join(' · ') || 'Empty folder';
+                        const folderArchiveTargetActive = folderArchiveTarget?.folderId === folder.id && folderArchiveTarget.scope === 'subtree';
+                        const folderArchivePending = (folderArchiveMutation.isPending && folderArchiveMutation.variables?.folderId === folder.id && folderArchiveMutation.variables?.scope === 'subtree') || Boolean(folderArchiveTargetActive && archiveJobInProgress);
                         return <div key={folder.id} className="flex min-w-0 items-center rounded-md border border-[var(--border)] bg-[var(--bg-card)]">
                         <Link to="/culling/$galleryId/edited" params={{ galleryId }} search={(current) => ({ ...current, view: undefined, selfieSource: undefined, folder: folder.id, editedPage: 1 })} resetScroll onClick={closePhoto} aria-label={`Open folder ${folder.name}, ${details}`} className="group flex min-h-12 min-w-0 flex-1 items-center gap-2.5 rounded-md px-2.5 py-1.5 text-left transition-[background-color,transform] duration-100 hover:bg-[var(--bg-elevated)] active:scale-[0.99] focus-visible:z-10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-[var(--accent)] motion-reduce:transition-none sm:min-h-11 sm:gap-3 sm:px-3 sm:py-2">
                             <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded bg-[var(--bg-elevated)] text-[var(--text-secondary)]"><Folder size={17} aria-hidden="true" /></span>
                             <span className="min-w-0 flex-1 [overflow-wrap:anywhere]"><span className="block text-[13px] font-semibold leading-4 text-[var(--text-primary)] sm:text-sm">{folder.name}</span><span className="mt-0.5 block text-[10px] font-normal leading-4 text-[var(--text-muted)]">{details}</span></span>
                             <ChevronRight size={16} aria-hidden="true" className="shrink-0 text-[var(--text-muted)] transition-transform duration-150 group-hover:translate-x-0.5 motion-reduce:transition-none" />
                         </Link>
+                        <button type="button" disabled={folderArchivePending || (!contents.items && !contents.folders)} onClick={() => downloadFolder(folder.id, folder.name, 'subtree')} title={folderArchivePending ? `Preparing ${folder.name} ZIP${folderArchiveTargetActive && folderArchiveStatus.data?.total ? ` (${folderArchiveStatus.data.processed ?? 0}/${folderArchiveStatus.data.total})` : ''}` : `Download ${folder.name} and its subfolders as ZIP`} aria-label={folderArchivePending ? `Preparing ${folder.name} ZIP` : `Download ${folder.name} and its subfolders as ZIP`} className="mr-1 inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-md text-[var(--text-secondary)] transition-colors hover:bg-[var(--bg-elevated)] hover:text-[var(--text-primary)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)] disabled:opacity-40 sm:mr-1.5"><Download size={16} aria-hidden="true" />{folderArchivePending && <span className="sr-only">Preparing</span>}</button>
                     </div>;
                     })}
                 </div>

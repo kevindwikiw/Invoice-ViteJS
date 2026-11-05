@@ -82,15 +82,18 @@ It routes `/v1/archive/*` to `127.0.0.1:8089`, leaves buffering off for file
 downloads and disables access logs because download tickets are in the query
 string. Do not expose port `8089` directly to the Internet.
 
-Edited Photos downloads use `scope=direct`: root downloads include only root
-photos, and folder downloads include only photos directly in that folder, with
-files at the ZIP root. The API retains subtree scope for legacy callers, but
-the gallery UI does not offer recursive downloads.
+Edited Photos keeps `scope=direct` for the “Photos Here” action inside a folder.
+The root “Download All Photos” action and each folder tile download use subtree
+scope, preserving folder paths in the ZIP. For subtree downloads, the worker
+reuses completed direct prebuild ZIPs from the same gallery snapshot and access
+window, then falls back to downloading from Drive if any required part is
+missing or stale.
 
 After expanding the mounted archive volume and verifying free space, enable
 `FACE_ARCHIVE_PREBUILD_ENABLED=1` on Fly. Publishing or syncing Edited Photos
 then queues one flat ZIP for root photos and one for each folder with direct
-photos.
+photos. These direct ZIPs also serve as reusable parts for gallery and folder
+subtree downloads.
 For a production pilot, also set `FACE_ARCHIVE_PREBUILD_GALLERY_IDS` to one
 comma-separated gallery ID, for example `123`. With this allowlist configured,
 only that gallery is prebuilt; omit the allowlist after the pilot to enable all

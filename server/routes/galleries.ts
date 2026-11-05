@@ -1377,7 +1377,7 @@ function editedSnapshotStatements(galleryId: number, rootFolderName: string, pho
 }
 
 type ArchivePhoto = { driveFileId: string; filename: string; folderId: string | null; sizeBytes: number | null };
-type ArchiveJobRequest = { galleryId: number; folderId: string; folderName: string; scope: "direct" | "subtree"; snapshotVersion: string; accessExpiresAt: string | null; photos: Array<{ driveFileId: string; filename: string; archivePath: string; sizeBytes: number | null }> };
+type ArchiveJobRequest = { galleryId: number; folderId: string; folderName: string; scope: "direct" | "subtree"; snapshotVersion: string; accessExpiresAt: string | null; photos: Array<{ driveFileId: string; filename: string; folderId: string | null; archivePath: string; sizeBytes: number | null }> };
 const ARCHIVE_ENTRY_OVERHEAD_BYTES = 64 * 1024;
 
 async function setArchiveGallerySnapshot(galleryId: number, snapshotVersion: string | null): Promise<boolean> {
@@ -1417,10 +1417,10 @@ async function prebuiltArchiveJobs(galleryId: number, expiresAt: string | null):
         const snapshotVersion = await archiveSnapshotVersion(galleryId);
         const jobs: ArchiveJobRequest[] = [];
         const rootPhotos = photos.filter((photo) => !photo.folderId);
-        if (rootPhotos.length && rootPhotos.length <= MAX_FOLDER_ARCHIVE_PHOTOS) jobs.push({ galleryId, folderId: "__all__", folderName: "Edited Photos", scope: "direct", snapshotVersion, accessExpiresAt: expiresAt, photos: rootPhotos.map((photo) => ({ driveFileId: photo.driveFileId, filename: photo.filename, archivePath: photo.filename, sizeBytes: photo.sizeBytes })) });
+        if (rootPhotos.length && rootPhotos.length <= MAX_FOLDER_ARCHIVE_PHOTOS) jobs.push({ galleryId, folderId: "__all__", folderName: "Edited Photos", scope: "direct", snapshotVersion, accessExpiresAt: expiresAt, photos: rootPhotos.map((photo) => ({ driveFileId: photo.driveFileId, filename: photo.filename, folderId: null, archivePath: photo.filename, sizeBytes: photo.sizeBytes })) });
         for (const folder of folders) {
             const direct = photos.filter((photo) => photo.folderId === folder.id);
-            if (direct.length && direct.length <= MAX_FOLDER_ARCHIVE_PHOTOS) jobs.push({ galleryId, folderId: folder.id, folderName: folder.name, scope: "direct", snapshotVersion, accessExpiresAt: expiresAt, photos: direct.map((photo) => ({ driveFileId: photo.driveFileId, filename: photo.filename, archivePath: photo.filename, sizeBytes: photo.sizeBytes })) });
+            if (direct.length && direct.length <= MAX_FOLDER_ARCHIVE_PHOTOS) jobs.push({ galleryId, folderId: folder.id, folderName: folder.name, scope: "direct", snapshotVersion, accessExpiresAt: expiresAt, photos: direct.map((photo) => ({ driveFileId: photo.driveFileId, filename: photo.filename, folderId: folder.id, archivePath: photo.filename, sizeBytes: photo.sizeBytes })) });
         }
         return jobs;
 }
@@ -2129,7 +2129,7 @@ publicGalleriesRouter.post("/:id/edit-results/archive/jobs", async (c) => {
     if (photos.length > MAX_FOLDER_ARCHIVE_PHOTOS) return c.json({ error: "This gallery contains too many photos for one ZIP. Contact the photographer.", code: "EDIT_RESULT_ARCHIVE_TOO_LARGE" }, 413);
 
     const archivePhotos = photos.map((photo) => {
-        if (scope === "direct") return { driveFileId: photo.driveFileId, filename: photo.filename, archivePath: photo.filename };
+        if (scope === "direct") return { driveFileId: photo.driveFileId, filename: photo.filename, folderId: photo.folderId, archivePath: photo.filename };
         const nested: string[] = [];
         const seen = new Set<string>();
         let current = photo.folderId ? byId.get(photo.folderId) : undefined;
@@ -2139,7 +2139,7 @@ publicGalleriesRouter.post("/:id/edit-results/archive/jobs", async (c) => {
             current = current.parentId ? byId.get(current.parentId) : undefined;
         }
         if (photo.folderId && (!seen.size || !seen.has(photo.folderId) || current)) return null;
-        return { driveFileId: photo.driveFileId, filename: photo.filename, archivePath: [...nested.reverse(), photo.filename].join("/") };
+        return { driveFileId: photo.driveFileId, filename: photo.filename, folderId: photo.folderId, archivePath: [...nested.reverse(), photo.filename].join("/") };
     });
     if (archivePhotos.some((photo) => !photo)) return c.json({ error: "The folder structure is invalid. Sync the gallery and try again.", code: "EDIT_RESULT_FOLDER_INVALID" }, 409);
 
@@ -2202,7 +2202,7 @@ publicGalleriesRouter.post("/:id/edit-results/folders/:folderId/archive/jobs", a
     if (photos.length > MAX_FOLDER_ARCHIVE_PHOTOS) return c.json({ error: "This folder contains too many photos for one ZIP. Contact the photographer.", code: "EDIT_RESULT_ARCHIVE_TOO_LARGE" }, 413);
 
     const archivePhotos = photos.map((photo) => {
-        if (scope === "direct") return { driveFileId: photo.driveFileId, filename: photo.filename, archivePath: photo.filename };
+        if (scope === "direct") return { driveFileId: photo.driveFileId, filename: photo.filename, folderId: photo.folderId, archivePath: photo.filename };
         const nested: string[] = [];
         let current = byId.get(photo.folderId);
         const seen = new Set<string>();
@@ -2212,7 +2212,7 @@ publicGalleriesRouter.post("/:id/edit-results/folders/:folderId/archive/jobs", a
             current = current.parentId ? byId.get(current.parentId) : undefined;
         }
         if (!current || current.id !== root.id) return null;
-        return { driveFileId: photo.driveFileId, filename: photo.filename, archivePath: [root.name, ...nested.reverse(), photo.filename].join("/") };
+        return { driveFileId: photo.driveFileId, filename: photo.filename, folderId: photo.folderId, archivePath: [root.name, ...nested.reverse(), photo.filename].join("/") };
     });
     if (archivePhotos.some((photo) => !photo)) return c.json({ error: "The folder structure is invalid. Sync the gallery and try again.", code: "EDIT_RESULT_FOLDER_INVALID" }, 409);
 

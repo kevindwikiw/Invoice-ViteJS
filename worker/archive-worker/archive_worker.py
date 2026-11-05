@@ -117,8 +117,9 @@ def estimate_new_prebuild_bytes(jobs: list["ArchiveJobInput"]) -> int:
     return estimate_prebuild_bytes(new_jobs) if new_jobs else 0
 
 
-def evict_completed(exclude: str, required_free: int = 0) -> None:
-    candidates = sorted(((job.get("finishedAt", 0), job_id) for job_id, job in archive_jobs.items() if job_id != exclude and job["status"] == "completed" and not any(deadline > time.time() for deadline in archive_tickets.get(job_id, {}).values())))
+def evict_completed(exclude: str, required_free: int = 0, protected: set[str] | None = None) -> None:
+    protected = protected or set()
+    candidates = sorted(((job.get("finishedAt", 0), job_id) for job_id, job in archive_jobs.items() if job_id != exclude and job_id not in protected and job["status"] == "completed" and not any(deadline > time.time() for deadline in archive_tickets.get(job_id, {}).values())))
     for _, job_id in candidates:
         cached = sum((ARCHIVE_ROOT / key / job["filename"]).stat().st_size for key, job in archive_jobs.items() if job["status"] == "completed" and (ARCHIVE_ROOT / key / job["filename"]).is_file())
         if cached <= ARCHIVE_CACHE_MAX_BYTES and shutil.disk_usage(ARCHIVE_ROOT).free >= ARCHIVE_MIN_FREE_BYTES + required_free:
@@ -211,6 +212,7 @@ app = FastAPI(title="Orbit Archive Worker", docs_url=None, redoc_url=None, lifes
 class ArchivePhotoInput(BaseModel):
     driveFileId: str = Field(min_length=1, max_length=256)
     filename: str = Field(min_length=1, max_length=512)
+    folderId: str | None = Field(default=None, max_length=256)
     archivePath: str = Field(min_length=1, max_length=2048)
     sizeBytes: int | None = Field(default=None, ge=0)
 
@@ -301,33 +303,12 @@ async def process_archive_job(job_id: str, payload: ArchiveJobInput) -> None:
         async with archive_semaphore:
             job["status"] = "running"
             save_job(job_id, payload)
-            total_bytes = 0
-            seen_paths: set[str] = set()
-            with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_STORED, allowZip64=True) as archive:
-                for photo in payload.photos:
-                    member = safe_archive_path(photo.archivePath)
-                    if payload.scope == "direct":
-                        member = PurePosixPath(member).name
-                    unique_member = member
-                    serial = 2
-                    while unique_member.casefold() in seen_paths:
-                        path = PurePosixPath(member)
-                        unique_member = str(path.with_name(f"{path.stem} ({serial}){path.suffix}"))
-                        serial += 1
-                    seen_paths.add(unique_member.casefold())
-                    evict_completed(job_id, required_free=256 * 1024 * 1024)
-                    available = shutil.disk_usage(ARCHIVE_ROOT).free - ARCHIVE_MIN_FREE_BYTES
-                    if available <= 0:
-                        raise ArchiveStorageError("archive_storage_full")
-                    limit = min(ARCHIVE_MAX_BYTES - total_bytes, available // 2)
-                    if limit <= 0:
-                        raise ArchiveStorageError("archive_storage_full")
-                    file_bytes = await drive_source.download_to_path(photo.driveFileId, staging_path, limit)
-                    total_bytes += file_bytes
-                    await asyncio.to_thread(archive.write, staging_path, unique_member)
-                    staging_path.unlink(missing_ok=True)
-                    job["processed"] += 1
-                    job["bytes"] = total_bytes
+            if payload.scope == "subtree" and _compose_from_prebuilt(job_id, payload, zip_path):
+                job["processed"] = len(payload.photos)
+                job["bytes"] = zip_path.stat().st_size
+                logger.info("Archive job %s composed from prebuilt parts: gallery=%s photos=%s bytes=%s", job_id, payload.galleryId, job["processed"], job["bytes"])
+            else:
+                await _download_archive_from_source(job_id, payload, zip_path, staging_path)
             job["status"] = "completed"
             job["filename"] = zip_path.name
             ready_at = time.time()
@@ -339,12 +320,107 @@ async def process_archive_job(job_id: str, payload: ArchiveJobInput) -> None:
             evict_completed(job_id)
             if zip_path.stat().st_size > ARCHIVE_CACHE_MAX_BYTES:
                 raise ArchiveStorageError("archive_storage_full")
-            logger.info("Archive job %s completed: gallery=%s photos=%s bytes=%s", job_id, payload.galleryId, job["processed"], total_bytes)
+            logger.info("Archive job %s completed: gallery=%s photos=%s bytes=%s", job_id, payload.galleryId, job["processed"], job["bytes"])
     except Exception as error:
         job["status"] = "failed"
         job["errorCode"] = getattr(error, "code", None) or "archive_failed"
         shutil.rmtree(job_dir, ignore_errors=True)
         logger.warning("Archive job %s failed: gallery=%s code=%s error_class=%s", job_id, payload.galleryId, job["errorCode"], type(error).__name__)
+
+
+def _compose_from_prebuilt(job_id: str, payload: ArchiveJobInput, zip_path: Path) -> bool:
+    grouped: dict[str, list[ArchivePhotoInput]] = {}
+    for photo in payload.photos:
+        source_id = photo.folderId or "__all__"
+        grouped.setdefault(source_id, []).append(photo)
+    source_jobs: list[tuple[str, list[ArchivePhotoInput]]] = []
+    now = time.time()
+    for folder_id, photos in grouped.items():
+        match = next(((source_job_id, source_job) for source_job_id, source_job in archive_jobs.items()
+                      if source_job_id != job_id and source_job["galleryId"] == payload.galleryId
+                      and source_job.get("folderId") == folder_id and source_job.get("scope") == "direct"
+                      and source_job.get("snapshotVersion") == payload.snapshotVersion and source_job.get("status") == "completed"
+                      and source_job.get("prebuilt") and now < source_job.get("expiresAt", 0)
+                      and (ARCHIVE_ROOT / source_job_id / source_job.get("filename", "")).is_file()), None)
+        if not match:
+            logger.info("Archive job %s cache composition unavailable: missing prebuilt folder %s", job_id, folder_id)
+            return False
+        source_job_id, source_job = match
+        try:
+            record = json.loads((ARCHIVE_ROOT / source_job_id / "job.json").read_text(encoding="utf-8"))
+            source_payload = ArchiveJobInput.model_validate(record["payload"])
+            by_drive_id = {photo.driveFileId: index for index, photo in enumerate(source_payload.photos)}
+            if len(by_drive_id) != len(source_payload.photos) or any(photo.driveFileId not in by_drive_id for photo in photos):
+                return False
+            source_jobs.append((source_job_id, photos))
+        except (OSError, ValueError, KeyError, TypeError):
+            return False
+
+    protected = {source_id for source_id, _ in source_jobs}
+    seen_paths: set[str] = set()
+    bytes_written = 0
+    try:
+        with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_STORED, allowZip64=True) as output:
+            for source_id, photos in source_jobs:
+                source_record = json.loads((ARCHIVE_ROOT / source_id / "job.json").read_text(encoding="utf-8"))
+                source_payload = ArchiveJobInput.model_validate(source_record["payload"])
+                source_path = ARCHIVE_ROOT / source_id / source_record["job"]["filename"]
+                by_drive_id = {photo.driveFileId: index for index, photo in enumerate(source_payload.photos)}
+                with zipfile.ZipFile(source_path, "r") as source:
+                    for photo in photos:
+                        member = safe_archive_path(photo.archivePath)
+                        unique_member = member
+                        serial = 2
+                        while unique_member.casefold() in seen_paths:
+                            path = PurePosixPath(member)
+                            unique_member = str(path.with_name(f"{path.stem} ({serial}){path.suffix}"))
+                            serial += 1
+                        seen_paths.add(unique_member.casefold())
+                        source_member = source.infolist()[by_drive_id[photo.driveFileId]]
+                        evict_completed(job_id, required_free=256 * 1024 * 1024, protected=protected)
+                        with source.open(source_member, "r") as input_file, output.open(unique_member, "w") as output_file:
+                            shutil.copyfileobj(input_file, output_file, length=1024 * 1024)
+                        bytes_written += source_member.file_size
+        job = archive_jobs[job_id]
+        job["bytes"] = bytes_written
+        return True
+    except (OSError, ValueError, KeyError, IndexError, zipfile.BadZipFile):
+        zip_path.unlink(missing_ok=True)
+        logger.warning("Archive job %s cache composition failed; falling back to source download", job_id)
+        return False
+
+
+async def _download_archive_from_source(job_id: str, payload: ArchiveJobInput, zip_path: Path, staging_path: Path) -> None:
+    job = archive_jobs[job_id]
+    if drive_source is None:
+        raise RuntimeError("drive_unavailable")
+    total_bytes = 0
+    seen_paths: set[str] = set()
+    with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_STORED, allowZip64=True) as archive:
+        for photo in payload.photos:
+            member = safe_archive_path(photo.archivePath)
+            if payload.scope == "direct":
+                member = PurePosixPath(member).name
+            unique_member = member
+            serial = 2
+            while unique_member.casefold() in seen_paths:
+                path = PurePosixPath(member)
+                unique_member = str(path.with_name(f"{path.stem} ({serial}){path.suffix}"))
+                serial += 1
+            seen_paths.add(unique_member.casefold())
+            evict_completed(job_id, required_free=256 * 1024 * 1024)
+            available = shutil.disk_usage(ARCHIVE_ROOT).free - ARCHIVE_MIN_FREE_BYTES
+            if available <= 0:
+                raise ArchiveStorageError("archive_storage_full")
+            limit = min(ARCHIVE_MAX_BYTES - total_bytes, available // 2)
+            if limit <= 0:
+                raise ArchiveStorageError("archive_storage_full")
+            file_bytes = await drive_source.download_to_path(photo.driveFileId, staging_path, limit)
+            total_bytes += file_bytes
+            await asyncio.to_thread(archive.write, staging_path, unique_member)
+            staging_path.unlink(missing_ok=True)
+            job["processed"] += 1
+            job["bytes"] = total_bytes
 
 
 def enqueue_archive_job(payload: ArchiveJobInput, prebuilt: bool) -> dict[str, Any]:
