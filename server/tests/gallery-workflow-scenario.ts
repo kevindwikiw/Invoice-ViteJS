@@ -35,6 +35,10 @@ assert.equal((await one<any>('SELECT gallery_workflow FROM galleries WHERE id = 
 assert.deepEqual(db!.query('SELECT selection_deadline_at, edit_results_expires_at, access_version, edit_results_version FROM galleries WHERE id = 1').get(), before);
 
 const { adminGalleriesRouter, publicGalleriesRouter } = await import('../routes/galleries');
+const originalFetch = globalThis.fetch;
+globalThis.fetch = Object.assign(async (input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => String(input).includes('/v1/archive/galleries/')
+    ? new Response(null, { status: 200 })
+    : originalFetch(input, init), { preconnect: originalFetch.preconnect }) as typeof fetch;
 const { galleryEditResultsRateLimiter, galleryPinRateLimiter } = await import('../middleware/rate-limit');
 const { default: paymentsRouter } = await import('../routes/payments');
 const app = new Hono<any>();
@@ -61,6 +65,9 @@ assert.equal(wedding.editResultsAccessDurationHours, 168);
 for (const key of ['pinHash', 'driveFolderId', 'selectionCount', 'maxSelections', 'selectionDeadlineAt', 'status', 'addon']) assert.equal(key in wedding, false);
 const id = wedding.id;
 const slug = wedding.publicKey;
+const weddingSlug = wedding.weddingSlug;
+assert.equal(weddingSlug, 'wedding');
+assert.match(slug, /^wedding-\d{8}$/);
 const raw = await one<any>('SELECT * FROM galleries WHERE id = ?', [id]);
 assert.equal(raw.selection_deadline_at, null);
 assert.equal(raw.pin_hash, '');
@@ -115,7 +122,10 @@ assert.equal((await request(`/admin/${id}/edit-results/publish`, 'POST', { passw
 const status = await json(await request(`/public/${slug}/edit-results/status`));
 assert.equal(status.workflow, 'delivery_only');
 assert.equal(status.title, 'Updated Wedding');
+assert.equal(status.weddingSlug, weddingSlug);
+assert.equal(status.publicKey, slug);
 assert.equal(status.available, true);
+assert.equal((await json(await request(`/public/${weddingSlug}/edit-results/status`))).workflow, 'delivery_only');
 assert.equal(status.selectionAvailable, false);
 assert.equal(status.selectionStatus, 'closed');
 const legacySelectionState = await one<any>('SELECT status, selection_deadline_at FROM galleries WHERE id = 1');
@@ -145,6 +155,9 @@ const listing = await json(await request(`/public/${slug}/edit-results?token=${a
 assert.equal(listing.expiresAt, null);
 assert.equal(listing.photos[0].folderId, 'ceremony-folder');
 assert.equal(listing.photos[0].comparison, null);
+const cleanAccess = await json(await request(`/public/${weddingSlug}/edit-results/verify`, 'POST', { password: 'wedding2026' }));
+const cleanListing = await json(await request(`/public/${weddingSlug}/edit-results?token=${cleanAccess.token}`));
+assert.equal(cleanListing.photos[0].folderId, 'ceremony-folder');
 assert.equal((await request(`/public/${slug}/edit-results/photos/ceremony/before/preview?token=${access.token}`)).status, 404);
 assert.equal((await request(`/public/${slug}/edit-results/photos/ceremony/download-url?token=${access.token}`)).status, 200);
 assert.equal((await request(`/admin/${id}`, 'PATCH', { editResultsStatus: 'closed' })).status, 200);
@@ -171,4 +184,20 @@ await restart.ensureGalleryStorage();
 assert.equal((await one<any>('SELECT gallery_workflow FROM galleries WHERE id = ?', [id]))!.gallery_workflow, 'delivery_only');
 assert.deepEqual(db!.query('SELECT selection_deadline_at, edit_results_expires_at, access_version, edit_results_version FROM galleries WHERE id = 1').get(), before);
 assert.equal((await one<any>('SELECT COUNT(*) as n FROM gallery_edit_result_photos WHERE gallery_id = 1'))!.n, 1);
+
+const collisionFirst = await json(await request('/admin', 'POST', { title: 'Sangjit Celebration', workflow: 'delivery_only', editResultsFolderId: 'collision-first' }));
+await run('UPDATE galleries SET wedding_slug = ? WHERE id = ?', ['sangjit', collisionFirst.id]);
+const collisionSecond = await json(await request('/admin', 'POST', { title: 'Sangjit', workflow: 'delivery_only', editResultsFolderId: 'collision-second' }));
+assert.equal(collisionSecond.weddingSlug, `sangjit-${collisionSecond.id}`);
+const reserved = await json(await request('/admin', 'POST', { title: 'Login', workflow: 'delivery_only', editResultsFolderId: 'reserved' }));
+assert.equal(reserved.weddingSlug, `login-${reserved.id}`);
+
+await run("INSERT INTO galleries (title, public_key, gallery_workflow, wedding_slug, drive_folder_id, pin_hash) VALUES ('Old Wedding', 'old-wedding-20261104', 'delivery_only', NULL, '', '')");
+const slugBackfill = await import('../db/galleries.ts' + '?wedding-slug-backfill');
+await slugBackfill.ensureGalleryStorage();
+const backfilledWedding = await one<any>("SELECT id, wedding_slug FROM galleries WHERE public_key = 'old-wedding-20261104'");
+assert.equal(backfilledWedding!.wedding_slug, 'old-wedding');
+await run("UPDATE galleries SET title = 'Renamed Wedding' WHERE id = ?", [backfilledWedding!.id]);
+await slugBackfill.ensureGalleryStorage();
+assert.equal((await one<any>('SELECT wedding_slug FROM galleries WHERE id = ?', [backfilledWedding!.id]))!.wedding_slug, 'old-wedding');
 db!.close();

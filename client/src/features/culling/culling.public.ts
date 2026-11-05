@@ -52,7 +52,7 @@ export async function verifyGalleryPin(id: string, pin: string): Promise<{ token
     return response.json();
 }
 
-export async function getEditResultsStatus(id: string): Promise<{ workflow?: GalleryWorkflow; title?: string; available: boolean; photoCount: number; status?: 'draft' | 'open' | 'closed'; isExpired?: boolean; selectionAvailable?: boolean; selectionStatus?: 'draft' | 'open' | 'closed'; selectionExpired?: boolean }> {
+export async function getEditResultsStatus(id: string): Promise<{ workflow?: GalleryWorkflow; title?: string; weddingSlug?: string | null; publicKey?: string | null; available: boolean; photoCount: number; status?: 'draft' | 'open' | 'closed'; isExpired?: boolean; selectionAvailable?: boolean; selectionStatus?: 'draft' | 'open' | 'closed'; selectionExpired?: boolean }> {
     const response = await apiFetch(`/public/galleries/${encodeURIComponent(id)}/edit-results/status`);
     if (!response.ok) throw await parseError(response, 'Unable to check edited photos.');
     return response.json();

@@ -96,6 +96,19 @@ export function EditedClientCullingGalleryRoute() {
     return <ClientCullingGallery pathMode="edited" />;
 }
 
+export function WeddingGalleryRoute() {
+    const { weddingSlug } = useParams({ from: '/$weddingSlug' });
+    const metadata = useQuery({
+        queryKey: ['public-edit-results-status', weddingSlug],
+        queryFn: () => getEditResultsStatus(weddingSlug),
+        staleTime: 60_000,
+        retry: false,
+    });
+    if (!metadata.data) return <main className="flex min-h-dvh items-center justify-center bg-[var(--bg-deep)] px-5 font-sans text-sm text-[var(--text-secondary)]">{metadata.isPending ? 'Loading gallery...' : metadata.error?.message || 'Unable to load gallery details.'}</main>;
+    if (metadata.data.workflow !== 'delivery_only') return <main role="alert" className="flex min-h-dvh items-center justify-center bg-[var(--bg-deep)] px-5 font-sans text-sm text-[var(--text-secondary)]">Wedding gallery not found.</main>;
+    return <WeddingGallery key={weddingSlug} galleryId={weddingSlug} title={metadata.data.title} weddingSlug={weddingSlug} />;
+}
+
 function ClientCullingGallery({ pathMode }: { pathMode: 'selection' | 'edited' }) {
     const { galleryId } = useParams({ from: '/culling/$galleryId' });
     const navigate = useNavigate({ from: '/culling/$galleryId' });
@@ -105,8 +118,20 @@ function ClientCullingGallery({ pathMode }: { pathMode: 'selection' | 'edited' }
         staleTime: 60_000,
         retry: false,
     });
+    const legacyWeddingSlug = metadata.data?.workflow === 'delivery_only' ? metadata.data.weddingSlug : undefined;
     const weddingNeedsEditedPath = pathMode === 'selection' && metadata.data?.workflow === 'delivery_only';
     useEffect(() => {
+        if (metadata.data?.workflow !== 'delivery_only') return;
+        if (legacyWeddingSlug) {
+            void navigate({
+                to: '/$weddingSlug',
+                params: { weddingSlug: legacyWeddingSlug },
+                search: (current) => ({ folder: current.folder, view: current.view === 'selfie' ? 'selfie' : undefined, selfieSource: current.view === 'selfie' ? 'edited' : undefined, editedPage: current.editedPage, selfiePage: current.selfiePage }),
+                replace: true,
+                resetScroll: false,
+            });
+            return;
+        }
         if (!weddingNeedsEditedPath) return;
         void navigate({
             to: '/culling/$galleryId/edited',
@@ -120,7 +145,7 @@ function ClientCullingGallery({ pathMode }: { pathMode: 'selection' | 'edited' }
             replace: true,
             resetScroll: false,
         });
-    }, [galleryId, navigate, weddingNeedsEditedPath]);
+    }, [galleryId, navigate, weddingNeedsEditedPath, legacyWeddingSlug, metadata.data?.workflow]);
 
     if (!metadata.data) return <main style={readGalleryTheme(galleryId) === 'black' ? BLACK_THEME : WHITE_THEME} className="flex min-h-dvh flex-col items-center justify-center gap-4 bg-[var(--bg-deep)] px-5 font-sans text-center text-[var(--text-primary)]">
         {metadata.isPending ? <p role="status" className="inline-flex items-center gap-2 text-sm font-medium text-[var(--text-secondary)]"><Loader2 size={18} aria-hidden="true" className="animate-spin motion-reduce:animate-none" /> Loading gallery...</p> : <>
@@ -128,13 +153,13 @@ function ClientCullingGallery({ pathMode }: { pathMode: 'selection' | 'edited' }
             <button type="button" onClick={() => void metadata.refetch()} className="min-h-11 rounded-md border border-[var(--border)] px-4 text-sm hover:bg-[var(--bg-elevated)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)]">Retry</button>
         </>}
     </main>;
-    if (weddingNeedsEditedPath) return <RouteTransition />;
+    if (weddingNeedsEditedPath || legacyWeddingSlug) return <RouteTransition />;
     return metadata.data.workflow === 'delivery_only'
-        ? <WeddingGallery key={galleryId} galleryId={galleryId} title={metadata.data.title} />
+        ? <WeddingGallery key={galleryId} galleryId={galleryId} title={metadata.data.title} weddingSlug={metadata.data.weddingSlug || undefined} />
         : <SelectionCullingGallery key={galleryId} title={metadata.data.title} pathMode={pathMode} />;
 }
 
-function WeddingGallery({ galleryId, title }: { galleryId: string; title?: string }) {
+function WeddingGallery({ galleryId, title, weddingSlug }: { galleryId: string; title?: string; weddingSlug?: string }) {
     const [theme, setTheme] = useState<GalleryTheme>(() => readGalleryTheme(galleryId));
     const [token, setToken] = useState(() => localStorage.getItem(`orbit:edit-results-token:${galleryId}`) || '');
     useEffect(() => {
@@ -147,7 +172,7 @@ function WeddingGallery({ galleryId, title }: { galleryId: string; title?: strin
         else localStorage.removeItem(`orbit:edit-results-token:${galleryId}`);
         setToken(next);
     }, [galleryId]);
-    return <EditResultsGrid galleryId={galleryId} theme={theme} token={token} onToken={onToken} standalone deliveryOnly editedPath onToggleTheme={() => {
+    return <EditResultsGrid galleryId={galleryId} weddingSlug={weddingSlug} theme={theme} token={token} onToken={onToken} standalone deliveryOnly editedPath onToggleTheme={() => {
         setTheme((current) => {
             const next = current === 'black' ? 'white' : 'black';
             localStorage.setItem(galleryThemeKey(galleryId), next);
@@ -846,7 +871,7 @@ function SelectionCullingGallery({ title, pathMode }: { title?: string; pathMode
     if (preferEditedEntry) return <RouteTransition />;
 
     if (editedContext || preferEditedEntry) {
-        return <EditResultsGrid galleryId={galleryId} theme={theme} token={editResultsToken} onToken={updateEditResultsToken} onToggleTheme={toggleTheme} onRequestSelectionAccess={selectionUnavailable ? undefined : () => { setActiveTab('gallery'); syncGalleryUrl({ view: 'gallery', selfieSource: 'selection' }); }} selectionUnavailable={selectionUnavailable} selectionContactUrl={lockedContactUrl} standalone editedPath />;
+        return <EditResultsGrid galleryId={galleryId} theme={theme} token={editResultsToken} onToken={updateEditResultsToken} onToggleTheme={toggleTheme} onRequestSelectionAccess={selectionUnavailable ? undefined : () => { setActiveTab('gallery'); syncGalleryUrl({ view: 'gallery', selfieSource: 'selection' }); }} selectionUnavailable={selectionUnavailable} selectionContactUrl={lockedContactUrl} standalone deliveryOnly={statusData?.workflow === 'delivery_only'} editedPath />;
     }
 
     if (token && (countdown.isExpired || displayGallery?.isExpired || galleryLockCode)) {

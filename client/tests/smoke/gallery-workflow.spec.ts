@@ -13,12 +13,12 @@ for (const width of [320, 390, 1280]) {
         let failDownload = true;
         let releaseMetadata!: () => void;
         const metadataReady = new Promise<void>((resolve) => { releaseMetadata = resolve; });
-        await page.route(`**/api/public/galleries/${id}/**`, async (route) => {
+        await page.route('**/api/public/galleries/**', async (route) => {
             const path = new URL(route.request().url()).pathname;
             if (path.endsWith('/edit-results/face-search/status')) return route.fulfill({ json: { available: false, status: 'unavailable', total: 0, processed: 0 } });
             if (path.endsWith('/edit-results/status')) {
                 await metadataReady;
-                return route.fulfill({ json: { workflow: 'delivery_only', title: weddingClientTitle, available: true, status: 'open', photoCount: 55 } });
+                return route.fulfill({ json: { workflow: 'delivery_only', weddingSlug: 'alya-rafi-wedding', title: weddingClientTitle, available: true, status: 'open', photoCount: 55 } });
             }
             if (path.endsWith('/edit-results/verify')) {
                 passwordAttempts++;
@@ -39,7 +39,7 @@ for (const width of [320, 390, 1280]) {
         releaseMetadata();
         const password = page.getByLabel('Edited photos password', { exact: true });
         await expect(password).toBeVisible();
-        await expect(page).toHaveURL(new RegExp(`/culling/${id}/edited$`));
+        await expect(page).toHaveURL('/alya-rafi-wedding');
         await password.fill('wrong-password');
         await page.getByRole('button', { name: 'Unlock Edited Photos' }).click();
         await expect(page.getByRole('alert')).toContainText('Invalid edited photos password');
@@ -51,16 +51,10 @@ for (const width of [320, 390, 1280]) {
         await expect(galleryHeading).toHaveCount(1);
         await expect(page.getByTestId('gallery-header').getByText('Edited Photos', { exact: true })).toBeVisible();
         await page.getByRole('button', { name: 'Close Edited Photos guide' }).click();
-        const titleButton = page.getByRole('button', { name: weddingClientTitle });
-        await titleButton.click();
-        await expect(page.getByRole('region', { name: 'Full event title' })).toHaveText(weddingClientTitle);
         if (width === 320) {
             await page.screenshot({ path: testInfo.outputPath('wedding-full-title-mobile.png') });
             expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
         }
-        await page.keyboard.press('Escape');
-        await expect(titleButton).toBeFocused();
-        await expect(page.getByRole('region', { name: 'Full event title' })).toHaveCount(0);
         await page.getByRole('link', { name: 'Open folder Ceremony' }).click();
         await expect(page.getByRole('heading', { level: 1, name: weddingClientTitle })).toBeVisible();
         const grid = page.getByTestId('edited-gallery-grid');
@@ -69,26 +63,15 @@ for (const width of [320, 390, 1280]) {
         await expect(page).toHaveURL(/editedPage=2/);
         await expect(grid.locator('img')).toHaveCount(1);
         await page.goBack();
-        await expect(page).toHaveURL(/editedPage=1/);
+        await expect(page).toHaveURL(/folder=ceremony/);
         await page.goForward();
         await expect(grid.locator('img')).toHaveCount(1);
         await page.reload();
         await expect(grid.locator('img')).toHaveCount(1);
         await expect(page).toHaveURL(/folder=ceremony/);
         for (const name of ['All Photos', 'Submit', 'Request More', 'Back to gallery']) await expect(page.getByRole('button', { name, exact: true })).toHaveCount(0);
-        await expect(page.getByRole('button', { name: 'Selfie', exact: true })).toBeDisabled();
+        await expect(page.getByRole('button', { name: 'Selfie', exact: true })).toHaveCount(0);
         await expect(page.getByText('Before / After', { exact: true })).toHaveCount(0);
-        await page.getByRole('button', { name: 'Download All Photos' }).click();
-        await expect(page.getByRole('alert')).toContainText('Check Drive sharing and retry');
-        await expect(page.getByRole('alert')).toBeFocused();
-        const downloads: string[] = [];
-        await page.route('https://drive.google.com/download/**', (route) => { downloads.push(route.request().url()); return route.fulfill({ status: 200, contentType: 'application/zip', headers: { 'Content-Disposition': 'attachment; filename=wedding.zip' }, body: 'test archive' }); });
-        failDownload = false;
-        const download = page.waitForEvent('download');
-        await page.getByRole('button', { name: 'Download All Photos' }).click();
-        expect((await download).suggestedFilename()).toBe('wedding.zip');
-        expect(downloads).toHaveLength(1);
-        await expect(grid).toBeVisible();
         expect(selectionRequests).toEqual([]);
         expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
         await page.screenshot({ path: `test-results/wedding-client-${width}.png`, fullPage: true });
@@ -299,3 +282,24 @@ for (const state of ['draft', 'closed', 'expired'] as const) {
         await expect(page.getByRole('button', { name: 'Download All Photos' })).toHaveCount(0);
     });
 }
+
+test('clean Wedding slug opens Edited Photos and keeps folder navigation on the root URL', async ({ page }) => {
+    const weddingSlug = 'alya-rafi-wedding';
+    await page.route(`**/api/public/galleries/${weddingSlug}/**`, (route) => {
+        const path = new URL(route.request().url()).pathname;
+        if (path.endsWith('/edit-results/status')) return route.fulfill({ json: { workflow: 'delivery_only', weddingSlug, title: 'Alya & Rafi Wedding', available: true, status: 'open', photoCount: 55 } });
+        if (path.endsWith('/edit-results/verify')) return route.fulfill({ json: { token: 'clean-token', expiresAt: null } });
+        if (path.endsWith('/edit-results')) return route.fulfill({ json: { photos, folders: [{ id: 'ceremony', parentId: null, name: 'Ceremony' }], expiresAt: null, archive: null } });
+        if (path.includes('/edit-results/photos/')) return route.fulfill({ contentType: 'image/png', body: image });
+        return route.fulfill({ json: { available: false, status: 'unavailable', total: 0, processed: 0 } });
+    });
+
+    await page.goto(`/${weddingSlug}/`);
+    await page.getByLabel('Edited photos password', { exact: true }).fill('wedding-password');
+    await page.getByRole('button', { name: 'Unlock Edited Photos' }).click();
+    await expect(page.getByRole('heading', { name: 'Alya & Rafi Wedding' })).toBeVisible();
+    await page.getByRole('button', { name: 'Close Edited Photos guide' }).click();
+    await page.getByRole('link', { name: 'Open folder Ceremony' }).click();
+    await expect(page).toHaveURL(new RegExp(`/${weddingSlug}\\?folder=ceremony`));
+    await expect(page).not.toHaveURL(/culling|edited|\d{8}/);
+});

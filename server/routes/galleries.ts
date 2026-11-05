@@ -21,6 +21,7 @@ import { faceSearchBodyLimit, handlePublicFaceSearch, handlePublicFaceSearchStat
 import { getFaceSourceVersion } from "../lib/face-source";
 import { faceSourceVersion } from "../lib/face-model";
 import { comparisonDraft, parseComparisonPairs, readBeforePhoto, submittedComparisonPhotos, validComparisonPairs, type BeforePhoto } from "../lib/edit-result-pairs";
+import { isReservedWeddingSlug, weddingSlugCandidate } from "../lib/wedding-slug";
 
 type Env = {
     Variables: {
@@ -81,6 +82,7 @@ type GalleryRow = {
     workflow: GalleryWorkflow;
     title: string;
     publicKey?: string | null;
+    weddingSlug?: string | null;
     contactWhatsappUrl?: string | null;
     maxSelections?: number;
     additionalSelectionLimit?: number;
@@ -372,7 +374,22 @@ function normalizeWhatsappNumber(value: unknown): string | null {
 
 function galleryContactMessage(template: string, gallery: GalleryRow, requestUrl: string): string {
     const request = new URL(requestUrl);
-    return template.replaceAll("{{gallery_url}}", `${request.origin}/culling/${gallery.publicKey || gallery.id}`).replaceAll("{{gallery_title}}", gallery.title);
+    const galleryUrl = gallery.workflow === "delivery_only" && gallery.weddingSlug
+        ? `${request.origin}/${gallery.weddingSlug}/`
+        : `${request.origin}/culling/${gallery.publicKey || gallery.id}`;
+    return template.replaceAll("{{gallery_url}}", galleryUrl).replaceAll("{{gallery_title}}", gallery.title);
+}
+
+async function createUniqueWeddingSlug(title: string, galleryId: number): Promise<string> {
+    const rows = await galleryAll<{ publicKey?: string | null; weddingSlug?: string | null }>(
+        "SELECT public_key as \"publicKey\", wedding_slug as \"weddingSlug\" FROM galleries WHERE id <> ?",
+        [galleryId],
+    );
+    const occupied = new Set(rows.flatMap((row) => [row.publicKey, row.weddingSlug].filter((value): value is string => Boolean(value)).map((value) => value.toLowerCase())));
+    let attempt = 0;
+    let slug = weddingSlugCandidate(title, galleryId, attempt);
+    while (occupied.has(slug.toLowerCase()) || isReservedWeddingSlug(slug)) slug = weddingSlugCandidate(title, galleryId, ++attempt);
+    return slug;
 }
 
 function selectionDurationHoursFromRow(row: Pick<GalleryRow, "selectionDurationHours" | "selectionDurationDays">): number {
@@ -419,7 +436,7 @@ function galleryLookup(param: string): { sql: string; params: unknown[] } {
     if (Number.isInteger(numericId) && numericId > 0) {
         return { sql: "id = ? OR public_key = ?", params: [numericId, param] };
     }
-    return { sql: "public_key = ?", params: [param] };
+    return { sql: "public_key = ? OR (gallery_workflow = 'delivery_only' AND wedding_slug = ?)", params: [param, param] };
 }
 
 function selectionUnavailable(c: Context<Env>): Response {
@@ -466,6 +483,7 @@ function galleryAdminShape(row: GalleryRow, counts?: { photoCount?: number; sele
         editResultsIsExpired: editResultsExpired(row.editResultsExpiresAt),
         hasEditResults: Number(row.editResultsPhotoCount || 0) > 0,
         publicKey: row.publicKey || String(row.id),
+        weddingSlug: row.weddingSlug || null,
         status: isExpired ? "closed" : row.status,
         selectionDurationHours,
         selectionDurationDays: Math.ceil(selectionDurationHours / 24),
@@ -623,7 +641,7 @@ async function requirePublicGallery(c: Context<Env>): Promise<{ gallery: Gallery
 
     const token = c.req.query("token") || c.req.header("x-gallery-token") || "";
     const gallery = await galleryOne<GalleryRow>(`
-        SELECT id, title, gallery_workflow as workflow, public_key as "publicKey", contact_whatsapp_url as "contactWhatsappUrl", drive_folder_id as "driveFolderId", tutorial_before_drive_file_id as "tutorialBeforeDriveFileId", tutorial_after_drive_file_id as "tutorialAfterDriveFileId", tutorial_before_2_drive_file_id as "tutorialBefore2DriveFileId", tutorial_after_2_drive_file_id as "tutorialAfter2DriveFileId", tutorial_before_3_drive_file_id as "tutorialBefore3DriveFileId", tutorial_after_3_drive_file_id as "tutorialAfter3DriveFileId", pin_hash as "pinHash", status,
+        SELECT id, title, gallery_workflow as workflow, public_key as "publicKey", wedding_slug as "weddingSlug", contact_whatsapp_url as "contactWhatsappUrl", drive_folder_id as "driveFolderId", tutorial_before_drive_file_id as "tutorialBeforeDriveFileId", tutorial_after_drive_file_id as "tutorialAfterDriveFileId", tutorial_before_2_drive_file_id as "tutorialBefore2DriveFileId", tutorial_after_2_drive_file_id as "tutorialAfter2DriveFileId", tutorial_before_3_drive_file_id as "tutorialBefore3DriveFileId", tutorial_after_3_drive_file_id as "tutorialAfter3DriveFileId", pin_hash as "pinHash", status,
                max_selections as "maxSelections", additional_selection_limit as "additionalSelectionLimit",
                edit_addon_status as "editAddonStatus", edit_addon_pricing_mode as "editAddonPricingMode", edit_addon_price as "editAddonPrice", qris_enabled as "qrisEnabled",
                edit_results_status as "editResultsStatus", edit_results_photo_count as "editResultsPhotoCount",
@@ -750,7 +768,7 @@ adminGalleriesRouter.get("/", async (c) => {
     const total = Number(totalRow?.total || 0);
     const rows = await galleryAll<GalleryRow & { photoCount?: number; selectionCount?: number }>(`
         SELECT g.id, g.title, g.gallery_workflow as workflow, g.drive_folder_id as "driveFolderId", g.edit_results_folder_id as "editResultsFolderId", g.edit_results_zip_file_id as "editResultsZipFileId", g.edit_results_published_at as "editResultsPublishedAt", g.edit_results_access_duration_hours as "editResultsAccessDurationHours", g.edit_results_expires_at as "editResultsExpiresAt", g.edit_results_status as "editResultsStatus", g.edit_results_photo_count as "editResultsPhotoCount", g.tutorial_before_drive_file_id as "tutorialBeforeDriveFileId", g.tutorial_after_drive_file_id as "tutorialAfterDriveFileId", g.tutorial_before_2_drive_file_id as "tutorialBefore2DriveFileId", g.tutorial_after_2_drive_file_id as "tutorialAfter2DriveFileId", g.tutorial_before_3_drive_file_id as "tutorialBefore3DriveFileId", g.tutorial_after_3_drive_file_id as "tutorialAfter3DriveFileId", g.pin_hash as "pinHash", g.status,
-               g.public_key as "publicKey", g.contact_whatsapp_url as "contactWhatsappUrl",
+               g.public_key as "publicKey", g.wedding_slug as "weddingSlug", g.contact_whatsapp_url as "contactWhatsappUrl",
                g.max_selections as "maxSelections", g.additional_selection_limit as "additionalSelectionLimit",
                g.edit_addon_status as "editAddonStatus", g.edit_addon_pricing_mode as "editAddonPricingMode", g.edit_addon_price as "editAddonPrice", g.qris_enabled as "qrisEnabled",
                g.photo_count as "photoCount",
@@ -924,8 +942,10 @@ adminGalleriesRouter.post("/", async (c) => {
         const folder = normalizeDriveFolderId(body.editResultsFolderId);
         if (!title || !/^[A-Za-z0-9_-]+$/.test(folder)) return c.json({ error: "Title and a valid Edited Photos Drive folder are required." }, 400);
         // Inert values satisfy legacy NOT NULL columns; workflow guards deny selection.
-        const id = await galleryInsertReturningId("INSERT INTO galleries (title, public_key, gallery_workflow, drive_folder_id, pin_hash, edit_results_folder_id, edit_results_access_duration_hours, status, edit_results_status) VALUES (?, ?, 'delivery_only', '', '', ?, ?, 'draft', 'draft')", [title, createGalleryPublicKey(title), folder, DEFAULT_EDIT_RESULTS_ACCESS_DURATION_HOURS]);
-        const row = await galleryOne<GalleryRow>(`SELECT id, title, gallery_workflow as workflow, public_key as "publicKey", edit_results_folder_id as "editResultsFolderId", edit_results_access_duration_hours as "editResultsAccessDurationHours", edit_results_status as "editResultsStatus", created_at as "createdAt", updated_at as "updatedAt" FROM galleries WHERE id = ?`, [id]);
+        const id = await galleryInsertReturningId("INSERT INTO galleries (title, public_key, wedding_slug, gallery_workflow, drive_folder_id, pin_hash, edit_results_folder_id, edit_results_access_duration_hours, status, edit_results_status) VALUES (?, ?, NULL, 'delivery_only', '', '', ?, ?, 'draft', 'draft')", [title, createGalleryPublicKey(title), folder, DEFAULT_EDIT_RESULTS_ACCESS_DURATION_HOURS]);
+        const weddingSlug = await createUniqueWeddingSlug(title, id);
+        await galleryRun("UPDATE galleries SET wedding_slug = ? WHERE id = ?", [weddingSlug, id]);
+        const row = await galleryOne<GalleryRow>(`SELECT id, title, gallery_workflow as workflow, public_key as "publicKey", wedding_slug as "weddingSlug", edit_results_folder_id as "editResultsFolderId", edit_results_access_duration_hours as "editResultsAccessDurationHours", edit_results_status as "editResultsStatus", created_at as "createdAt", updated_at as "updatedAt" FROM galleries WHERE id = ?`, [id]);
         return c.json(galleryAdminShape(row!));
     }
     const driveFolderId = normalizeDriveFolderId(body.driveFolderUrl ?? body.driveFolderId);
@@ -955,7 +975,7 @@ adminGalleriesRouter.post("/", async (c) => {
         [title, publicKey, maxSelections, DEFAULT_ADDON_UNIT_PRICE, qrisEnabled ? 1 : 0, driveFolderId, tutorialBeforeDriveFileId, tutorialAfterDriveFileId, tutorialBefore2DriveFileId, tutorialAfter2DriveFileId, tutorialBefore3DriveFileId, tutorialAfter3DriveFileId, pinHash, selectionDurationDays, selectionDurationHours, selectionDeadlineAt, status],
     );
     const row = await galleryOne<GalleryRow>(`
-        SELECT id, title, gallery_workflow as workflow, public_key as "publicKey", contact_whatsapp_url as "contactWhatsappUrl", drive_folder_id as "driveFolderId", edit_results_folder_id as "editResultsFolderId", edit_results_zip_file_id as "editResultsZipFileId", edit_results_published_at as "editResultsPublishedAt", edit_results_access_duration_hours as "editResultsAccessDurationHours", edit_results_expires_at as "editResultsExpiresAt", edit_results_status as "editResultsStatus", edit_results_photo_count as "editResultsPhotoCount", tutorial_before_drive_file_id as "tutorialBeforeDriveFileId", tutorial_after_drive_file_id as "tutorialAfterDriveFileId", tutorial_before_2_drive_file_id as "tutorialBefore2DriveFileId", tutorial_after_2_drive_file_id as "tutorialAfter2DriveFileId", tutorial_before_3_drive_file_id as "tutorialBefore3DriveFileId", tutorial_after_3_drive_file_id as "tutorialAfter3DriveFileId", pin_hash as "pinHash", status, max_selections as "maxSelections", additional_selection_limit as "additionalSelectionLimit", edit_addon_status as "editAddonStatus", edit_addon_pricing_mode as "editAddonPricingMode", edit_addon_price as "editAddonPrice", qris_enabled as "qrisEnabled",
+        SELECT id, title, gallery_workflow as workflow, public_key as "publicKey", wedding_slug as "weddingSlug", contact_whatsapp_url as "contactWhatsappUrl", drive_folder_id as "driveFolderId", edit_results_folder_id as "editResultsFolderId", edit_results_zip_file_id as "editResultsZipFileId", edit_results_published_at as "editResultsPublishedAt", edit_results_access_duration_hours as "editResultsAccessDurationHours", edit_results_expires_at as "editResultsExpiresAt", edit_results_status as "editResultsStatus", edit_results_photo_count as "editResultsPhotoCount", tutorial_before_drive_file_id as "tutorialBeforeDriveFileId", tutorial_after_drive_file_id as "tutorialAfterDriveFileId", tutorial_before_2_drive_file_id as "tutorialBefore2DriveFileId", tutorial_after_2_drive_file_id as "tutorialAfter2DriveFileId", tutorial_before_3_drive_file_id as "tutorialBefore3DriveFileId", tutorial_after_3_drive_file_id as "tutorialAfter3DriveFileId", pin_hash as "pinHash", status, max_selections as "maxSelections", additional_selection_limit as "additionalSelectionLimit", edit_addon_status as "editAddonStatus", edit_addon_pricing_mode as "editAddonPricingMode", edit_addon_price as "editAddonPrice", qris_enabled as "qrisEnabled",
                photo_count as "photoCount", selection_count as "selectionCount", selection_duration_days as "selectionDurationDays", selection_duration_hours as "selectionDurationHours", selection_deadline_at as "selectionDeadlineAt", created_at as "createdAt", updated_at as "updatedAt", synced_at as "syncedAt"
         FROM galleries WHERE id = ?
     `, [id]);
@@ -969,7 +989,7 @@ adminGalleriesRouter.get("/:id", async (c) => {
     const id = Number(c.req.param("id"));
     if (!Number.isInteger(id)) return c.json({ error: "Invalid gallery ID" }, 400);
     const gallery = await galleryOne<GalleryRow>(`
-        SELECT id, title, gallery_workflow as workflow, public_key as "publicKey", contact_whatsapp_url as "contactWhatsappUrl", drive_folder_id as "driveFolderId", edit_results_folder_id as "editResultsFolderId", edit_results_zip_file_id as "editResultsZipFileId", edit_results_published_at as "editResultsPublishedAt", edit_results_access_duration_hours as "editResultsAccessDurationHours", edit_results_expires_at as "editResultsExpiresAt", edit_results_status as "editResultsStatus", edit_results_photo_count as "editResultsPhotoCount", tutorial_before_drive_file_id as "tutorialBeforeDriveFileId", tutorial_after_drive_file_id as "tutorialAfterDriveFileId", tutorial_before_2_drive_file_id as "tutorialBefore2DriveFileId", tutorial_after_2_drive_file_id as "tutorialAfter2DriveFileId", tutorial_before_3_drive_file_id as "tutorialBefore3DriveFileId", tutorial_after_3_drive_file_id as "tutorialAfter3DriveFileId", pin_hash as "pinHash", status, max_selections as "maxSelections", additional_selection_limit as "additionalSelectionLimit", edit_addon_status as "editAddonStatus", edit_addon_pricing_mode as "editAddonPricingMode", edit_addon_price as "editAddonPrice", qris_enabled as "qrisEnabled",
+        SELECT id, title, gallery_workflow as workflow, public_key as "publicKey", wedding_slug as "weddingSlug", contact_whatsapp_url as "contactWhatsappUrl", drive_folder_id as "driveFolderId", edit_results_folder_id as "editResultsFolderId", edit_results_zip_file_id as "editResultsZipFileId", edit_results_published_at as "editResultsPublishedAt", edit_results_access_duration_hours as "editResultsAccessDurationHours", edit_results_expires_at as "editResultsExpiresAt", edit_results_status as "editResultsStatus", edit_results_photo_count as "editResultsPhotoCount", tutorial_before_drive_file_id as "tutorialBeforeDriveFileId", tutorial_after_drive_file_id as "tutorialAfterDriveFileId", tutorial_before_2_drive_file_id as "tutorialBefore2DriveFileId", tutorial_after_2_drive_file_id as "tutorialAfter2DriveFileId", tutorial_before_3_drive_file_id as "tutorialBefore3DriveFileId", tutorial_after_3_drive_file_id as "tutorialAfter3DriveFileId", pin_hash as "pinHash", status, max_selections as "maxSelections", additional_selection_limit as "additionalSelectionLimit", edit_addon_status as "editAddonStatus", edit_addon_pricing_mode as "editAddonPricingMode", edit_addon_price as "editAddonPrice", qris_enabled as "qrisEnabled",
                photo_count as "photoCount", selection_count as "selectionCount", selection_duration_days as "selectionDurationDays", selection_duration_hours as "selectionDurationHours", selection_deadline_at as "selectionDeadlineAt", created_at as "createdAt", updated_at as "updatedAt", synced_at as "syncedAt"
         FROM galleries WHERE id = ?
     `, [id]);
@@ -1974,8 +1994,8 @@ publicGalleriesRouter.get("/:id/tutorial/:variant", async (c) => {
 
 publicGalleriesRouter.get("/:id/edit-results/status", async (c) => {
     const lookup = galleryLookup(c.req.param("id") || "");
-    const gallery = await galleryOne<{ title: string; workflow: GalleryWorkflow; status: GalleryStatus; selectionDeadlineAt?: string | null; editResultsStatus: GalleryStatus; editResultsPhotoCount?: number; editResultsExpiresAt?: string | null }>(
-        `SELECT title, gallery_workflow as workflow, status, selection_deadline_at as "selectionDeadlineAt", edit_results_expires_at as "editResultsExpiresAt", edit_results_status as "editResultsStatus", edit_results_photo_count as "editResultsPhotoCount" FROM galleries WHERE ${lookup.sql}`,
+    const gallery = await galleryOne<{ title: string; workflow: GalleryWorkflow; weddingSlug?: string | null; publicKey?: string | null; status: GalleryStatus; selectionDeadlineAt?: string | null; editResultsStatus: GalleryStatus; editResultsPhotoCount?: number; editResultsExpiresAt?: string | null }>(
+        `SELECT title, gallery_workflow as workflow, wedding_slug as "weddingSlug", public_key as "publicKey", status, selection_deadline_at as "selectionDeadlineAt", edit_results_expires_at as "editResultsExpiresAt", edit_results_status as "editResultsStatus", edit_results_photo_count as "editResultsPhotoCount" FROM galleries WHERE ${lookup.sql}`,
         lookup.params,
     );
     if (!gallery) return c.json({ error: "Gallery not found" }, 404);
@@ -1985,6 +2005,8 @@ publicGalleriesRouter.get("/:id/edit-results/status", async (c) => {
     return c.json({
         workflow: gallery.workflow,
         title: gallery.title,
+        weddingSlug: gallery.weddingSlug || null,
+        publicKey: gallery.publicKey || null,
         available: gallery.editResultsStatus === "open" && !editResultsExpired(gallery.editResultsExpiresAt) && Number(gallery.editResultsPhotoCount || 0) > 0,
         photoCount: Number(gallery.editResultsPhotoCount || 0),
         status: gallery.editResultsStatus === "open" && editResultsExpired(gallery.editResultsExpiresAt) ? "closed" : gallery.editResultsStatus,

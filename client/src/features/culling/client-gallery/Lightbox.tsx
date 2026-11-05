@@ -299,8 +299,15 @@ function LightboxView<T extends GalleryDisplayPhoto>({
                     <div className="flex w-full flex-col gap-2 sm:w-auto sm:min-w-[220px]">
                         {comparison && <label className="flex min-h-11 cursor-pointer items-center gap-3 text-sm font-medium"><input type="checkbox" checked={comparisonEnabled} onChange={(event) => setComparisonEnabled(event.target.checked)} style={{ width: 16, height: 16, padding: 0, flexShrink: 0 }} className="accent-white" /> <span>Before / After</span></label>}
                         {mode === 'delivery' ? (
-                            <button type="button" disabled={!getDownloadUrl?.(photo) || downloadPending} aria-busy={downloadPending} onClick={() => onDownload?.(photo)} className="flex min-h-11 items-center justify-center gap-2 rounded-md bg-white px-4 text-sm font-semibold text-black disabled:opacity-60">
-                                {downloadPending ? <Loader2 size={14} aria-hidden="true" className="animate-spin motion-reduce:animate-none" /> : <Download size={14} aria-hidden="true" />} {downloadPending ? 'Preparing download…' : 'Download Original'}
+                            <button
+                                type="button"
+                                disabled={!getDownloadUrl?.(photo) || downloadPending}
+                                aria-busy={downloadPending}
+                                onClick={() => onDownload?.(photo)}
+                                className="inline-flex min-h-11 items-center justify-center gap-2 whitespace-nowrap rounded-lg border border-white/20 bg-white/10 px-5 text-sm font-semibold text-white shadow-sm backdrop-blur transition-[background-color,border-color,transform] duration-150 hover:border-white/40 hover:bg-white/20 active:scale-[0.98] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white disabled:opacity-40 motion-reduce:transition-none"
+                            >
+                                {downloadPending ? <Loader2 size={15} aria-hidden="true" className="animate-spin motion-reduce:animate-none" /> : <Download size={15} aria-hidden="true" />}
+                                <span>{downloadPending ? 'Preparing download…' : 'Download Original'}</span>
                             </button>
                         ) : <button type="button" onClick={() => onToggle?.(photo)} className={clsx('flex h-9 items-center justify-center gap-2 rounded-lg px-4 text-[10px] font-black uppercase tracking-[0.12em] transition-colors sm:h-10 sm:px-5 sm:tracking-[0.14em]', selected ? 'bg-white text-black' : 'border border-white/30 bg-black/30 text-white hover:border-white/60 hover:bg-white/10')}>
                             {selected ? <X size={14} /> : <Check size={14} />}

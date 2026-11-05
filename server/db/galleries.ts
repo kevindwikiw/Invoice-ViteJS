@@ -1,6 +1,7 @@
 import { createClient, type InValue } from "@tursodatabase/serverless/compat";
 import { galleryRows } from "./gallery-rows";
 import { all, databaseDriver, insertReturningId, one, run, sqlite, type RunResult } from "./runtime";
+import { isReservedWeddingSlug, weddingSlugCandidate } from "../lib/wedding-slug";
 
 const galleryDatabaseUrl = process.env.GALLERY_DATABASE_URL?.trim() || process.env.TURSO_DATABASE_URL?.trim();
 const galleryAuthToken = process.env.GALLERY_AUTH_TOKEN?.trim() || process.env.TURSO_AUTH_TOKEN?.trim();
@@ -70,6 +71,7 @@ const GALLERY_SCHEMA = [
         title TEXT NOT NULL,
         gallery_workflow TEXT NOT NULL DEFAULT 'selection_delivery' CHECK(gallery_workflow IN ('selection_delivery', 'delivery_only')),
         public_key TEXT,
+        wedding_slug TEXT,
         contact_whatsapp_url TEXT,
         max_selections INTEGER NOT NULL DEFAULT 0,
         additional_selection_limit INTEGER NOT NULL DEFAULT 0,
@@ -226,6 +228,7 @@ const GALLERY_SCHEMA = [
 
 const GALLERY_REQUIRED_COLUMNS: Array<readonly [string, string]> = [
     ["gallery_workflow", "TEXT NOT NULL DEFAULT 'selection_delivery' CHECK(gallery_workflow IN ('selection_delivery', 'delivery_only'))"],
+    ["wedding_slug", "TEXT"],
     ["edit_results_status", "TEXT NOT NULL DEFAULT 'draft'"],
     ["edit_results_access_duration_hours", "INTEGER"],
     ["edit_results_expires_at", "TEXT"],
@@ -369,6 +372,34 @@ async function ensureSqliteColumns(tableName: GalleryTableWithMigrations, column
     }
 }
 
+async function backfillWeddingSlugs(): Promise<void> {
+    const rows = galleryTurso
+        ? (await galleryTurso.execute("SELECT id, title, public_key, wedding_slug FROM galleries WHERE gallery_workflow = 'delivery_only' ORDER BY id")).rows as unknown as Array<{ id: number; title: string; public_key: string | null; wedding_slug: string | null }>
+        : await all<{ id: number; title: string; public_key: string | null; wedding_slug: string | null }>("SELECT id, title, public_key, wedding_slug FROM galleries WHERE gallery_workflow = 'delivery_only' ORDER BY id");
+    const allKeys = galleryTurso
+        ? (await galleryTurso.execute("SELECT public_key FROM galleries WHERE public_key IS NOT NULL AND public_key <> ''")).rows as unknown as Array<{ public_key: string }>
+        : await all<{ public_key: string }>("SELECT public_key FROM galleries WHERE public_key IS NOT NULL AND public_key <> ''");
+    const used = new Set(allKeys.map((row) => row.public_key.toLowerCase()));
+    for (const row of rows) {
+        if (row.wedding_slug) {
+            used.add(row.wedding_slug.toLowerCase());
+            continue;
+        }
+        let attempt = 0;
+        let slug = weddingSlugCandidate(row.title, Number(row.id), attempt);
+        while (used.has(slug.toLowerCase()) || isReservedWeddingSlug(slug)) {
+            attempt += 1;
+            slug = weddingSlugCandidate(row.title, Number(row.id), attempt);
+        }
+        if (galleryTurso) {
+            await galleryTurso.execute({ sql: "UPDATE galleries SET wedding_slug = ? WHERE id = ? AND wedding_slug IS NULL", args: [slug, row.id] });
+        } else {
+            await run("UPDATE galleries SET wedding_slug = ? WHERE id = ? AND wedding_slug IS NULL", [slug, row.id]);
+        }
+        used.add(slug.toLowerCase());
+    }
+}
+
 async function initializeGalleryStorage(): Promise<void> {
     if (hasPartialGalleryTursoConfig) {
         throw new Error("Gallery storage requires both GALLERY_DATABASE_URL and GALLERY_AUTH_TOKEN, or both TURSO_DATABASE_URL and TURSO_AUTH_TOKEN.");
@@ -378,6 +409,8 @@ async function initializeGalleryStorage(): Promise<void> {
         await galleryTurso.batch(GALLERY_SCHEMA, "write");
         await ensureTursoColumns("galleries", GALLERY_REQUIRED_COLUMNS);
         await galleryTurso.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_galleries_public_key ON galleries(public_key)");
+        await backfillWeddingSlugs();
+        await galleryTurso.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_galleries_wedding_slug ON galleries(wedding_slug)");
         await ensureTursoColumns("gallery_selections", GALLERY_SELECTION_REQUIRED_COLUMNS);
         await ensureTursoColumns("gallery_photos", GALLERY_PHOTO_REQUIRED_COLUMNS);
         await ensureTursoColumns("face_index_jobs", FACE_INDEX_JOB_REQUIRED_COLUMNS);
@@ -447,6 +480,8 @@ async function initializeGalleryStorage(): Promise<void> {
     }
     await ensureSqliteColumns("galleries", GALLERY_REQUIRED_COLUMNS);
     await run("CREATE UNIQUE INDEX IF NOT EXISTS idx_galleries_public_key ON galleries(public_key)");
+    await backfillWeddingSlugs();
+    await run("CREATE UNIQUE INDEX IF NOT EXISTS idx_galleries_wedding_slug ON galleries(wedding_slug)");
     await ensureSqliteColumns("gallery_selections", GALLERY_SELECTION_REQUIRED_COLUMNS);
     await ensureSqliteColumns("gallery_photos", GALLERY_PHOTO_REQUIRED_COLUMNS);
     await ensureSqliteColumns("face_index_jobs", FACE_INDEX_JOB_REQUIRED_COLUMNS);

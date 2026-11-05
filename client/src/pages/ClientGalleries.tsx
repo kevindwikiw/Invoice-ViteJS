@@ -110,8 +110,10 @@ const unitInputShellClass = 'grid h-11 grid-cols-[minmax(0,1fr)_4.5rem] overflow
 const compactUnitInputShellClass = unitInputShellClass;
 const unitInputClass = 'h-full min-w-0 border-0 bg-transparent px-3.5 text-sm tabular-nums text-[var(--text-primary)] outline-none';
 const unitInputSuffixClass = 'flex h-full items-center justify-center border-l border-[var(--border)] px-2 text-[11px] font-medium text-[var(--text-muted)]';
-const publicUrl = (gallery: GallerySummary) => `${window.location.origin}/culling/${gallery.publicKey || gallery.id}`;
-const publicEditedUrl = (gallery: GallerySummary) => `${publicUrl(gallery)}/edited`;
+const publicUrl = (gallery: GallerySummary) => gallery.workflow === 'delivery_only' && gallery.weddingSlug
+  ? `${window.location.origin}/${gallery.weddingSlug}/`
+  : `${window.location.origin}/culling/${gallery.publicKey || gallery.id}`;
+const publicEditedUrl = (gallery: GallerySummary) => gallery.workflow === 'delivery_only' && gallery.weddingSlug ? publicUrl(gallery) : `${publicUrl(gallery)}/edited`;
 const driveUrl = (gallery: GallerySummary) => (gallery.driveFolderId?.startsWith('http') ? gallery.driveFolderId : `https://drive.google.com/drive/folders/${gallery.driveFolderId || ''}`);
 const editedFolderUrl = (gallery: GallerySummary) => gallery.editResultsFolderId ? (gallery.editResultsFolderId.startsWith('http') ? gallery.editResultsFolderId : `https://drive.google.com/drive/folders/${gallery.editResultsFolderId}`) : null;
 const parseIdr = (value: FormDataEntryValue | null) => Number(String(value || '').replace(/\D/g, '')) || 0;

@@ -17,6 +17,7 @@ export interface GallerySummary {
     id: number;
     workflow?: GalleryWorkflow;
     publicKey?: string | null;
+    weddingSlug?: string | null;
     title: string;
     driveFolderId?: string;
     status?: GalleryStatus;

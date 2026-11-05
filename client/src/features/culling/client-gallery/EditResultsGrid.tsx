@@ -1,12 +1,13 @@
-import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Link, useNavigate, useSearch } from '@tanstack/react-router';
+import { Link, useRouter, useSearch } from '@tanstack/react-router';
 import { AlertCircle, ArrowLeft, Check, ChevronLeft, ChevronRight, ChevronUp, Clock3, Download, Folder, FolderOpen, HelpCircle, Loader2, Lock, MessageCircle, RotateCcw, ScanFace, X } from 'lucide-react';
 import clsx from 'clsx';
 
 import { editResultVideoUrl, getEditFolderArchiveJob, getEditResults, getEditResultsStatus, resolveEditResultDownload, startEditFolderArchive, startEditGalleryArchive, verifyEditResultsPassword, type EditFolderArchiveScope } from '../culling.public';
 import type { EditResultPhoto } from '../culling.types';
+import type { ClientCullingSearch } from '../../../router';
 import { BLACK_THEME, GALLERY_PAGE_SIZE, WHITE_THEME } from './constants';
 import { GalleryHeader, GalleryViewTabs, OrbitLogo, ThemeToggle, type GalleryView } from './GalleryChrome';
 import { GalleryFooter } from './GalleryFooter';
@@ -26,6 +27,23 @@ const downloadUrlFor = (photo: EditResultPhoto) => photo.downloadResolveUrl;
 const comparisonFor = (photo: EditResultPhoto) => photo.comparison;
 const compareFolderPaths = (a: string, b: string) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' });
 type EditedSelfieMatches = { ids: string[]; total: number; sourceVersion?: string | null };
+type EditedGalleryLinkProps = {
+    galleryId: string;
+    weddingSlug?: string;
+    search: (current: ClientCullingSearch) => ClientCullingSearch;
+    children: ReactNode;
+    className?: string;
+    onClick?: () => void;
+    'aria-label'?: string;
+    'aria-current'?: 'page' | undefined;
+    resetScroll?: boolean;
+};
+
+function EditedGalleryLink({ galleryId, weddingSlug, ...props }: EditedGalleryLinkProps) {
+    return weddingSlug
+        ? <Link to="/$weddingSlug" params={{ weddingSlug }} {...props} />
+        : <Link to="/culling/$galleryId/edited" params={{ galleryId }} {...props} />;
+}
 const expiryLabel = (expiresAt: string | null) => {
     if (!expiresAt || expiresAt === 'unlimited') return 'Unlimited access';
     const remainingDays = Math.max(0, Math.ceil((Date.parse(expiresAt) - Date.now()) / 86_400_000));
@@ -43,14 +61,15 @@ const prefetchPhoto = (photo: EditResultPhoto) => {
 
 function ArchiveDownloadAction({ folder, pending, progress, onDownload }: { folder: boolean; pending: boolean; progress?: string; onDownload: () => void }) {
     const label = folder ? 'Download Photos Here' : 'Download All Photos';
-    return <><button type="button" disabled={pending} aria-busy={pending} onClick={onDownload} title={pending ? `Preparing ZIP${progress ? ` (${progress})` : ''}` : `${label} as ZIP`} aria-label={pending ? `Preparing ZIP${progress ? `, ${progress}` : ''}` : label} className={clsx('inline-flex h-11 shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-md border border-[var(--border)] bg-[var(--accent)] px-2 text-xs font-semibold text-[var(--bg-deep)] transition-[opacity,transform] duration-150 hover:opacity-90 active:scale-[0.97] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)] disabled:opacity-60 motion-reduce:transition-none sm:w-[210px] sm:gap-2 sm:px-4 sm:text-[13px]', folder ? 'w-28 min-[390px]:w-32' : 'w-36 min-[390px]:w-40')}>
-            {pending ? <Loader2 size={14} aria-hidden="true" className="animate-spin motion-reduce:animate-none" /> : <Download size={13} aria-hidden="true" />}
-            {pending ? <><span className="sm:hidden">Preparing…</span><span className="hidden sm:inline">Preparing download…</span></> : folder ? <><span className="sm:hidden">Photos Here</span><span className="hidden sm:inline">{label}</span></> : <span>{label}</span>}
+    return <><button type="button" disabled={pending} aria-busy={pending} onClick={onDownload} title={pending ? `Preparing ZIP${progress ? ` (${progress})` : ''}` : `${label} as ZIP`} aria-label={pending ? `Preparing ZIP${progress ? `, ${progress}` : ''}` : `${label} as ZIP`} className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-md border border-[var(--border)] bg-[var(--accent)] p-0 text-xs font-semibold text-[var(--bg-deep)] transition-[opacity,transform] duration-150 hover:opacity-90 active:scale-[0.97] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)] disabled:opacity-60 motion-reduce:transition-none sm:h-11 sm:w-[210px] sm:gap-2 sm:px-4 sm:py-0 sm:text-[13px]">
+            {pending ? <Loader2 size={16} aria-hidden="true" className="animate-spin motion-reduce:animate-none" /> : <Download size={17} aria-hidden="true" />}
+            <span className="hidden sm:inline">{pending ? 'Preparing download…' : label}</span>
         </button><span role="status" aria-live="polite" className="sr-only">{pending ? 'Preparing ZIP download' : ''}</span></>;
 }
 
 export function EditResultsGrid({
     galleryId,
+    weddingSlug,
     theme,
     token,
     onToken,
@@ -67,6 +86,7 @@ export function EditResultsGrid({
     editedPath = false,
 }: {
     galleryId: string;
+    weddingSlug?: string;
     theme: GalleryTheme;
     token: string;
     onToken: (token: string) => void;
@@ -83,10 +103,16 @@ export function EditResultsGrid({
     editedPath?: boolean;
 }) {
     const queryClient = useQueryClient();
-    const { folder: requestedFolder, editedPage, view, selfieSource, selfiePage } = useSearch({ from: '/culling/$galleryId' });
+    const { folder: requestedFolder, editedPage, view, selfieSource, selfiePage } = useSearch({ strict: false }) as ClientCullingSearch;
     const isSelfieView = view === 'selfie' && (deliveryOnly || editedPath || selfieSource === 'edited');
     const viewPage = (isSelfieView ? selfiePage : editedPage) ?? 1;
-    const navigate = useNavigate({ from: '/culling/$galleryId' });
+    const router = useRouter();
+    const navigateEdited = useCallback((search: (current: ClientCullingSearch) => ClientCullingSearch, options: { replace?: boolean; resetScroll?: boolean } = {}) => {
+        const destination = weddingSlug
+            ? { to: '/$weddingSlug', params: { weddingSlug }, search, ...options }
+            : { to: '/culling/$galleryId/edited', params: { galleryId }, search, ...options };
+        return router.navigate(destination as never);
+    }, [galleryId, router, weddingSlug]);
     const [password, setPassword] = useState('');
     const [error, setError] = useState('');
     const [accessExpiresAt, setAccessExpiresAt] = useState<string | null>(null);
@@ -284,11 +310,11 @@ export function EditResultsGrid({
     }, [folderPickerOpen]);
     useEffect(() => {
         if (results.isSuccess && requestedFolder && !folderId) {
-            void navigate({ to: '/culling/$galleryId/edited', params: { galleryId }, search: (current) => ({ ...current, folder: undefined }), replace: true, resetScroll: false });
+            void navigateEdited((current) => ({ ...current, folder: undefined }), { replace: true, resetScroll: false });
         }
-    }, [results.isSuccess, requestedFolder, folderId, navigate]);
+    }, [results.isSuccess, requestedFolder, folderId, navigateEdited]);
     const folderPhotos = useMemo(() => (results.data?.photos ?? []).filter((photo) => (photo.folderId ?? null) === folderId), [results.data?.photos, folderId]);
-    const hasDirectPhotos = folderPhotos.some((photo) => photo.mimeType?.startsWith('image/'));
+    const hasDirectPhotos = folderPhotos.some((photo) => !photo.mimeType || photo.mimeType.startsWith('image/') || /\.(jpe?g|png|webp|heic|avif|gif)$/i.test(photo.filename || ''));
     const accessError = (results.error || verify.error) as (Error & { code?: string }) | null;
     const expiry = results.data?.expiresAt ?? accessExpiresAt ?? (localStorage.getItem(`orbit:edit-results-expiry:${galleryId}`) || null);
     const expiryTime = expiry && expiry !== 'unlimited' ? Date.parse(expiry) : NaN;
@@ -328,8 +354,8 @@ export function EditResultsGrid({
     }, [selfieSearchUnavailable]);
     useEffect(() => {
         if (!isSelfieView || !selfieSearchUnavailable) return;
-        void navigate({ to: '/culling/$galleryId/edited', params: { galleryId }, search: (current) => ({ ...current, view: undefined, selfieSource: undefined, selfiePage: undefined }), replace: true, resetScroll: false });
-    }, [isSelfieView, navigate, selfieSearchUnavailable]);
+        void navigateEdited((current) => ({ ...current, view: undefined, selfieSource: undefined, selfiePage: undefined }), { replace: true, resetScroll: false });
+    }, [isSelfieView, navigateEdited, selfieSearchUnavailable]);
     const closeGuide = () => {
         localStorage.setItem(`orbit:edit-results-guide:${galleryId}`, 'seen');
         setGuideState({ galleryId, open: false });
@@ -352,8 +378,8 @@ export function EditResultsGrid({
     const page = pendingPage?.folderId === folderId && pendingPage.selfie === isSelfieView ? pendingPage.page : urlPage;
     useEffect(() => {
         if (!results.isSuccess || viewPage === urlPage) return;
-        void navigate({ to: '/culling/$galleryId/edited', params: { galleryId }, search: (current) => ({ ...current, ...(isSelfieView ? { selfiePage: urlPage } : { editedPage: urlPage }) }), replace: true, resetScroll: false });
-    }, [results.isSuccess, viewPage, navigate, urlPage, isSelfieView]);
+        void navigateEdited((current) => ({ ...current, ...(isSelfieView ? { selfiePage: urlPage } : { editedPage: urlPage }) }), { replace: true, resetScroll: false });
+    }, [results.isSuccess, viewPage, navigateEdited, urlPage, isSelfieView]);
     useEffect(() => {
         if (pendingPage?.folderId === folderId && pendingPage.selfie === isSelfieView && pendingPage.page === viewPage) setPendingPage(null);
     }, [pendingPage, folderId, viewPage, isSelfieView]);
@@ -366,8 +392,8 @@ export function EditResultsGrid({
         if (index < 0) return;
         const nextPage = Math.floor(index / GALLERY_PAGE_SIZE) + 1;
         setNavigation({ galleryId, token, folderId, selfie: isSelfieView, page: nextPage, photoId: id });
-        void navigate({ to: '/culling/$galleryId/edited', params: { galleryId }, search: (current) => ({ ...current, ...(isSelfieView ? { selfiePage: nextPage } : { editedPage: nextPage }) }), replace: true, resetScroll: false });
-    }, [photos, galleryId, token, folderId, navigate, isSelfieView]);
+        void navigateEdited((current) => ({ ...current, ...(isSelfieView ? { selfiePage: nextPage } : { editedPage: nextPage }) }), { replace: true, resetScroll: false });
+    }, [photos, galleryId, token, folderId, navigateEdited, isSelfieView]);
     const closePhoto = useCallback(() => {
         setNavigation((current) => ({ ...current, photoId: null }));
     }, []);
@@ -375,7 +401,7 @@ export function EditResultsGrid({
         const clampedPage = Math.max(1, Math.min(nextPage, totalPages));
         setPendingPage({ folderId, selfie: isSelfieView, page: clampedPage });
         setNavigation({ galleryId, token, folderId, selfie: isSelfieView, page: clampedPage, photoId: null });
-        void navigate({ to: '/culling/$galleryId/edited', params: { galleryId }, search: (current) => ({ ...current, ...(isSelfieView ? { selfiePage: clampedPage } : { editedPage: clampedPage }) }), replace: false, resetScroll: false }).catch(() => setPendingPage(null));
+        void navigateEdited((current) => ({ ...current, ...(isSelfieView ? { selfiePage: clampedPage } : { editedPage: clampedPage }) }), { replace: false, resetScroll: false }).catch(() => setPendingPage(null));
         requestAnimationFrame(() => {
             gridRef.current?.scrollIntoView({ block: 'start', behavior: 'instant' });
         });
@@ -460,12 +486,7 @@ export function EditResultsGrid({
         if (next !== 'edit-results' && next !== 'selfie') return;
         if (next === 'selfie' && (isSelfieView || !validSelfieResults)) setShowFaceSearch(true);
         else setShowFaceSearch(false);
-        void navigate({
-            to: '/culling/$galleryId/edited',
-            params: { galleryId },
-            search: (current) => ({ ...current, view: next === 'selfie' ? 'selfie' : undefined, selfieSource: undefined }),
-            resetScroll: false,
-        });
+        void navigateEdited((current) => ({ ...current, view: next === 'selfie' ? 'selfie' : undefined, selfieSource: undefined }), { resetScroll: false });
     };
     const selfieModal = selfieSearchAvailable && !guideOpen && showFaceSearch && <FaceSearchModal<EditResultPhoto>
         key={`${galleryId}:${token}`} theme={theme} galleryId={galleryId} token={token} source="edited"
@@ -479,7 +500,7 @@ export function EditResultsGrid({
             }
             if (signal?.aborted) return;
             queryClient.setQueryData<EditedSelfieMatches>(selfieQueryKey, { ids: matches.map((photo) => photo.driveFileId), total, sourceVersion: sourceVersion ?? results.data?.sourceVersion });
-            void navigate({ to: '/culling/$galleryId/edited', params: { galleryId }, search: (current) => ({ ...current, view: 'selfie', selfieSource: undefined, selfiePage: 1 }), resetScroll: false });
+            void navigateEdited((current) => ({ ...current, view: 'selfie', selfieSource: undefined, selfiePage: 1 }), { resetScroll: false });
         }}
         onReset={() => { queryClient.setQueryData(selfieQueryKey, null); changeView('edit-results'); }}
         onClose={() => setShowFaceSearch(false)}
@@ -528,17 +549,17 @@ export function EditResultsGrid({
                 {selfieSearchAvailable && <button type="button" onClick={() => setShowFaceSearch(true)} className="inline-flex min-h-11 shrink-0 items-center gap-2 rounded-md border border-[var(--border)] px-3 text-sm font-medium focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)]"><ScanFace size={16} aria-hidden="true" />{validSelfieResults ? 'Change selfie' : 'Choose selfie'}</button>}
             </div>}
             {!isSelfieView && currentFolder && <div className="mb-4 flex min-w-0 items-center gap-2">
-                <Link to="/culling/$galleryId/edited" params={{ galleryId }} search={(current) => ({ ...current, view: undefined, selfieSource: undefined, folder: currentFolder.parentId ?? undefined, editedPage: 1 })} resetScroll onClick={closePhoto} aria-label={`Back to ${folders.find((folder) => folder.id === currentFolder.parentId)?.name ?? 'Edited Photos'}`} className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-md text-[var(--text-secondary)] transition-colors hover:bg-[var(--bg-card)] hover:text-[var(--text-primary)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)]"><ArrowLeft size={18} aria-hidden="true" /></Link>
+                <EditedGalleryLink galleryId={galleryId} weddingSlug={weddingSlug} search={(current) => ({ ...current, view: undefined, selfieSource: undefined, folder: currentFolder.parentId ?? undefined, editedPage: 1 })} resetScroll onClick={closePhoto} aria-label={`Back to ${folders.find((folder) => folder.id === currentFolder.parentId)?.name ?? 'Edited Photos'}`} className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-md text-[var(--text-secondary)] transition-colors hover:bg-[var(--bg-card)] hover:text-[var(--text-primary)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)]"><ArrowLeft size={18} aria-hidden="true" /></EditedGalleryLink>
                 <nav aria-label="Folder breadcrumb" className="min-w-0 flex-1 overflow-hidden text-xs font-medium text-[var(--text-muted)]">
                     <ol className="flex min-w-0 flex-wrap items-center gap-x-1 gap-y-0.5">
                         <li className="flex min-w-0 items-center gap-1">
-                            <Link to="/culling/$galleryId/edited" params={{ galleryId }} search={(current) => ({ ...current, view: undefined, selfieSource: undefined, folder: undefined, editedPage: 1 })} resetScroll onClick={closePhoto} className="max-w-32 truncate hover:text-[var(--text-primary)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)]">Edited Photos</Link>
+                            <EditedGalleryLink galleryId={galleryId} weddingSlug={weddingSlug} search={(current) => ({ ...current, view: undefined, selfieSource: undefined, folder: undefined, editedPage: 1 })} resetScroll onClick={closePhoto} className="max-w-32 truncate hover:text-[var(--text-primary)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)]">Edited Photos</EditedGalleryLink>
                         </li>
                         {folderBreadcrumbs.map((folder, index) => <li key={folder.id} className="flex min-w-0 items-center gap-1">
                             <ChevronRight size={13} aria-hidden="true" className="shrink-0 opacity-60" />
                             {index === folderBreadcrumbs.length - 1
                                 ? <span aria-current="page" className="max-w-[min(55vw,18rem)] truncate font-semibold text-[var(--text-primary)]">{folder.name}</span>
-                                : <Link to="/culling/$galleryId/edited" params={{ galleryId }} search={(current) => ({ ...current, view: undefined, selfieSource: undefined, folder: folder.id, editedPage: 1 })} resetScroll onClick={closePhoto} className="max-w-32 truncate hover:text-[var(--text-primary)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)]">{folder.name}</Link>}
+                                : <EditedGalleryLink galleryId={galleryId} weddingSlug={weddingSlug} search={(current) => ({ ...current, view: undefined, selfieSource: undefined, folder: folder.id, editedPage: 1 })} resetScroll onClick={closePhoto} className="max-w-32 truncate hover:text-[var(--text-primary)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)]">{folder.name}</EditedGalleryLink>}
                         </li>)}
                     </ol>
                 </nav>
@@ -554,11 +575,11 @@ export function EditResultsGrid({
                         const folderArchiveTargetActive = folderArchiveTarget?.folderId === folder.id && folderArchiveTarget.scope === 'subtree';
                         const folderArchivePending = (folderArchiveMutation.isPending && folderArchiveMutation.variables?.folderId === folder.id && folderArchiveMutation.variables?.scope === 'subtree') || Boolean(folderArchiveTargetActive && archiveJobInProgress);
                         return <div key={folder.id} className="flex min-w-0 items-center rounded-md border border-[var(--border)] bg-[var(--bg-card)]">
-                        <Link to="/culling/$galleryId/edited" params={{ galleryId }} search={(current) => ({ ...current, view: undefined, selfieSource: undefined, folder: folder.id, editedPage: 1 })} resetScroll onClick={closePhoto} aria-label={`Open folder ${folder.name}, ${details}`} className="group flex min-h-12 min-w-0 flex-1 items-center gap-2.5 rounded-md px-2.5 py-1.5 text-left transition-[background-color,transform] duration-100 hover:bg-[var(--bg-elevated)] active:scale-[0.99] focus-visible:z-10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-[var(--accent)] motion-reduce:transition-none sm:min-h-11 sm:gap-3 sm:px-3 sm:py-2">
+                        <EditedGalleryLink galleryId={galleryId} weddingSlug={weddingSlug} search={(current) => ({ ...current, view: undefined, selfieSource: undefined, folder: folder.id, editedPage: 1 })} resetScroll onClick={closePhoto} aria-label={`Open folder ${folder.name}, ${details}`} className="group flex min-h-12 min-w-0 flex-1 items-center gap-2.5 rounded-md px-2.5 py-1.5 text-left transition-[background-color,transform] duration-100 hover:bg-[var(--bg-elevated)] active:scale-[0.99] focus-visible:z-10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-[var(--accent)] motion-reduce:transition-none sm:min-h-11 sm:gap-3 sm:px-3 sm:py-2">
                             <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded bg-[var(--bg-elevated)] text-[var(--text-secondary)]"><Folder size={17} aria-hidden="true" /></span>
                             <span className="min-w-0 flex-1 [overflow-wrap:anywhere]"><span className="block text-[13px] font-semibold leading-4 text-[var(--text-primary)] sm:text-sm">{folder.name}</span><span className="mt-0.5 block text-[10px] font-normal leading-4 text-[var(--text-muted)]">{details}</span></span>
                             <ChevronRight size={16} aria-hidden="true" className="shrink-0 text-[var(--text-muted)] transition-transform duration-150 group-hover:translate-x-0.5 motion-reduce:transition-none" />
-                        </Link>
+                        </EditedGalleryLink>
                         <button type="button" disabled={folderArchivePending || (!contents.items && !contents.folders)} onClick={() => downloadFolder(folder.id, folder.name, 'subtree')} title={folderArchivePending ? `Preparing ${folder.name} ZIP${folderArchiveTargetActive && folderArchiveStatus.data?.total ? ` (${folderArchiveStatus.data.processed ?? 0}/${folderArchiveStatus.data.total})` : ''}` : `Download ${folder.name} and its subfolders as ZIP`} aria-label={folderArchivePending ? `Preparing ${folder.name} ZIP` : `Download ${folder.name} and its subfolders as ZIP`} className="mr-1 inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-md text-[var(--text-secondary)] transition-colors hover:bg-[var(--bg-elevated)] hover:text-[var(--text-primary)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)] disabled:opacity-40 sm:mr-1.5"><Download size={16} aria-hidden="true" />{folderArchivePending && <span className="sr-only">Preparing</span>}</button>
                     </div>;
                     })}
@@ -603,8 +624,8 @@ export function EditResultsGrid({
                                 <button type="button" aria-label="Close folders" onClick={() => { setFolderPickerOpen(false); folderTriggerRef.current?.focus({ preventScroll: true }); }} className="inline-flex h-11 w-11 items-center justify-center rounded-md text-[var(--text-secondary)] hover:text-[var(--text-primary)] focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-[var(--accent)]"><X size={17} aria-hidden="true" /></button>
                             </div>
                             <div className="min-h-0 overflow-y-auto overscroll-contain p-1.5">
-                                <Link to="/culling/$galleryId/edited" params={{ galleryId }} search={(current) => ({ ...current, view: undefined, selfieSource: undefined, folder: undefined, editedPage: 1 })} resetScroll onClick={() => { closePhoto(); setFolderPickerOpen(false); folderTriggerRef.current?.focus({ preventScroll: true }); }} aria-current={!folderId ? 'page' : undefined} className={clsx('flex min-h-12 items-center gap-3 rounded px-3 py-2 text-sm transition-colors hover:bg-[var(--bg-card)] focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-[var(--accent)]', !folderId && 'bg-[var(--bg-card)] font-semibold')}><FolderOpen size={17} aria-hidden="true" className="shrink-0" /><span className="min-w-0 flex-1">Edited Photos</span>{!folderId && <Check size={16} aria-hidden="true" className="shrink-0" />}</Link>
-                                {folderOptions.map((folder) => <Link key={folder.id} to="/culling/$galleryId/edited" params={{ galleryId }} search={(current) => ({ ...current, view: undefined, selfieSource: undefined, folder: folder.id, editedPage: 1 })} resetScroll onClick={() => { closePhoto(); setFolderPickerOpen(false); folderTriggerRef.current?.focus({ preventScroll: true }); }} aria-label={`Open folder ${folder.path}`} aria-current={folder.id === folderId ? 'page' : undefined} className={clsx('flex min-h-12 items-start gap-3 rounded px-3 py-2 text-sm transition-colors hover:bg-[var(--bg-card)] focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-[var(--accent)]', folder.id === folderId && 'bg-[var(--bg-card)] font-semibold')}>{folder.id === folderId ? <FolderOpen size={17} aria-hidden="true" className="mt-0.5 shrink-0" /> : <Folder size={17} aria-hidden="true" className="mt-0.5 shrink-0" />}<span className="min-w-0 flex-1 [overflow-wrap:anywhere]"><span className="block">{folder.name}</span>{folder.parentPath && <span className="mt-0.5 block text-xs font-normal text-[var(--text-muted)]">In {folder.parentPath}</span>}</span>{folder.id === folderId && <Check size={16} aria-hidden="true" className="mt-0.5 shrink-0" />}</Link>)}
+                                <EditedGalleryLink galleryId={galleryId} weddingSlug={weddingSlug} search={(current) => ({ ...current, view: undefined, selfieSource: undefined, folder: undefined, editedPage: 1 })} resetScroll onClick={() => { closePhoto(); setFolderPickerOpen(false); folderTriggerRef.current?.focus({ preventScroll: true }); }} aria-current={!folderId ? 'page' : undefined} className={clsx('flex min-h-12 items-center gap-3 rounded px-3 py-2 text-sm transition-colors hover:bg-[var(--bg-card)] focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-[var(--accent)]', !folderId && 'bg-[var(--bg-card)] font-semibold')}><FolderOpen size={17} aria-hidden="true" className="shrink-0" /><span className="min-w-0 flex-1">Edited Photos</span>{!folderId && <Check size={16} aria-hidden="true" className="shrink-0" />}</EditedGalleryLink>
+                                {folderOptions.map((folder) => <EditedGalleryLink key={folder.id} galleryId={galleryId} weddingSlug={weddingSlug} search={(current) => ({ ...current, view: undefined, selfieSource: undefined, folder: folder.id, editedPage: 1 })} resetScroll onClick={() => { closePhoto(); setFolderPickerOpen(false); folderTriggerRef.current?.focus({ preventScroll: true }); }} aria-label={`Open folder ${folder.path}`} aria-current={folder.id === folderId ? 'page' : undefined} className={clsx('flex min-h-12 items-start gap-3 rounded px-3 py-2 text-sm transition-colors hover:bg-[var(--bg-card)] focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-[var(--accent)]', folder.id === folderId && 'bg-[var(--bg-card)] font-semibold')}>{folder.id === folderId ? <FolderOpen size={17} aria-hidden="true" className="mt-0.5 shrink-0" /> : <Folder size={17} aria-hidden="true" className="mt-0.5 shrink-0" />}<span className="min-w-0 flex-1 [overflow-wrap:anywhere]"><span className="block">{folder.name}</span>{folder.parentPath && <span className="mt-0.5 block text-xs font-normal text-[var(--text-muted)]">In {folder.parentPath}</span>}</span>{folder.id === folderId && <Check size={16} aria-hidden="true" className="mt-0.5 shrink-0" />}</EditedGalleryLink>)}
                             </div>
                         </div>
                     </div>
@@ -641,7 +662,9 @@ export function EditResultsGrid({
         </>} />
         {showGalleryToolbar && <div data-testid="gallery-toolbar" className="sticky top-20 z-30 border-b border-[var(--border)] bg-[var(--bg-deep)] px-2.5 py-2 [touch-action:manipulation] sm:px-8 sm:py-2.5 lg:top-16">
             <div className="mx-auto flex max-w-[1600px] items-center gap-1 sm:gap-x-2">
-                <div className={clsx('min-w-0 flex-none sm:w-auto', deliveryOnly && !selfieSearchAvailable ? 'w-full' : 'w-[calc((100%-0.375rem)/2)]')}><GalleryViewTabs value={isSelfieView ? 'selfie' : 'edit-results'} deliveryOnly={deliveryOnly} galleryAvailable={Boolean(onRequestSelectionAccess)} galleryUnavailableAction={selectionUnavailable} editedAvailable={!unavailable} editedExpired={accessExpired} selfieAvailable={selfieSearchAvailable} allPhotosButtonRef={selectionInfoTriggerRef} onAllPhotos={() => changeView('gallery')} onChange={changeView} /></div>
+                <div className="min-w-0 flex-none w-[calc((100%-0.375rem)/2)] sm:w-auto">
+                    <GalleryViewTabs value={isSelfieView ? 'selfie' : 'edit-results'} deliveryOnly={deliveryOnly} galleryAvailable={Boolean(onRequestSelectionAccess)} galleryUnavailableAction={selectionUnavailable} editedAvailable={!unavailable} editedExpired={accessExpired} selfieAvailable={selfieSearchAvailable} allPhotosButtonRef={selectionInfoTriggerRef} onAllPhotos={() => changeView('gallery')} onChange={changeView} />
+                </div>
                 {deliveryActions && <div className="ml-auto shrink-0">{deliveryActions}</div>}
             </div>
         </div>}

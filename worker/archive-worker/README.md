@@ -127,9 +127,55 @@ replacing that snapshot. Keep this file on the mounted archive volume.
 
 The Ubuntu setup also installs a five-minute systemd monitor. It checks that
 the archive volume is mounted, that at least 5 GiB remains free, and that the
-worker stays active; new service restarts and unhealthy states are recorded in
-the system journal under `orbit-archive-monitor`. This is local monitoring,
-not an external notification channel.
+worker is active and responds to its health endpoint. It also checks the
+`cloudflared.service` state and, when configured, the public archive hostname.
+Failures and recovery are recorded in the system journal under
+`orbit-archive-monitor`.
+
+### Email Alerts
+
+The monitor can send one email when checks first fail and another when they
+recover. Configure SMTP credentials in a root-only file on Ubuntu; never put
+them in Git or share them in chat:
+
+```bash
+sudoedit /etc/orbit-archive-monitor.env
+sudo chmod 600 /etc/orbit-archive-monitor.env
+sudo chown root:root /etc/orbit-archive-monitor.env
+```
+
+Example for Gmail SMTP (use a Google App Password, not the account password):
+
+```dotenv
+ORBIT_ARCHIVE_ALERT_TO=your-address@example.com
+ORBIT_ARCHIVE_SMTP_HOST=smtp.gmail.com
+ORBIT_ARCHIVE_SMTP_PORT=587
+ORBIT_ARCHIVE_SMTP_USERNAME=sender@gmail.com
+ORBIT_ARCHIVE_SMTP_PASSWORD=your-app-password
+ORBIT_ARCHIVE_SMTP_FROM=sender@gmail.com
+ORBIT_ARCHIVE_TUNNEL_SERVICE=cloudflared.service
+ORBIT_ARCHIVE_TUNNEL_HEALTH_URL=https://archive-worker.theorbitphoto.com/healthz
+```
+
+Use any SMTP provider that supports STARTTLS on port 587. Test delivery without
+waiting for an incident:
+
+```bash
+sudo bash -c 'set -a; . /etc/orbit-archive-monitor.env; set +a; printf "Archive monitor email test\\n" | /usr/local/sbin/orbit-archive-monitor-email "[Orbit] Test alert"'
+```
+
+After updating the monitor script and unit file from the repository, install
+them and reload systemd:
+
+```bash
+sudo install -m 0755 deploy/check-archive-worker.sh /usr/local/sbin/orbit-archive-monitor
+sudo install -m 0755 deploy/send-archive-monitor-email.py /usr/local/sbin/orbit-archive-monitor-email
+sudo install -m 0644 deploy/orbit-archive-monitor.service /etc/systemd/system/orbit-archive-monitor.service
+sudo systemctl daemon-reload
+sudo systemctl start orbit-archive-monitor.service
+```
+
+Check the result with `sudo journalctl -t orbit-archive-monitor -n 20 --no-pager`.
 
 ## Limits And Tests
 

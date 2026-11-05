@@ -43,10 +43,11 @@ G3 - Marketing Feature Complete
 
 ## Current Task
 
-MKT-306 - Wedding Photographer Jakarta
+MKT-307 - Prewedding Bali (next; not started)
 
 ## Completed
 
+- MKT-306 - Wedding Photographer Jakarta
 - MKT-205 - Optimize Marketing Media
 - MKT-301 - Global Marketing Layout
 - MKT-302 - Hero Showreel
@@ -74,7 +75,7 @@ None.
 
 ## Next Recommended Task
 
-MKT-306 - Wedding Photographer Jakarta.
+MKT-307 - Prewedding Bali.
 
 ## Current Architecture Decisions
 
@@ -122,6 +123,13 @@ MKT-306 - Wedding Photographer Jakarta.
   package, FAQ, testimonial, and curated media data from the typed content layer
   and keeps the phase-1 pages compatible with later route `head` and schema
   work.
+- MKT-306 completed the Jakarta wedding photography content using the existing
+  template, curated real hero and portfolio images, wedding package copy, and
+  five visible FAQs. Inquiry CTAs retain the configured business email and
+  service-specific subject; WhatsApp remains unset in `LANDING_CONFIG`.
+  Pricing and delivery timing are agreed through a proposal, with no invented
+  prices, turnaround guarantees, or testimonials. The shared template now uses
+  public-facing section labels and its mobile heading scales to fit 320px.
 
 ## Important Implementation Note
 
@@ -143,28 +151,67 @@ TanStack Start + Rsbuild may produce multiple build outputs. MKT-601 must inspec
 
 ## Latest Validation
 
-2026-09-22:
+2026-10-20 / 2026-10-21 (MKT-306):
 
 ```bash
-bun --cwd marketing typecheck
 bun --cwd marketing build
+bun --cwd client build
+bun run typecheck
 ```
 
-Passed.
+Passed. Marketing build was repeated after the mobile CSS adjustment.
 
-Local SSR smoke checks passed for:
+Local SSR and Chromium smoke checks passed for
+`/wedding-photographer-jakarta` at 320px, 390px, 1024px, and 1440px:
 
-- `/wedding-photographer-jakarta`
-- `/prewedding-bali`
-- `/wedding-videographer-jakarta`
+- Meaningful wedding content and FAQ are present in the HTML response.
+- One H1, two related stories, five FAQs, and no visible seed/placeholder copy.
+- Hero and portfolio images load with nonempty alt text.
+- Both inquiry links use the business email and wedding photography subject.
+- Desktop/mobile navigation and browser back restore the wedding page.
+- No browser errors, hydration mismatch messages, or horizontal overflow.
+- Initial 12px overflow at 320px was fixed by scaling the mobile heading.
 
-Global validation still has unrelated blockers outside MKT-305:
+Changed files:
 
-- `bun --cwd client build` fails in
-  `client/src/features/culling/client-gallery/Modals.tsx` because of a syntax
-  error around line 150.
-- `bun run typecheck` fails before reaching marketing because `routes/payments.ts`
-  passes `string | undefined` where `DiscountRule[] | undefined` is expected.
+- `marketing/src/content/services.ts`
+- `marketing/src/content/faqs.ts`
+- `marketing/src/content/packages.ts`
+- `marketing/src/content/portfolio.ts`
+- `marketing/src/components/ServiceLocationTemplate.tsx`
+- `marketing/src/styles.css`
+- `docs/marketing/STATUS.md`
+
+The client build and payments typecheck blockers recorded on 2026-09-22 no
+longer reproduce. Browser checks used the existing local development server;
+opening a real email client or sending an inquiry was not tested. Prerender,
+route SEO/schema, sitemap, robots, and deployment remain in their planned
+tickets. No production deployment was performed.
+
+Homepage visual iteration (2026-10-21):
+
+- The initial frame-only interpretation was superseded by the template-faithful
+  composition documented below. The mobile portfolio width fix from that pass
+  remains necessary to prevent horizontal overflow.
+
+Homepage template adaptation (2026-10-21):
+
+- Reworked the homepage hero to follow the boxed template composition: white
+  70px top and 50px side/bottom desktop bands, dark navigation in the top
+  band, compact uppercase navigation, a gray portfolio/search affordance and
+  black EN label at the right, vertical Discover More and inquiry controls over
+  the side bands, and compact brand credits in the bottom band. Mobile uses
+  10px bands and keeps the two controls as tappable buttons above the credit.
+- Kept the existing Orbit hero photograph, copy, TanStack navigation, and
+  portfolio. The template YouTube demo, newsletter modal, and legacy scripts
+  are not included. The frame and controls render only on `/`.
+- Marketing build and typecheck passed. Chromium checks passed at 320px, 390px,
+  1024px, and 1440px: the image loaded, the frame passes pointer input, routes
+  remove/restore the frame, reduced motion disables animation, and there are no
+  browser errors or horizontal overflow.
+- Changed files for this adaptation: `marketing/src/components/MarketingHero.tsx`,
+  `marketing/src/components/MarketingShell.tsx`, `marketing/src/styles.css`,
+  and this status file. No production deployment.
 
 ## Baseline Validation
 
@@ -206,7 +253,7 @@ bun --cwd marketing check:seo
 
 ### G3
 
-- [ ] MKT-306
+- [x] MKT-306
 - [ ] MKT-307
 - [ ] MKT-308
 - [ ] MKT-309
@@ -258,25 +305,25 @@ Read AGENTS.md, docs/marketing/PRD.md,
 docs/marketing/PLAN.md, docs/marketing/STATUS.md,
 and docs/marketing/WORKFLOW.md.
 
-We are implementing MKT-306.
+We are implementing MKT-307.
 
 Before modifying code:
 1. inspect the current repository state,
 2. verify MKT-305 is complete,
 3. inspect the reusable service/location template,
-4. inspect wedding photography content, media, package, FAQ, and testimonial data,
+4. inspect Bali prewedding content, media, package, FAQ, and testimonial data,
 5. identify the smallest set of files that need to change.
 
-Then implement MKT-306 only.
+Then implement MKT-307 only.
 
-MKT-306 scope:
-- complete the Wedding Photographer Jakarta route content,
+MKT-307 scope:
+- complete the Prewedding Bali route content,
 - use relevant real curated images,
 - keep the CTA working,
 - add FAQ where applicable,
 - avoid placeholders.
 
-Do not start MKT-307 or later tickets.
+Do not start MKT-308 or later tickets.
 Do not modify Hono, Supabase, or Turso.
 Do not refactor unrelated code.
 
@@ -286,8 +333,8 @@ After implementation:
 - report changed files,
 - report validation results,
 - update STATUS.md,
-- mark MKT-306 completed,
-- set MKT-307 as the next recommended task,
+- mark MKT-307 completed,
+- set MKT-308 as the next recommended task,
 - stop.
 ```
 

@@ -1,7 +1,8 @@
 [Unit]
 Description=Check Orbit archive worker health and disk capacity
-After=orbit-archive-worker.service
+After=orbit-archive-worker.service cloudflared.service
 
 [Service]
 Type=oneshot
+EnvironmentFile=-/etc/orbit-archive-monitor.env
 ExecStart=/usr/local/sbin/orbit-archive-monitor

@@ -14,8 +14,9 @@ const FeedbackInboxRoute = lazyRouteComponent(() => import('./pages/FeedbackInbo
 const ClientGalleriesRoute = lazyRouteComponent(() => import('./pages/ClientGalleries'))
 const ClientCullingGalleryRoute = lazyRouteComponent(() => import('./pages/ClientCullingGallery'))
 const EditedClientCullingGalleryRoute = lazyRouteComponent(() => import('./pages/ClientCullingGallery'), 'EditedClientCullingGalleryRoute')
+const WeddingGalleryRoute = lazyRouteComponent(() => import('./pages/ClientCullingGallery'), 'WeddingGalleryRoute')
 
-type ClientCullingSearch = {
+export type ClientCullingSearch = {
     folder?: string
     view?: 'picked' | 'selfie' | 'edit-results'
     filter?: 'submitted'
@@ -53,6 +54,19 @@ const feedbackRoute = createRoute({
     getParentRoute: () => rootRoute,
     path: '/feedback',
     component: FeedbackRoute,
+})
+
+const weddingGalleryRoute = createRoute({
+    getParentRoute: () => rootRoute,
+    path: '/$weddingSlug',
+    validateSearch: (search: Record<string, unknown>): ClientCullingSearch => ({
+        folder: typeof search.folder === 'string' && search.folder.length <= 256 ? search.folder : undefined,
+        view: search.view === 'selfie' || search.view === 'edit-results' ? search.view : undefined,
+        editedPage: positiveSearchPage(search.editedPage),
+        selfiePage: positiveSearchPage(search.selfiePage),
+        selfieSource: search.selfieSource === 'edited' ? 'edited' : undefined,
+    }),
+    component: WeddingGalleryRoute,
 })
 
 const clientCullingGalleryRoute = createRoute({
@@ -153,6 +167,7 @@ const clientGalleriesRoute = createRoute({
 const routeTree = rootRoute.addChildren([
     loginRoute,
     feedbackRoute,
+    weddingGalleryRoute,
     clientCullingGalleryRoutes,
     layoutRoute.addChildren([
         indexRoute,
