@@ -191,14 +191,13 @@ test('Edited Photos does not poll closed selection endpoints in the background',
 
     await page.getByRole('button', { name: 'All Photos', exact: true }).click();
     await expect.poll(() => photoRequests).toBeGreaterThan(0);
-    await expect.poll(() => faceStatusRequests).toBeGreaterThan(0);
     await page.waitForTimeout(5_200);
-    expect(faceStatusRequests).toBe(1);
+    expect(faceStatusRequests).toBe(0);
 });
 
-async function chooseGalleryRefineView(page: Page, view: 'All Photos' | 'Picked' | 'Submitted') {
+async function chooseGalleryRefineView(page: Page, view: 'All Photos' | 'Kamera 1' | 'Kamera 2' | 'Picked' | 'Submitted') {
     const trigger = page.getByRole('navigation', { name: 'Gallery views' }).getByRole('button').first();
-    const menu = page.getByRole('menu', { name: 'All Photos views' });
+    const menu = page.getByRole('menu', { name: 'Photo filters' });
     await trigger.click();
     if (await menu.count() === 0) await trigger.click();
     await menu.getByText(view, { exact: true }).click();
@@ -207,6 +206,90 @@ async function chooseGalleryRefineView(page: Page, view: 'All Photos' | 'Picked'
 function selfieTab(page: Page) {
     return page.getByRole('navigation', { name: 'Gallery views' }).getByRole('button', { name: 'Selfie', exact: true });
 }
+
+test('camera filters and Foto Sendiri categories keep one combined selection', async ({ page }) => {
+    const id = 'camera-refine-gallery';
+    let releaseCamera2 = () => {};
+    const camera2Ready = new Promise<void>((resolve) => { releaseCamera2 = resolve; });
+    await page.setViewportSize({ width: 340, height: 800 });
+    await installSession(page, id);
+    await page.route(`**/api/public/galleries/${id}/contact`, (route) => route.fulfill({ json: {} }));
+    await page.route(`**/api/public/galleries/${id}/photos?*`, async (route) => {
+        const params = new URL(route.request().url()).searchParams;
+        const filter = params.get('filter');
+        if (filter === 'camera2') await camera2Ready;
+        const photos = filter === 'camera1' ? [photo(1), photo(2)] : filter === 'camera2' ? [photo(3)] : filter === 'female' ? [photo(1)] : filter === 'male' ? [photo(3)] : [photo(1), photo(2), photo(3)];
+        return route.fulfill({ json: {
+            gallery: { ...gallery('2099-01-01T00:00:00.000Z'), camerasAvailable: true, cameraFolderCount: 2, maxSelections: 2, photoCount: 3 },
+            photos, page: 1, pageSize: 54, total: photos.length, totalPages: 1,
+            selectedDriveFileIds: [], selectedPhotos: [], ownPhotoStatus: ['female', 'male'].includes(filter || '') ? 'ready' : undefined,
+        } });
+    });
+    await page.route(`**/api/public/galleries/${id}/photos/*/thumbnail?*`, (route) => fulfillImage(route, 320, 320));
+    await page.goto(`/culling/${id}`);
+    await expect(selfieTab(page)).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Kamera 1' })).toHaveCount(0);
+    await chooseGalleryRefineView(page, 'Kamera 1');
+    const cameraTrigger = page.getByRole('navigation', { name: 'Gallery views' }).getByRole('button').first();
+    await expect(cameraTrigger).toContainText('Kamera 1');
+    await expect(cameraTrigger).toHaveCSS('font-size', '12px');
+    await expect(cameraTrigger).toHaveCSS('font-weight', '500');
+    await expect(page).toHaveURL(/filter=camera1/);
+    await page.getByRole('button', { name: 'Select photo-001.jpg' }).click();
+    await chooseGalleryRefineView(page, 'Kamera 2');
+    await expect(page).toHaveURL(/filter=camera2/);
+    try {
+        await expect(page.getByTestId('gallery-grid')).toBeVisible();
+        await expect(page.getByTestId('gallery-grid')).toHaveAttribute('inert', '');
+        await expect(page.getByText('Memuat foto…')).toBeVisible();
+        await expect(page.getByTestId('selection-summary')).toContainText('1/2 selected');
+    } finally {
+        releaseCamera2();
+    }
+    await page.getByRole('button', { name: 'Select photo-003.jpg' }).click();
+    await expect(page.getByTestId('selection-summary')).toContainText('2/2 selected');
+    await page.getByRole('button', { name: 'Foto Sendiri' }).click();
+    await page.getByRole('dialog', { name: 'Foto Sendiri' }).getByRole('button', { name: 'Foto Cewe' }).click();
+    await expect(page.getByRole('button', { name: 'Remove photo-001.jpg' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Remove photo-003.jpg' })).toHaveCount(0);
+    await page.getByRole('button', { name: 'Foto Sendiri' }).click();
+    await page.getByRole('dialog', { name: 'Foto Sendiri' }).getByRole('button', { name: 'Luas' }).click();
+    await expect(page).toHaveURL(/sensitivity=wide/);
+    await page.getByRole('dialog', { name: 'Foto Sendiri' }).getByRole('button', { name: 'Foto Cowo' }).click();
+    await expect(page.getByRole('button', { name: 'Remove photo-003.jpg' })).toBeVisible();
+    await page.getByRole('button', { name: 'Foto Sendiri' }).click();
+    await expect(page.getByRole('dialog', { name: 'Foto Sendiri' }).getByRole('button', { name: 'Foto Berdua' })).toHaveCount(0);
+    await expect(page.getByTestId('selection-summary')).toContainText('2/2 selected');
+});
+
+test('one Drive subfolder adds only Kamera 1 to mobile filters', async ({ page }) => {
+    const id = 'one-photography-folder';
+    await page.setViewportSize({ width: 390, height: 844 });
+    await installSession(page, id);
+    await page.route(`**/api/public/galleries/${id}/contact`, (route) => route.fulfill({ json: {} }));
+    await page.route(`**/api/public/galleries/${id}/photos?*`, (route) => {
+        const filter = new URL(route.request().url()).searchParams.get('filter');
+        const photos = filter === 'camera1' ? [photo(2)] : [photo(1), photo(2)];
+        return route.fulfill({ json: {
+            gallery: { ...gallery('2099-01-01T00:00:00.000Z'), cameraFolderCount: 1, maxSelections: 2, photoCount: 2 },
+            photos, page: 1, pageSize: 54, total: photos.length, totalPages: 1,
+            selectedDriveFileIds: [], selectedPhotos: [],
+        } });
+    });
+    await page.route(`**/api/public/galleries/${id}/photos/*/thumbnail?*`, (route) => fulfillImage(route, 320, 320));
+    await page.goto(`/culling/${id}`);
+    await page.getByRole('navigation', { name: 'Gallery views' }).getByRole('button').first().click();
+    const menu = page.getByRole('menu', { name: 'Photo filters' });
+    await expect(menu.getByRole('menuitemradio', { name: 'Kamera 1' })).toBeVisible();
+    await expect(menu.getByRole('menuitemradio', { name: 'Kamera 2' })).toHaveCount(0);
+    await menu.getByRole('menuitemradio', { name: 'Kamera 1' }).click();
+    await expect(page.getByRole('button', { name: 'Select photo-002.jpg' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Select photo-001.jpg' })).toHaveCount(0);
+    await page.getByRole('button', { name: 'Select photo-002.jpg' }).click();
+    await chooseGalleryRefineView(page, 'All Photos');
+    await expect(page.getByRole('button', { name: 'Remove photo-002.jpg' })).toBeVisible();
+    await expect(page.getByTestId('selection-summary')).toContainText('1/2 selected');
+});
 
 test('opens photo 101 on page 2 by driveFileId and keeps the full frame above the footer', async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 844 });
@@ -732,14 +815,13 @@ test('toggles All Photos to the last submitted snapshot without changing the Pic
         const tabWidths = await views.getByRole('button').evaluateAll((buttons) => buttons.map((button) => button.getBoundingClientRect().width));
         expect(tabWidths[0]).toBeGreaterThanOrEqual(44);
         expect(tabWidths[1]).toBeGreaterThan(tabWidths[0]);
-        expect(tabWidths[2]).toBeCloseTo(44, 0);
+        expect(tabWidths).toHaveLength(2);
         const tabEdge = await views.boundingBox();
-        const firstPhoto = await page.getByTestId('gallery-grid').locator(':scope > *').first().boundingBox();
-        expect(Math.abs((tabEdge?.x ?? 0) + (tabEdge?.width ?? 0) - ((firstPhoto?.x ?? 0) + (firstPhoto?.width ?? 0)))).toBeLessThanOrEqual(1);
+        expect((tabEdge?.x ?? 0) + (tabEdge?.width ?? 0)).toBeLessThanOrEqual(width);
         const editedLabel = views.getByRole('button', { name: 'Edited Photos' }).getByText('Edited', { exact: true });
         await expect(editedLabel).toBeVisible();
         expect(await editedLabel.evaluate((label) => label.scrollWidth <= label.clientWidth + 1)).toBe(true);
-        await expect(views.getByRole('button', { name: 'Selfie' }).locator('svg').first()).toHaveAttribute('width', '16');
+        await expect(views.getByRole('button', { name: 'Selfie' })).toHaveCount(0);
         expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
         await expect(page.getByTestId('gallery-toolbar').getByRole('button', { name: 'Submit', exact: true })).toHaveCount(0);
     }
@@ -1538,7 +1620,7 @@ test('shows the before and edited tutorial slider with pointer and keyboard cont
     await expect.poll(async () => page.getByTestId('tutorial-scroll-area').evaluate((element) => element.scrollTop)).toBe(0);
     const selfieStep = page.getByTestId('tutorial-submit-steps').getByRole('listitem').filter({ hasText: 'Find and Choose Favorites' });
     await expect(selfieStep).toHaveCount(1);
-    await expect(selfieStep).toContainText('Use a clear selfie');
+    await expect(selfieStep).toContainText('Tap Foto Sendiri');
     await selfieStep.scrollIntoViewIfNeeded();
     await expect(selfieStep).toBeVisible();
     expect((await panel.boundingBox())?.height).toBeCloseTo(compactPanelBox?.height ?? 0, 0);
@@ -1698,7 +1780,7 @@ test('shows an in-place tutorial image error and recovers on retry', async ({ pa
     expect(beforeRequests).toBe(2);
 });
 
-test('filters immediately from a selfie and keeps selection submit working', async ({ page }) => {
+test.skip('retired client selfie upload flow', async ({ page }) => {
     const id = 'face-filter-gallery';
     await page.setViewportSize({ width: 390, height: 844 });
     await installSession(page, id);
@@ -1867,7 +1949,7 @@ test('filters immediately from a selfie and keeps selection submit working', asy
     expect(layout.scrollWidth).toBeLessThanOrEqual(layout.viewportWidth + 1);
 });
 
-test('selfie search shows index-changed errors and can retry without browser scanning', async ({ page }) => {
+test.skip('retired client selfie retry flow', async ({ page }) => {
     const id = 'changed-face-index';
     await installSession(page, id);
     await mockFaceSearchAvailable(page, id, 'ready');
@@ -1899,7 +1981,7 @@ test('selfie search shows index-changed errors and can retry without browser sca
 });
 
 for (const theme of ['black', 'white'] as const) {
-    test(`selfie modal keeps the ${theme} gallery theme across search states and the body portal`, async ({ page }) => {
+    test.skip(`retired client selfie modal in ${theme} mode`, async ({ page }) => {
         const id = `face-theme-${theme}`;
         const accent = theme === 'black' ? 'rgb(255, 255, 255)' : 'rgb(17, 17, 17)';
         const surface = theme === 'black' ? 'rgb(13, 13, 13)' : 'rgb(255, 255, 255)';
@@ -2009,7 +2091,7 @@ for (const theme of ['black', 'white'] as const) {
     });
 }
 
-test('hides selfie filtering offline and reveals its mobile label when the worker recovers', async ({ page }) => {
+test.skip('retired client selfie availability tab', async ({ page }) => {
     await page.clock.install();
     const id = 'face-worker-offline-gallery';
     await page.setViewportSize({ width: 320, height: 740 });

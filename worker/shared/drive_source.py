@@ -35,9 +35,11 @@ def trusted_google_url(url: str) -> str:
     return url
 
 
-def thumbnail_url(url: str, webp: bool = True) -> str:
+def thumbnail_url(url: str, webp: bool = True, width: int = 1280) -> str:
     parsed = urlsplit(trusted_google_url(url))
-    suffix = "=w1280-rw" if webp else "=w1280"
+    if width not in {1280, 2048}:
+        raise DriveError("drive_thumbnail_width_rejected")
+    suffix = f"=w{width}-rw" if webp else f"=w{width}"
     path = re.sub(r"=(?:s|w)\d+(?:-[^/]*)?$", "", parsed.path) + suffix
     return urlunsplit(parsed._replace(path=path))
 
@@ -161,15 +163,15 @@ class DriveSource:
             path.unlink(missing_ok=True)
             raise DriveError("drive_network_failed") from None
 
-    async def thumbnail(self, url: str) -> tuple[bytes, bool]:
+    async def thumbnail(self, url: str, width: int = 1280) -> tuple[bytes, bool]:
         try:
-            return await self.get(thumbnail_url(url), self.max_bytes), False
+            return await self.get(thumbnail_url(url, width=width), self.max_bytes), False
         except DriveError as error:
             if error.code != "drive_fetch_failed":
                 raise
-        return await self.get(thumbnail_url(url, webp=False), self.max_bytes), True
+        return await self.get(thumbnail_url(url, webp=False, width=width), self.max_bytes), True
 
-    async def fetch(self, file_id: str, thumbnail: str | None, job_id: int) -> bytes:
+    async def fetch(self, file_id: str, thumbnail: str | None, job_id: int, width: int = 1280) -> bytes:
         started = time.perf_counter()
         metadata_ms = 0.0
         thumbnail_ms = 0.0
@@ -181,7 +183,7 @@ class DriveSource:
         if thumbnail and not metadata_first:
             try:
                 stage_started = time.perf_counter()
-                payload, thumbnail_fallback = await self.thumbnail(thumbnail)
+                payload, thumbnail_fallback = await self.thumbnail(thumbnail, width)
                 thumbnail_ms = (time.perf_counter() - stage_started) * 1000
                 return self._result(payload, file_id, job_id, "thumbnail", started, metadata_ms, thumbnail_ms, stale_thumbnail_ms, original_ms, thumbnail_fallback)
             except DriveError as error:
@@ -199,7 +201,7 @@ class DriveSource:
             if fresh:
                 stage_started = time.perf_counter()
                 try:
-                    payload, thumbnail_fallback = await self.thumbnail(fresh)
+                    payload, thumbnail_fallback = await self.thumbnail(fresh, width)
                 finally:
                     thumbnail_ms = (time.perf_counter() - stage_started) * 1000
                 kind = "metadata_thumbnail" if metadata_first else "refreshed_thumbnail"

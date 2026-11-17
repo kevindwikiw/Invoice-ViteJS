@@ -389,7 +389,7 @@ export function TutorialModal({ galleryId, token, tutorialSampleSlots, tutorialS
                             <ol data-testid="tutorial-submit-steps" className="mt-3 divide-y divide-[var(--border)] border-y border-[var(--border)] sm:mt-4">
                                 {[
                                     { icon: <Images size={18} />, title: 'Browse the Gallery', text: 'Scroll through the gallery and open any photo for a closer look.' },
-                                    { icon: <ScanFace size={18} />, title: 'Find and Choose Favorites', text: 'Use a clear selfie to find matching photos, then tap the check button on the ones you want to keep.' },
+                                    { icon: <ScanFace size={18} />, title: 'Find and Choose Favorites', text: 'Tap Foto Sendiri, choose Foto Cewe or Foto Cowo, then pick the photos you want to keep.' },
                                     { icon: <CheckSquare size={18} />, title: 'Review Picked', text: 'Use All Photos, Picked, or Submitted to move between views.' },
                                     { icon: <Send size={18} />, title: 'Submit Your Selection', text: 'Confirm the final count. You can revise and submit again later.' },
                                     { icon: <Images size={18} />, title: 'Review Edited Photos', text: 'Open Edited Photos to compare your final images with Before / After.' },

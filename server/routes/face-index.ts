@@ -3,6 +3,7 @@ import { bodyLimit } from "hono/body-limit";
 import { galleryAll, galleryBatch, galleryInsertReturningId, galleryOne, galleryRun } from "../db/galleries";
 import { fetchDriveFile, getDrivePhotoMetadata, getReadonlyDriveToken } from "../lib/google-drive";
 import { FACE_MODEL_VERSION, facePhotoVersion, faceSourceVersion } from "../lib/face-model";
+import { buildOwnPhotoResults, ownPhotoReferenceSignature, type IndexedFace } from "../lib/own-photo";
 import { FaceSourceChanged, getFaceSourceVersion, type FaceSourceScope } from "../lib/face-source";
 
 type Env = {
@@ -48,7 +49,7 @@ type FaceEmbedding = {
     driveFileId: string;
     faceIndex: number;
     embedding: number[];
-    boundingBox?: { x: number; y: number; width: number; height: number } | null;
+    boundingBox?: { x: number; y: number; width: number; height: number; imageWidth?: number; imageHeight?: number } | null;
     sourceVersion: string;
     modelVersion: string;
 };
@@ -473,6 +474,10 @@ faceIndexRouter.post("/callbacks/jobs/:id/complete", async (c) => {
     }
     const published = await galleryOne<{ status: string }>("SELECT status FROM face_index_jobs WHERE id = ?", [jobId]);
     if (published?.status !== "completed") return jsonError(c, "Face index job is no longer active.", 409);
+    if (scope === 'selection') {
+        try { await rebuildOwnPhotoResults(galleryId); }
+        catch (error) { console.error(`[own-photo] Unable to prepare gallery ${galleryId}:`, error); }
+    }
     return c.json({ ok: true, embeddings: embeddings.length });
 });
 
@@ -680,6 +685,61 @@ faceIndexRouter.post("/search", async (c) => {
 });
 
 export { createOrReuseJob, currentJob, MODEL_VERSION, INTERNAL_TOKEN };
+
+export async function rebuildOwnPhotoResults(galleryId: number): Promise<boolean> {
+    const job = await currentJob(galleryId, 'selection');
+    if (!job || job.status !== 'completed') return false;
+    const gallery = await galleryOne<{ faceReferenceFileId: string | null; femaleFaceIndex: number | null; maleFaceIndex: number | null; referencePhotoVersion: string | null }>(
+        'SELECT face_reference_file_id as "faceReferenceFileId", face_reference_female_index as "femaleFaceIndex", face_reference_male_index as "maleFaceIndex", face_reference_photo_version as "referencePhotoVersion" FROM galleries WHERE id = ?', [galleryId],
+    );
+    if (!gallery?.faceReferenceFileId || gallery.femaleFaceIndex == null || gallery.maleFaceIndex == null || !gallery.referencePhotoVersion) {
+        await galleryRun('DELETE FROM gallery_own_photo_results WHERE gallery_id = ?', [galleryId]);
+        return false;
+    }
+    const referencePhoto = await galleryOne<{ sourceVersion: string }>(
+        'SELECT source_version as "sourceVersion" FROM gallery_photos WHERE gallery_id = ? AND drive_file_id = ?', [galleryId, gallery.faceReferenceFileId],
+    );
+    if (!referencePhoto || referencePhoto.sourceVersion !== gallery.referencePhotoVersion) {
+        await galleryRun('DELETE FROM gallery_own_photo_results WHERE gallery_id = ?', [galleryId]);
+        return false;
+    }
+    const photos = await galleryAll<{ driveFileId: string }>(
+        'SELECT drive_file_id as "driveFileId" FROM gallery_photos WHERE gallery_id = ? ORDER BY display_order, filename', [galleryId],
+    );
+    const stored = await galleryAll<{ driveFileId: string; faceIndex: number; embedding: string; boundingBox: string | null }>(
+        'SELECT drive_file_id as "driveFileId", face_index as "faceIndex", embedding, bounding_box as "boundingBox" FROM face_embeddings WHERE gallery_id = ? AND source_scope = ? AND model_version = ?',
+        [galleryId, 'selection', MODEL_VERSION],
+    );
+    const soloPhotos = await galleryAll<{ driveFileId: string }>(
+        'SELECT drive_file_id as "driveFileId" FROM face_index_photos WHERE gallery_id = ? AND source_scope = ? AND model_version = ? AND is_solo = 1',
+        [galleryId, 'selection', MODEL_VERSION],
+    );
+    const faces: IndexedFace[] = stored.map((face) => ({
+        driveFileId: face.driveFileId,
+        faceIndex: face.faceIndex,
+        embedding: JSON.parse(face.embedding) as number[],
+        boundingBox: face.boundingBox ? JSON.parse(face.boundingBox) as IndexedFace['boundingBox'] : null,
+    }));
+    const result = buildOwnPhotoResults(photos.map((photo) => photo.driveFileId), faces, gallery.faceReferenceFileId, gallery.femaleFaceIndex, gallery.maleFaceIndex, new Set(soloPhotos.map((photo) => photo.driveFileId)));
+    if (!result) {
+        await galleryRun('DELETE FROM gallery_own_photo_results WHERE gallery_id = ?', [galleryId]);
+        return false;
+    }
+    const latest = await currentJob(galleryId, 'selection');
+    const current = await galleryOne<{ faceReferenceFileId: string | null; femaleFaceIndex: number | null; maleFaceIndex: number | null; referencePhotoVersion: string | null }>(
+        'SELECT face_reference_file_id as "faceReferenceFileId", face_reference_female_index as "femaleFaceIndex", face_reference_male_index as "maleFaceIndex", face_reference_photo_version as "referencePhotoVersion" FROM galleries WHERE id = ?', [galleryId],
+    );
+    if (latest?.id !== job.id || current?.faceReferenceFileId !== gallery.faceReferenceFileId || current?.femaleFaceIndex !== gallery.femaleFaceIndex || current?.maleFaceIndex !== gallery.maleFaceIndex || current?.referencePhotoVersion !== gallery.referencePhotoVersion) return false;
+    const signature = ownPhotoReferenceSignature(gallery.faceReferenceFileId, gallery.femaleFaceIndex, gallery.maleFaceIndex, gallery.referencePhotoVersion);
+    await galleryBatch([
+        { sql: 'DELETE FROM gallery_own_photo_results WHERE gallery_id = ?', params: [galleryId] },
+        ...(['strict', 'balanced', 'wide'] as const).map((sensitivity) => ({
+            sql: 'INSERT INTO gallery_own_photo_results (gallery_id, source_version, index_job_id, reference_file_id, reference_signature, sensitivity, photo_ids) VALUES (?, ?, ?, ?, ?, ?, ?)',
+            params: [galleryId, job.sourceVersion, job.id, gallery.faceReferenceFileId, signature, sensitivity, JSON.stringify(result[sensitivity])],
+        })),
+    ]);
+    return true;
+}
 
 export async function prepareGalleryFaceIndex(galleryId: number, scope: FaceSourceScope = 'selection'): Promise<void> {
     try {

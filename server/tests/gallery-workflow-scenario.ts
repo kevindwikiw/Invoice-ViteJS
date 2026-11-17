@@ -2,11 +2,14 @@ import assert from 'node:assert/strict';
 import { mock } from 'bun:test';
 import { Hono } from 'hono';
 
-let folderAccess = true;
+let folderAccess: boolean | null = true;
 let empty = false;
 let downloadAllowed = true;
 let driveFails = false;
 let driveReads = 0;
+let publicDownloadStatus = 206;
+let rejectRangedDownload = false;
+let includeTeaserVideo = false;
 const photo = (id: string) => ({ id, name: `${id}.jpg`, mimeType: 'image/jpeg', webContentLink: `https://drive.google.com/uc?export=download&id=${id}`, canDownload: downloadAllowed, thumbnailLink: `https://lh3.googleusercontent.com/${id}`, width: 1200, height: 900 });
 mock.module('../lib/google-drive', () => ({
     getReadonlyDriveToken: async () => ({ accessToken: 'test', expiresAt: Date.now() + 1000 }),
@@ -14,7 +17,10 @@ mock.module('../lib/google-drive', () => ({
     listDrivePhotoTree: async () => {
         driveReads++;
         if (driveFails) throw new Error('Drive unavailable');
-        return { rootName: 'Edited Source', photos: empty ? [] : [{ ...photo('ceremony'), folderId: 'ceremony-folder' }], folders: [{ id: 'ceremony-folder', parentId: null, name: 'Ceremony' }] };
+        return { rootName: 'Edited Source', photos: empty ? [] : [
+            ...(includeTeaserVideo ? [{ ...photo('teaser'), name: 'Teaser.mp4', mimeType: 'video/mp4', folderId: null }] : []),
+            { ...photo('ceremony'), folderId: 'ceremony-folder' },
+        ], folders: [{ id: 'ceremony-folder', parentId: null, name: 'Ceremony' }] };
     },
     listDrivePhotos: async () => [photo('source')],
     getDrivePhotoMetadata: async (id: string) => photo(id),
@@ -36,9 +42,17 @@ assert.deepEqual(db!.query('SELECT selection_deadline_at, edit_results_expires_a
 
 const { adminGalleriesRouter, publicGalleriesRouter } = await import('../routes/galleries');
 const originalFetch = globalThis.fetch;
-globalThis.fetch = Object.assign(async (input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => String(input).includes('/v1/archive/galleries/')
-    ? new Response(null, { status: 200 })
-    : originalFetch(input, init), { preconnect: originalFetch.preconnect }) as typeof fetch;
+globalThis.fetch = Object.assign(async (input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
+    const url = String(input);
+    if (url.includes('/v1/archive/galleries/')) return new Response(null, { status: 200 });
+    if (url.startsWith('https://drive.google.com/uc?')) {
+        const status = url.includes('id=teaser') ? 200 : rejectRangedDownload && new Headers(init?.headers).has('Range') ? 403 : publicDownloadStatus;
+        const response = new Response(status === 206 ? 'image' : null, { status, headers: { 'content-type': status === 206 ? 'image/jpeg' : 'text/html' } });
+        Object.defineProperty(response, 'url', { value: url });
+        return response;
+    }
+    return originalFetch(input, init);
+}, { preconnect: originalFetch.preconnect }) as typeof fetch;
 const { galleryEditResultsRateLimiter, galleryPinRateLimiter } = await import('../middleware/rate-limit');
 const { default: paymentsRouter } = await import('../routes/payments');
 const app = new Hono<any>();
@@ -106,6 +120,26 @@ assert.equal((await one<any>('SELECT selection_deadline_at FROM galleries WHERE 
 
 folderAccess = false;
 assert.equal((await request(`/admin/${id}/edit-results/sync`, 'POST')).status, 400);
+folderAccess = null;
+rejectRangedDownload = true;
+assert.equal((await request(`/admin/${id}/edit-results/sync`, 'POST')).status, 200);
+rejectRangedDownload = false;
+publicDownloadStatus = 403;
+const deniedPublicDownload = await request(`/admin/${id}/edit-results/sync`, 'POST');
+assert.equal(deniedPublicDownload.status, 400);
+assert.match((await json(deniedPublicDownload)).error, /HTTP 403/);
+publicDownloadStatus = 200;
+const confirmationPage = await request(`/admin/${id}/edit-results/sync`, 'POST');
+assert.equal(confirmationPage.status, 400);
+assert.match((await json(confirmationPage)).error, /sign-in or confirmation page/);
+publicDownloadStatus = 503;
+assert.equal((await request(`/admin/${id}/edit-results/sync`, 'POST')).status, 503);
+publicDownloadStatus = 206;
+includeTeaserVideo = true;
+const videoFirst = await request(`/admin/${id}/edit-results/sync`, 'POST');
+assert.equal(videoFirst.status, 200);
+assert.equal((await json(videoFirst)).photoCount, 2);
+includeTeaserVideo = false;
 folderAccess = true;
 empty = true;
 assert.equal((await request(`/admin/${id}/edit-results/sync`, 'POST')).status, 400);

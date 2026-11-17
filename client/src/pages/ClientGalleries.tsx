@@ -44,7 +44,8 @@ import type {
   GalleryListMode,
   GalleryWorkflow,
   GalleryStatus,
-  GallerySummary
+  GallerySummary,
+  GalleryPhoto,
 } from '../features/culling/culling.types';
 import {
   calculateAddonQuote
@@ -58,6 +59,9 @@ import {
   downloadGallerySelectionsXlsx,
   getGalleryContact,
   getGalleryDetail,
+  getGalleryReferenceFaces,
+  getGalleryOwnPhotoReview,
+  setGalleryOwnPhotoExcluded,
   getEditArchivePreparation,
   listGalleries,
   publishEditResults,
@@ -70,6 +74,9 @@ import {
   updateGallery,
   type GalleryContactSettings,
   type CreateGalleryInput,
+  type OwnPhotoReviewCategory,
+  type OwnPhotoReviewEntry,
+  type OwnPhotoReviewSensitivity,
 } from '../features/culling/culling.admin';
 import { formatDateValue } from '../lib/date';
 import { GalleryModal as Modal } from '../components/GalleryModal';
@@ -901,18 +908,83 @@ function PreviewSamplesPage({ dirty, saved, saving, onDirtyChange, onSavedChange
     </div>
   </section>;
 }
+function OwnPhotoReviewPanel({ galleryId, ready }: { galleryId: number; ready: boolean }) {
+  const [open, setOpen] = useState(false);
+  const [category, setCategory] = useState<OwnPhotoReviewCategory>('female');
+  const [sensitivity, setSensitivity] = useState<OwnPhotoReviewSensitivity>('balanced');
+  const [page, setPage] = useState(1);
+  const [error, setError] = useState('');
+  const qc = useQueryClient();
+  const review = useQuery({
+    queryKey: ['gallery-own-photo-review', galleryId, sensitivity],
+    queryFn: () => getGalleryOwnPhotoReview(galleryId, sensitivity),
+    enabled: open && ready,
+    retry: false,
+  });
+  const correction = useMutation({
+    mutationFn: (input: { category: OwnPhotoReviewCategory; photo: OwnPhotoReviewEntry; excluded: boolean }) => setGalleryOwnPhotoExcluded(galleryId, input.category, input.photo, input.excluded),
+    onSuccess: () => { setError(''); void qc.invalidateQueries({ queryKey: ['gallery-own-photo-review', galleryId] }); },
+    onError: (reason) => setError(reason instanceof Error ? reason.message : 'Koreksi gagal disimpan.'),
+  });
+  const entries = review.data?.categories[category] || [];
+  const pageSize = 24;
+  const totalPages = Math.max(1, Math.ceil(entries.length / pageSize));
+  const currentPage = Math.min(page, totalPages);
+  const shown = entries.slice((currentPage - 1) * pageSize, currentPage * pageSize);
+  const categoryLabel = category === 'female' ? 'Foto Cewe' : 'Foto Cowo';
+  return <section aria-label="Tinjau Foto Sendiri" className="rounded-md border border-[var(--border)] p-4">
+    <div className="flex flex-wrap items-start justify-between gap-3">
+      <div><h3 className="text-sm font-semibold text-[var(--text-primary)]">Tinjau Foto Sendiri</h3><p className="mt-1 max-w-xl text-xs leading-5 text-[var(--text-muted)]">Foto dengan tamu boleh masuk. Keluarkan foto yang masih memuat pasangan saat wajahnya tidak terbaca.</p></div>
+      <button type="button" aria-expanded={open} onClick={() => setOpen((value) => !value)} disabled={!ready} className="min-h-11 rounded-md border border-[var(--border)] px-4 text-xs font-semibold text-[var(--text-primary)] hover:border-[var(--accent)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)] disabled:opacity-50">{open ? 'Tutup tinjauan' : 'Buka tinjauan'}</button>
+    </div>
+    {open && ready && <div className="mt-4 space-y-4">
+      <div className="flex flex-wrap gap-2" role="group" aria-label="Kategori Foto Sendiri">{(['female', 'male'] as const).map((value) => <button key={value} type="button" aria-pressed={category === value} onClick={() => { setCategory(value); setPage(1); }} className={clsx('min-h-11 rounded-md border px-3 text-xs font-semibold', category === value ? 'border-[var(--accent)] bg-[var(--accent)] text-[var(--bg-deep)]' : 'border-[var(--border)] text-[var(--text-primary)]')}>{value === 'female' ? 'Foto Cewe' : 'Foto Cowo'}{review.data ? ` (${review.data.counts[value]})` : ''}</button>)}</div>
+      <div className="flex flex-wrap gap-2" role="group" aria-label="Tingkat kecocokan">{(['strict', 'balanced', 'wide'] as const).map((value) => <button key={value} type="button" aria-pressed={sensitivity === value} onClick={() => { setSensitivity(value); setPage(1); }} className={clsx('min-h-11 rounded-md border px-3 text-xs', sensitivity === value ? 'border-[var(--accent)] text-[var(--accent)]' : 'border-[var(--border)] text-[var(--text-secondary)]')}>{value === 'strict' ? 'Ketat' : value === 'balanced' ? 'Normal' : 'Luas'}</button>)}</div>
+      {review.isPending && <p role="status" className="text-xs text-[var(--text-muted)]">Memuat hasil foto…</p>}
+      {review.isError && <p role="alert" className="text-xs text-rose-500">Tinjauan belum tersedia. Coba lagi setelah indeks wajah selesai. <button type="button" onClick={() => void review.refetch()} className="min-h-11 underline">Coba lagi</button></p>}
+      {error && <p role="alert" className="text-xs text-rose-500">{error}</p>}
+      {review.data && entries.length === 0 && <p role="status" className="text-xs text-[var(--text-muted)]">Belum ada foto dalam {categoryLabel} pada tingkat ini.</p>}
+      {review.data && shown.length > 0 && <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">{shown.map((photo) => <article key={photo.driveFileId} className="min-w-0 overflow-hidden rounded-md border border-[var(--border)] bg-[var(--bg-elevated)]">
+        <img src={`/api/galleries/${galleryId}/own-photo-review/${encodeURIComponent(photo.driveFileId)}/thumbnail?version=${encodeURIComponent(photo.sourceVersion)}`} alt={photo.filename} width={320} height={320} loading="lazy" className="aspect-square w-full bg-black object-contain" />
+        <div className="space-y-2 p-3"><p title={photo.filename} className="truncate text-xs font-medium text-[var(--text-primary)]">{photo.filename}</p><p className="text-xs text-[var(--text-muted)]">{photo.excluded ? 'Dikeluarkan dari filter' : `Tampil di ${categoryLabel}`}</p><button type="button" disabled={correction.isPending} onClick={() => correction.mutate({ category, photo, excluded: !photo.excluded })} className="min-h-11 w-full rounded-md border border-[var(--border)] px-3 text-xs font-semibold text-[var(--text-primary)] hover:border-[var(--accent)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)] disabled:opacity-50">{photo.excluded ? `Pulihkan ke ${categoryLabel}` : `Keluarkan dari ${categoryLabel}`}</button></div>
+      </article>)}</div>}
+      {review.data && totalPages > 1 && <div className="flex items-center justify-between gap-3"><button type="button" disabled={currentPage <= 1} onClick={() => setPage(currentPage - 1)} className="min-h-11 rounded-md border border-[var(--border)] px-3 text-xs disabled:opacity-50">Sebelumnya</button><span className="text-xs text-[var(--text-muted)]">Halaman {currentPage} dari {totalPages}</span><button type="button" disabled={currentPage >= totalPages} onClick={() => setPage(currentPage + 1)} className="min-h-11 rounded-md border border-[var(--border)] px-3 text-xs disabled:opacity-50">Berikutnya</button></div>}
+    </div>}
+  </section>;
+}
+
 function GalleryDetail({ gallery, close, mode, focusSelectionDuration = false }: { gallery: GallerySummary; close: () => void; mode: GalleryMode; focusSelectionDuration?: boolean }) {
-  const detail = useQuery({ queryKey: ['gallery-detail', gallery.id], queryFn: () => getGalleryDetail(gallery.id) });
+  const detail = useQuery({ queryKey: ['gallery-detail', gallery.id], queryFn: () => getGalleryDetail(gallery.id), refetchInterval: (query) => query.state.data?.gallery.ownPhotoStatus === 'indexing' ? 5000 : false });
   if (detail.isLoading) {
     return <Modal title={gallery.title} close={close}><div role="status" aria-label="Loading gallery details" className="flex min-h-[60dvh] items-center justify-center gap-2 text-sm text-[var(--text-muted)]"><Loader2 size={18} className="animate-spin" /> Loading gallery...</div></Modal>;
   }
   if (!detail.data) {
     return <Modal title={gallery.title} close={close}><div role="alert" className="space-y-4 py-8 text-center text-sm"><p>Unable to load gallery details.</p><button type="button" onClick={() => void detail.refetch()} className="inline-flex h-11 items-center gap-2 rounded-md border border-[var(--border)] px-4"><RefreshCw size={16} /> Retry</button></div></Modal>;
   }
-  return <GalleryDetailEditor key={gallery.id} data={detail.data.gallery} close={close} initialMode={mode} focusSelectionDuration={focusSelectionDuration} />;
+  return <GalleryDetailEditor key={gallery.id} data={detail.data.gallery} photos={detail.data.photos} close={close} initialMode={mode} focusSelectionDuration={focusSelectionDuration} />;
 }
-function GalleryDetailEditor({ data, close, initialMode, focusSelectionDuration }: { data: GallerySummary; close: () => void; initialMode: GalleryMode; focusSelectionDuration: boolean }) {
+function GalleryDetailEditor({ data, photos, close, initialMode, focusSelectionDuration }: { data: GallerySummary; photos: GalleryPhoto[]; close: () => void; initialMode: GalleryMode; focusSelectionDuration: boolean }) {
+  const [referenceChoice, setReferenceChoice] = useState(data.faceReferenceFileId || data.ownPhotoReferenceFileId || '');
+  const [referenceImageFailed, setReferenceImageFailed] = useState(false);
+  const [referenceChoiceTouched, setReferenceChoiceTouched] = useState(false);
+  const [femaleFaceIndex, setFemaleFaceIndex] = useState<number | null>(data.faceReferenceFemaleIndex ?? null);
+  const [maleFaceIndex, setMaleFaceIndex] = useState<number | null>(data.faceReferenceMaleIndex ?? null);
+  const [faceAssignmentTouched, setFaceAssignmentTouched] = useState(false);
+  const [faceRole, setFaceRole] = useState<'female' | 'male'>('female');
+  const referencePreview = photos.find((photo) => photo.driveFileId === (referenceChoice || data.ownPhotoReferenceFileId));
   const deliveryOnly = data.workflow === 'delivery_only';
+  const referenceFaces = useQuery({ queryKey: ['gallery-reference-faces', data.id, referenceChoice], queryFn: () => getGalleryReferenceFaces(data.id, referenceChoice), enabled: Boolean(referenceChoice) && !deliveryOnly, retry: false });
+  useEffect(() => {
+    if (!referenceChoiceTouched && !referenceChoice && (data.faceReferenceFileId || data.ownPhotoReferenceFileId)) {
+      setReferenceChoice(data.faceReferenceFileId || data.ownPhotoReferenceFileId || '');
+    }
+  }, [referenceChoice, referenceChoiceTouched, data.faceReferenceFileId, data.ownPhotoReferenceFileId]);
+  useEffect(() => {
+    if (referenceChoice === data.faceReferenceFileId && data.faceReferencePhotoVersion && referenceFaces.data?.sourceVersion && data.faceReferencePhotoVersion !== referenceFaces.data.sourceVersion) {
+      setFemaleFaceIndex(null);
+      setMaleFaceIndex(null);
+    }
+  }, [referenceChoice, data.faceReferenceFileId, data.faceReferencePhotoVersion, referenceFaces.data?.sourceVersion]);
   const detailMode = deliveryOnly ? 'edited' : initialMode;
   const { addToast } = useToast();
   const editFormRef = useRef<HTMLFormElement>(null);
@@ -975,6 +1047,19 @@ function GalleryDetailEditor({ data, close, initialMode, focusSelectionDuration 
     onError: (error) => reportActionError('ZIP preparation', error),
   });
   const markDirty = () => { setDirty(true); setSaved(false); setSaveError(''); setActionError(''); };
+  const markReferenceFace = (faceIndex: number) => {
+    setFaceAssignmentTouched(true);
+    if (faceRole === 'female') {
+      setFemaleFaceIndex(faceIndex);
+      if (maleFaceIndex === faceIndex) setMaleFaceIndex(null);
+      setFaceRole('male');
+    } else {
+      setMaleFaceIndex(faceIndex);
+      if (femaleFaceIndex === faceIndex) setFemaleFaceIndex(null);
+      setFaceRole('female');
+    }
+    markDirty();
+  };
   const syncFormDirty = (nextDirty: boolean) => {
     setFeedback((current) => ({ ...current, [mode]: { ...current[mode], dirty: nextDirty, saved: nextDirty ? false : current[mode].saved, saveError: '', actionError: '' } }));
   };
@@ -983,6 +1068,9 @@ function GalleryDetailEditor({ data, close, initialMode, focusSelectionDuration 
     const initialDuration = String(data.selectionDurationHours ?? (data.selectionDurationDays || 3) * 24);
     return restartSelectionWindow || getValue('title') !== data.title.trim()
       || getValue('driveFolderUrl') !== driveUrl(data)
+      || getValue('faceReferenceFileId') !== String(data.faceReferenceFileId || '')
+      || femaleFaceIndex !== (data.faceReferenceFemaleIndex ?? null)
+      || maleFaceIndex !== (data.faceReferenceMaleIndex ?? null)
       || getValue('master-limit') !== (data.maxSelections ? String(data.maxSelections) : '')
       || getValue('selection-duration') !== initialDuration
       || getValue('pin') !== ''
@@ -1005,6 +1093,11 @@ function GalleryDetailEditor({ data, close, initialMode, focusSelectionDuration 
   };
   const changeDraftStatus = (nextStatus: GalleryStatus) => {
     if (draftStatus === nextStatus) return;
+    if (mode === 'edited' && nextStatus === 'open' && !data.hasEditResults && !editResultsPassword.trim()) {
+      setActionError('Enter a delivery password and save Edited Photos to publish before opening access. Sync only checks the folder.');
+      document.getElementById('edit-results-publish-password')?.focus();
+      return;
+    }
     if (mode === 'selection' && nextStatus === 'open' && data.isExpired) setRestartSelectionWindow(true);
     setDraftStatus(nextStatus);
     const form = document.getElementById(mode === 'edited' ? 'edit-delivery-form' : 'edit-gallery-form');
@@ -1260,6 +1353,7 @@ function GalleryDetailEditor({ data, close, initialMode, focusSelectionDuration 
             </button>
           ))}
         </div>
+        {mode === 'edited' && !data.hasEditResults && <p className="text-xs leading-5 text-[var(--text-muted)]">Sync checks the folder. Enter a delivery password below, then Save Edited Photos to publish and open client access.</p>}
         <div className="space-y-4 border-t border-[var(--border)] pt-4">
           {!deliveryOnly && <><form
             ref={editFormRef}
@@ -1283,6 +1377,10 @@ function GalleryDetailEditor({ data, close, initialMode, focusSelectionDuration 
                 setSaveError(`Active limit cannot be lower than ${submittedCount} submitted selections.`);
                 return;
               }
+              if ((femaleFaceIndex === null) !== (maleFaceIndex === null)) {
+                setSaveError('Tandai wajah Cewe dan Cowo sebelum menyimpan.');
+                return;
+              }
               const currentDurationHours = Number(data.selectionDurationHours ?? (data.selectionDurationDays || 3) * 24);
               const durationChanged = nextDurationHours !== currentDurationHours;
               update.mutate({
@@ -1290,6 +1388,8 @@ function GalleryDetailEditor({ data, close, initialMode, focusSelectionDuration 
                status: selectionStatus,
                title: String(form.get('title') || data.title).trim(),
                driveFolderUrl: String(form.get('driveFolderUrl') || sourceDriveUrl).trim(),
+               faceReferenceFileId: String(form.get('faceReferenceFileId') || '').trim(),
+               ...(faceAssignmentTouched && femaleFaceIndex !== null && maleFaceIndex !== null ? { faceReferenceFemaleIndex: femaleFaceIndex, faceReferenceMaleIndex: maleFaceIndex, faceReferencePhotoVersion: referenceFaces.data?.sourceVersion || '' } : {}),
                pin: String(form.get('pin') || ''),
                maxSelections: nextMasterLimit,
                 ...(addonDirty ? { additionalSelectionLimit: addonDraftLimit, editAddonPrice: addonUnitPrice, editAddonPricingMode: 'per_photo', editAddonStatus: paymentStatus, qrisEnabled } : {}),
@@ -1306,6 +1406,39 @@ function GalleryDetailEditor({ data, close, initialMode, focusSelectionDuration 
               <Field label="Google Drive folder URL">
                 <input name="driveFolderUrl" required defaultValue={sourceDriveUrl} className={inputClass} />
               </Field>
+              <p className="text-xs leading-5 text-[var(--text-muted)]">Kamera 1 dan Kamera 2 diambil otomatis dari satu atau dua subfolder pada folder Drive utama saat Sync.</p>
+              <Field label="Foto referensi untuk Foto Sendiri">
+                <select name="faceReferenceFileId" value={referenceChoice} onChange={(event) => { setReferenceChoiceTouched(true); setReferenceChoice(event.currentTarget.value); setReferenceImageFailed(false); setFemaleFaceIndex(null); setMaleFaceIndex(null); setFaceAssignmentTouched(false); setFaceRole('female'); markDirty(); }} className={inputClass}>
+                  <option value="">Otomatis: foto pertama dengan dua wajah</option>
+                  {photos.map((photo) => <option key={photo.driveFileId} value={photo.driveFileId}>{photo.filename}</option>)}
+                </select>
+              </Field>
+              {referencePreview && <div className="space-y-3 rounded-md border border-[var(--border)] p-3 text-xs text-[var(--text-secondary)]">
+                <p className="font-medium">{referencePreview.filename}</p>
+                <div className="flex flex-wrap gap-2" role="group" aria-label="Pilih identitas wajah">
+                  {(['female', 'male'] as const).map((role) => <button key={role} type="button" aria-pressed={faceRole === role} onClick={() => setFaceRole(role)} className={clsx('min-h-10 rounded-md border px-3 font-semibold', faceRole === role ? 'border-[var(--accent)] bg-[var(--accent)] text-[var(--bg-deep)]' : 'border-[var(--border)]')}>Tandai {role === 'female' ? 'Cewe' : 'Cowo'}: {role === 'female' ? femaleFaceIndex === null ? 'belum' : `wajah ${femaleFaceIndex + 1}` : maleFaceIndex === null ? 'belum' : `wajah ${maleFaceIndex + 1}`}</button>)}
+                </div>
+                <div className="relative inline-block max-w-full">
+                  <img src={`/api/galleries/${data.id}/reference-photo/${encodeURIComponent(referencePreview.driveFileId)}`} alt={referencePreview.filename} onLoad={() => setReferenceImageFailed(false)} onError={() => setReferenceImageFailed(true)} className="block max-h-80 max-w-full rounded" />
+                  {referenceFaces.data?.faces.map((face) => {
+                    const box = face.boundingBox;
+                    if (!box) return null;
+                    const width = Number(referencePreview.width) || 1280;
+                    const height = Number(referencePreview.height) || 1280;
+                    const scale = Math.min(1, 1280 / Math.max(width, height));
+                    const imageWidth = box.imageWidth || width * scale;
+                    const imageHeight = box.imageHeight || height * scale;
+                    const label = femaleFaceIndex === face.faceIndex ? 'Cewe' : maleFaceIndex === face.faceIndex ? 'Cowo' : String(face.faceIndex + 1);
+                    return <button key={face.faceIndex} type="button" aria-label={`Tandai wajah ${face.faceIndex + 1} sebagai ${faceRole === 'female' ? 'Cewe' : 'Cowo'}`} onClick={() => markReferenceFace(face.faceIndex)} className={clsx('absolute flex min-h-7 min-w-7 items-start justify-start rounded border-2 border-white bg-black/20 text-[10px] font-bold text-white shadow', femaleFaceIndex === face.faceIndex && 'border-pink-400', maleFaceIndex === face.faceIndex && 'border-sky-400')} style={{ left: `${Math.max(0, box.x / imageWidth * 100)}%`, top: `${Math.max(0, box.y / imageHeight * 100)}%`, width: `${Math.max(2, box.width / imageWidth * 100)}%`, height: `${Math.max(2, box.height / imageHeight * 100)}%` }}><span className="rounded bg-black/70 px-1">{label}</span></button>;
+                  })}
+                </div>
+                {referenceImageFailed && <p role="alert">Preview foto referensi gagal dimuat. Sync galeri, lalu coba lagi.</p>}
+                {referenceFaces.data && <div className="flex flex-wrap gap-2">{referenceFaces.data.faces.map((face) => <button key={face.faceIndex} type="button" onClick={() => markReferenceFace(face.faceIndex)} className="min-h-9 rounded border border-[var(--border)] px-2">Wajah {face.faceIndex + 1}{femaleFaceIndex === face.faceIndex ? ' · Cewe' : maleFaceIndex === face.faceIndex ? ' · Cowo' : ''}</button>)}</div>}
+                {referenceFaces.isError && <p role="alert">Deteksi wajah belum tersedia. Sync galeri dan tunggu indeks selesai.</p>}
+                {referenceFaces.data?.faces.length === 0 && <p role="status">Tidak ada wajah terdeteksi di foto ini. Pilih foto referensi lain.</p>}
+              </div>}
+              <p role="status" className="text-xs text-[var(--text-secondary)]">Foto Sendiri: {data.ownPhotoStatus === 'ready' ? 'siap' : data.ownPhotoStatus === 'needs_reference' ? 'tandai wajah Cewe dan Cowo, lalu simpan' : data.ownPhotoStatus === 'indexing' ? 'sedang diproses' : 'indeks wajah belum tersedia'}</p>
+              <p className="text-xs leading-5 text-[var(--text-muted)]">Sync folder Drive utama, lalu pilih dua wajah klien di foto referensi; foto dengan tamu tetap akan ditemukan.</p>
               <div className="grid gap-4 sm:grid-cols-3">
                 <div className="min-w-0 space-y-2">
                   <label htmlFor="edit-selection-password" className="block text-[11px] font-semibold text-[var(--text-secondary)]">Photo Selection password</label>
@@ -1331,6 +1464,7 @@ function GalleryDetailEditor({ data, close, initialMode, focusSelectionDuration 
               {data.isExpired && !restartSelectionWindow && <button type="button" onClick={() => { setRestartSelectionWindow(true); syncFormDirty(true); }} className="mt-3 inline-flex min-h-11 items-center rounded-md border border-[var(--border)] px-3 text-xs font-semibold text-[var(--text-primary)] hover:border-[var(--accent)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)]">Restart with current duration</button>}
             </fieldset>
           </form>
+          <div hidden={mode !== 'selection'}><OwnPhotoReviewPanel galleryId={data.id} ready={data.ownPhotoStatus === 'ready'} /></div>
           <div hidden={mode !== 'selection'} className="flex flex-wrap items-center justify-between gap-3 border-t border-[var(--border)] py-4">
             <div><h3 className="text-sm font-semibold">Photo Selection access</h3><p className="mt-1 text-xs text-[var(--text-muted)]">Unlock failed password attempts without changing the saved password.</p></div>
             <button type="button" disabled={busy} onClick={() => { setActionError(''); resetPin.mutate(data.id); }} className="inline-flex h-11 items-center gap-2 rounded-md border border-[var(--border)] px-3 text-xs font-semibold hover:bg-[var(--bg-elevated)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)] disabled:opacity-50">
@@ -1348,6 +1482,11 @@ function GalleryDetailEditor({ data, close, initialMode, focusSelectionDuration 
               const form = new FormData(event.currentTarget);
               if (editResultsPassword.trim() && !String(form.get('editResultsFolderId') || '').trim()) {
                 setSaveError('Add an Edited photos Drive folder before publishing.');
+                return;
+              }
+              if (!data.hasEditResults && editedStatus === 'open' && !editResultsPassword.trim()) {
+                setSaveError('Enter a delivery password, then Save Edited Photos to publish and open access. Sync only checks the folder.');
+                document.getElementById('edit-results-publish-password')?.focus();
                 return;
               }
               if (data.hasEditResults && editResultsPassword.trim() && !editedFormChanged(event.currentTarget, '', editedStatus)) {
@@ -1390,7 +1529,7 @@ function GalleryDetailEditor({ data, close, initialMode, focusSelectionDuration 
                       {showEditResultsPassword ? <EyeOff size={15} aria-hidden="true" className="text-[var(--accent)]" /> : <Eye size={15} aria-hidden="true" />}
                     </button>
                   </div>
-                  <p id="edit-results-publish-help" className="text-xs leading-5 text-[var(--text-muted)]">{editResultsPassword ? 'New password entered. Save Edited Photos to activate.' : 'Use 4-64 characters. Leave blank to keep the current password.'}</p>
+                  <p id="edit-results-publish-help" className="text-xs leading-5 text-[var(--text-muted)]">{!data.hasEditResults ? 'Use 4-64 characters. Save Edited Photos to publish and open client access.' : editResultsPassword ? 'New password entered. Save Edited Photos to activate.' : 'Use 4-64 characters. Leave blank to keep the current password.'}</p>
                 </div>
                 <div className="min-w-0 space-y-4">
                   <Field label="Download access duration">
@@ -1764,7 +1903,16 @@ export default function ClientGalleries() {
                 setFocusSelectionDuration(true);
                 setSelected(gallery);
               }}
-              onStatusChange={(id, status, area) => statusUpdate.mutate(area === 'edited' ? { id, editResultsStatus: status } : { id, status })}
+              onStatusChange={(id, status, area) => {
+                const gallery = pageItems.find((item) => item.id === id);
+                if (area === 'edited' && status === 'open' && gallery && !gallery.hasEditResults) {
+                  setSelectedMode('edited');
+                  setFocusSelectionDuration(false);
+                  setSelected(gallery);
+                  return;
+                }
+                statusUpdate.mutate(area === 'edited' ? { id, editResultsStatus: status } : { id, status });
+              }}
               onResetPin={(id) => resetPin.mutate(id)}
               onResetEdited={(id) => resetEdited.mutate(id)}
               onDelete={(gallery) => {

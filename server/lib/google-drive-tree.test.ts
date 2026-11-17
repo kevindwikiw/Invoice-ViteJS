@@ -15,6 +15,7 @@ test('Drive tree follows pagination and folders, ignores shortcuts, and rejects 
     let tokenIssues = 0;
     let videoRange = '';
     let hangVideoResponse = false;
+    let untrustedRequests = 0;
     const fetchMock = spyOn(globalThis, 'fetch').mockImplementation(Object.assign(async (input: string | URL | Request, init?: RequestInit) => {
         const url = new URL(String(input));
         if (url.hostname === 'oauth2.googleapis.com') {
@@ -33,9 +34,17 @@ test('Drive tree follows pagination and folders, ignores shortcuts, and rejects 
             thumbnailAttempts += 1;
             if (mode === 'expired-thumbnail') return new Response('expired link', { status: 404 });
             if (mode === 'retry-thumbnail' && thumbnailAttempts === 1) return new Response('busy', { status: 503, headers: { 'Retry-After': '0' } });
+            if (mode === 'redirect-thumbnail' && url.pathname.includes('photo')) return new Response(null, { status: 302, headers: { Location: 'https://lh3.googleusercontent.com/redirected=s320' } });
+            if (mode === 'untrusted-redirect') return new Response(null, { status: 302, headers: { Location: 'https://example.com/photo' } });
             const authorization = new Headers(init?.headers).get('Authorization');
+            if (mode === 'redirect-thumbnail') expect(authorization).toBe('Bearer refreshed');
+            if (mode === 'redirect-original' && url.pathname === '/original') expect(authorization).toMatch(/^Bearer /);
             if (mode === 'refresh-token' && authorization === 'Bearer test') return new Response('expired', { status: 401 });
             return new Response('image', { headers: { 'Content-Type': 'image/jpeg' } });
+        }
+        if (url.hostname === 'example.com') untrustedRequests += 1;
+        if (mode === 'redirect-original' && url.pathname.endsWith('/files/redirect-photo') && url.searchParams.get('alt') === 'media') {
+            return new Response(null, { status: 302, headers: { Location: 'https://lh3.googleusercontent.com/original' } });
         }
         if (url.pathname.endsWith('/files')) {
             expect(url.searchParams.get('q')).toContain('trashed = false');
@@ -98,6 +107,15 @@ test('Drive tree follows pagination and folders, ignores shortcuts, and rejects 
         thumbnailAttempts = 0;
         await expect(fetchDriveFile('photo', 'https://lh3.googleusercontent.com/photo=s320', 320)).rejects.toThrow('expired link');
         expect(thumbnailAttempts).toBe(1);
+        mode = 'redirect-thumbnail';
+        thumbnailAttempts = 0;
+        expect((await fetchDriveFile('photo', 'https://lh3.googleusercontent.com/photo=s320', 320)).ok).toBe(true);
+        expect(thumbnailAttempts).toBe(2);
+        mode = 'untrusted-redirect';
+        await expect(fetchDriveFile('photo', 'https://lh3.googleusercontent.com/photo=s320', 320, true, { maxAttempts: 1 })).rejects.toThrow('untrusted redirect');
+        expect(untrustedRequests).toBe(0);
+        mode = 'redirect-original';
+        expect((await fetchDriveFile('redirect-photo')).headers.get('Content-Type')).toBe('image/jpeg');
     } finally {
         fetchMock.mockRestore();
         if (originalConfig === undefined) delete process.env.GOOGLE_SERVICE_ACCOUNT_JSON;

@@ -94,6 +94,12 @@ const GALLERY_SCHEMA = [
         edit_results_comparison_enabled INTEGER NOT NULL DEFAULT 0,
          edit_addon_package_id INTEGER,
          drive_folder_id TEXT NOT NULL,
+         camera_1_folder_id TEXT,
+         camera_2_folder_id TEXT,
+         face_reference_file_id TEXT,
+         face_reference_female_index INTEGER,
+         face_reference_male_index INTEGER,
+         face_reference_photo_version TEXT,
          tutorial_before_drive_file_id TEXT,
          tutorial_after_drive_file_id TEXT,
          tutorial_before_2_drive_file_id TEXT,
@@ -118,6 +124,8 @@ const GALLERY_SCHEMA = [
         drive_file_id TEXT NOT NULL,
         filename TEXT NOT NULL,
         mime_type TEXT NOT NULL,
+        folder_id TEXT,
+        camera_number INTEGER,
         thumbnail_url TEXT,
         web_view_url TEXT,
         width INTEGER,
@@ -135,6 +143,25 @@ const GALLERY_SCHEMA = [
         note TEXT,
         submitted_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
         UNIQUE(gallery_id, selected_drive_file_id)
+    )`,
+    `CREATE TABLE IF NOT EXISTS gallery_own_photo_results (
+        gallery_id INTEGER NOT NULL REFERENCES galleries(id) ON DELETE CASCADE,
+        source_version TEXT NOT NULL,
+        index_job_id INTEGER NOT NULL,
+        reference_file_id TEXT NOT NULL,
+        reference_signature TEXT NOT NULL DEFAULT '',
+        sensitivity TEXT NOT NULL,
+        photo_ids TEXT NOT NULL,
+        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (gallery_id, sensitivity)
+    )`,
+    `CREATE TABLE IF NOT EXISTS gallery_own_photo_exclusions (
+        gallery_id INTEGER NOT NULL REFERENCES galleries(id) ON DELETE CASCADE,
+        drive_file_id TEXT NOT NULL,
+        source_version TEXT NOT NULL,
+        category TEXT NOT NULL CHECK(category IN ('female', 'male')),
+        created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (gallery_id, drive_file_id, category)
     )`,
     `CREATE TABLE IF NOT EXISTS gallery_edit_result_pairs (
         gallery_id INTEGER NOT NULL REFERENCES galleries(id) ON DELETE CASCADE,
@@ -227,6 +254,12 @@ const GALLERY_SCHEMA = [
 ];
 
 const GALLERY_REQUIRED_COLUMNS: Array<readonly [string, string]> = [
+    ["camera_1_folder_id", "TEXT"],
+    ["camera_2_folder_id", "TEXT"],
+    ["face_reference_file_id", "TEXT"],
+    ["face_reference_female_index", "INTEGER"],
+    ["face_reference_male_index", "INTEGER"],
+    ["face_reference_photo_version", "TEXT"],
     ["gallery_workflow", "TEXT NOT NULL DEFAULT 'selection_delivery' CHECK(gallery_workflow IN ('selection_delivery', 'delivery_only'))"],
     ["wedding_slug", "TEXT"],
     ["edit_results_status", "TEXT NOT NULL DEFAULT 'draft'"],
@@ -308,6 +341,8 @@ const GALLERY_SELECTION_REQUIRED_COLUMNS: Array<readonly [string, string]> = [
 
 const GALLERY_PHOTO_REQUIRED_COLUMNS: Array<readonly [string, string]> = [
     ["source_version", "TEXT NOT NULL DEFAULT ''"],
+    ["folder_id", "TEXT"],
+    ["camera_number", "INTEGER"],
 ];
 
 const FACE_INDEX_JOB_REQUIRED_COLUMNS: Array<readonly [string, string]> = [
@@ -349,7 +384,7 @@ async function migrateFaceScopes(): Promise<void> {
     else await run(index);
 }
 
-type GalleryTableWithMigrations = "galleries" | "gallery_selections" | "gallery_photos" | "face_index_jobs" | "face_index_photos" | "face_embeddings" | "gallery_edit_result_photos";
+type GalleryTableWithMigrations = "galleries" | "gallery_selections" | "gallery_photos" | "gallery_own_photo_results" | "face_index_jobs" | "face_index_photos" | "face_embeddings" | "gallery_edit_result_photos";
 
 async function ensureTursoColumns(tableName: GalleryTableWithMigrations, columns: Array<readonly [string, string]>): Promise<void> {
     if (!galleryTurso) return;
@@ -408,6 +443,7 @@ async function initializeGalleryStorage(): Promise<void> {
     if (galleryTurso) {
         await galleryTurso.batch(GALLERY_SCHEMA, "write");
         await ensureTursoColumns("galleries", GALLERY_REQUIRED_COLUMNS);
+        await ensureTursoColumns("gallery_own_photo_results", [["reference_signature", "TEXT NOT NULL DEFAULT ''"]]);
         await galleryTurso.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_galleries_public_key ON galleries(public_key)");
         await backfillWeddingSlugs();
         await galleryTurso.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_galleries_wedding_slug ON galleries(wedding_slug)");
@@ -479,6 +515,7 @@ async function initializeGalleryStorage(): Promise<void> {
         await run(query);
     }
     await ensureSqliteColumns("galleries", GALLERY_REQUIRED_COLUMNS);
+    await ensureSqliteColumns("gallery_own_photo_results", [["reference_signature", "TEXT NOT NULL DEFAULT ''"]]);
     await run("CREATE UNIQUE INDEX IF NOT EXISTS idx_galleries_public_key ON galleries(public_key)");
     await backfillWeddingSlugs();
     await run("CREATE UNIQUE INDEX IF NOT EXISTS idx_galleries_wedding_slug ON galleries(wedding_slug)");

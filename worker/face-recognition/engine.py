@@ -6,7 +6,7 @@ import numpy as np
 from telemetry import measure
 
 # The index version includes face and person-detection settings.
-MODEL_VERSION = "opencv5-yunet-2023mar-sface-2021dec-nanodet-2022nov-5"
+MODEL_VERSION = "opencv5-yunet-2023mar-sface-2021dec-nanodet-2022nov-7"
 DETECTION_THRESHOLD = 0.9
 GALLERY_DETECTION_THRESHOLD = 0.8
 SELFIE_RETRY_THRESHOLD = 0.8

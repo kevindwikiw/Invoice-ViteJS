@@ -68,6 +68,62 @@ const exampleGallery = {
     selectionDurationHours: 72, selectionDurationDays: 3, addonStatus: 'none',
 };
 
+test('admin marks two detected faces as Cewe and Cowo before Foto Sendiri is prepared', async ({ page }) => {
+    const gallery = { ...exampleGallery, photoCount: 1, faceReferenceFileId: 'reference', ownPhotoReferenceFileId: 'reference', faceReferenceFemaleIndex: null, faceReferenceMaleIndex: null, ownPhotoStatus: 'needs_reference' };
+    const photo = { id: 1, galleryId: gallery.id, driveFileId: 'reference', filename: 'reference.jpg', mimeType: 'image/jpeg', displayOrder: 0, createdAt: gallery.createdAt, width: 640, height: 480, thumbnailUrl: 'https://lh3.googleusercontent.com/blocked-thumbnail' };
+    const patches: Record<string, unknown>[] = [];
+    await page.addInitScript((storedUser) => localStorage.setItem('orbit_user', JSON.stringify(storedUser)), user);
+    await page.route('**/api/users/1/permissions', (route) => route.fulfill({ json: { userId: 1, role: 'admin', permissions: [], permissionOverrides: {}, featurePermissions: user.featurePermissions } }));
+    await page.route('**/api/galleries?*', (route) => route.fulfill({ json: { items: [gallery], total: 1, totalPages: 1 } }));
+    await page.route('**/api/galleries/7/reference-faces?*', (route) => route.fulfill({ json: { sourceVersion: 'photo-v1', faces: [
+        { faceIndex: 0, boundingBox: { x: 80, y: 90, width: 120, height: 140, imageWidth: 640, imageHeight: 480 } },
+        { faceIndex: 1, boundingBox: { x: 360, y: 90, width: 120, height: 140, imageWidth: 640, imageHeight: 480 } },
+    ] } }));
+    await page.route('**/api/galleries/7/reference-photo/reference', (route) => route.fulfill({ contentType: 'image/svg+xml', body: '<svg xmlns="http://www.w3.org/2000/svg" width="640" height="480"><rect width="640" height="480" fill="#666"/></svg>' }));
+    await page.route('**/api/galleries/7', (route) => {
+        if (route.request().method() === 'PATCH') {
+            patches.push(route.request().postDataJSON());
+            return route.fulfill({ json: { status: 'updated' } });
+        }
+        return route.fulfill({ json: { gallery, photos: [photo], selections: [] } });
+    });
+    await page.goto('/galleries');
+    await page.getByText(gallery.title, { exact: true }).click();
+    const dialog = page.getByRole('dialog', { name: gallery.title });
+    await expect(dialog.getByRole('img', { name: 'reference.jpg' })).toHaveAttribute('src', '/api/galleries/7/reference-photo/reference');
+    await expect(dialog.getByRole('button', { name: 'Tandai wajah 1 sebagai Cewe' })).toBeVisible();
+    await dialog.getByRole('button', { name: 'Tandai wajah 1 sebagai Cewe' }).click();
+    await dialog.getByRole('button', { name: 'Tandai wajah 2 sebagai Cowo' }).click();
+    await dialog.getByRole('button', { name: 'Save Photo Selection', exact: true }).click();
+    await expect.poll(() => patches.length).toBe(1);
+    expect(patches[0]).toMatchObject({ faceReferenceFileId: 'reference', faceReferenceFemaleIndex: 0, faceReferenceMaleIndex: 1, faceReferencePhotoVersion: 'photo-v1' });
+});
+
+test('admin can exclude and restore a false Foto Cewe match in the review panel', async ({ page }) => {
+    const gallery = { ...exampleGallery, faceReferenceFileId: 'reference', faceReferenceFemaleIndex: 0, faceReferenceMaleIndex: 1, ownPhotoStatus: 'ready' };
+    const item = { driveFileId: 'female-with-hidden-partner', filename: 'hidden-partner.jpg', sourceVersion: 'photo-v1', excluded: false };
+    let excluded = false;
+    await page.addInitScript((storedUser) => localStorage.setItem('orbit_user', JSON.stringify(storedUser)), user);
+    await page.route('**/api/users/1/permissions', (route) => route.fulfill({ json: { userId: 1, role: 'admin', permissions: [], permissionOverrides: {}, featurePermissions: user.featurePermissions } }));
+    await page.route('**/api/galleries?*', (route) => route.fulfill({ json: { items: [gallery], total: 1, totalPages: 1 } }));
+    await page.route('**/api/galleries/7/reference-faces?*', (route) => route.fulfill({ json: { sourceVersion: 'photo-v1', faces: [] } }));
+    await page.route('**/api/galleries/7/own-photo-review?*', (route) => route.fulfill({ json: { sensitivity: 'balanced', categories: { female: [{ ...item, excluded }], male: [] }, counts: { female: 1, male: 0 } } }));
+    await page.route('**/api/galleries/7/own-photo-review/*/thumbnail?*', (route) => route.fulfill({ contentType: 'image/svg+xml', body: '<svg xmlns="http://www.w3.org/2000/svg" width="320" height="320"/>' }));
+    await page.route('**/api/galleries/7/own-photo-exclusions/female/female-with-hidden-partner', (route) => { excluded = route.request().method() === 'PUT'; return route.fulfill({ json: { status: excluded ? 'excluded' : 'restored' } }); });
+    await page.route('**/api/galleries/7', (route) => route.fulfill({ json: { gallery, photos: [], selections: [] } }));
+    await page.goto('/galleries');
+    await page.getByText(gallery.title, { exact: true }).click();
+    const panel = page.getByRole('region', { name: 'Tinjau Foto Sendiri' });
+    await panel.getByRole('button', { name: 'Buka tinjauan' }).click();
+    await expect(panel.getByText('hidden-partner.jpg')).toBeVisible();
+    await panel.getByRole('button', { name: 'Keluarkan dari Foto Cewe' }).click();
+    await expect(panel.getByText('Dikeluarkan dari filter')).toBeVisible();
+    await panel.getByRole('button', { name: 'Pulihkan ke Foto Cewe' }).click();
+    await expect(panel.getByText('Tampil di Foto Cewe')).toBeVisible();
+    await panel.getByRole('button', { name: 'Foto Cowo' }).click();
+    await expect(panel.getByText('Belum ada foto dalam Foto Cowo')).toBeVisible();
+});
+
 test('gallery list uses mobile cards without horizontal scrolling', async ({ page }) => {
     await page.addInitScript((storedUser) => localStorage.setItem('orbit_user', JSON.stringify(storedUser)), user);
     await page.route('**/api/users/1/permissions', (route) => route.fulfill({ json: { userId: 1, role: 'admin', permissions: [], permissionOverrides: {}, featurePermissions: user.featurePermissions } }));
@@ -668,9 +724,11 @@ test('created gallery opens even when it is absent from the active page', async 
 
 test('edited results folder can be published with an admin-defined password', async ({ page }) => {
     let gallery = { ...exampleGallery, editResultsFolderId: null, editResultsZipFileId: null as string | null, hasEditResults: false, editResultsPhotoCount: 0, editResultsPublishedAt: null as string | null };
+    let saves = 0;
     await page.route('**/api/galleries?*', (route) => route.fulfill({ json: { items: [gallery], total: 1, totalPages: 1 } }));
     await page.route('**/api/galleries/7', async (route) => {
         if (route.request().method() === 'PATCH') {
+            saves++;
             gallery = { ...gallery, ...route.request().postDataJSON() };
             await route.fulfill({ json: { status: 'updated' } });
         } else await route.fulfill({ json: { gallery, photos: [], selections: [] } });
@@ -690,6 +748,10 @@ test('edited results folder can be published with an admin-defined password', as
     await dialog.getByRole('button', { name: 'Save Edited Photos' }).click();
     await expect.poll(() => gallery.editResultsFolderId).toBe('https://drive.google.com/drive/folders/edited-folder');
     await expect.poll(() => gallery.editResultsZipFileId).toBe('https://drive.google.com/file/d/edited-archive/view');
+    await dialog.getByRole('group', { name: 'Edited Photos status' }).getByRole('button', { name: 'Open' }).click();
+    await expect(dialog.getByRole('alert')).toContainText('Enter a delivery password and save Edited Photos');
+    await expect(dialog.getByLabel('Password for publication')).toBeFocused();
+    expect(saves).toBe(1);
     await dialog.getByLabel('Password for publication').fill('my wedding photos 2026');
     await expect(dialog.getByLabel('Password for publication')).toHaveAttribute('type', 'password');
     await dialog.getByRole('button', { name: 'Show password', exact: true }).click();
@@ -702,6 +764,23 @@ test('edited results folder can be published with an admin-defined password', as
     await expect(dialog.getByLabel('Password for publication')).toHaveValue('');
     await expect(dialog.getByLabel('Password for publication')).toHaveAttribute('type', 'password');
     await expect(page.getByText('Published 2 edited items across 1 folders with your delivery password.')).toBeVisible();
+});
+
+test('opening an unpublished Wedding gallery leads to its publication form', async ({ page }) => {
+    const gallery = { ...exampleGallery, workflow: 'delivery_only', editResultsStatus: 'draft', editResultsFolderId: 'edited-folder', hasEditResults: false, editResultsPhotoCount: 0 };
+    let statusPatches = 0;
+    await page.route('**/api/galleries?*', (route) => route.fulfill({ json: { items: [gallery], total: 1, totalPages: 1 } }));
+    await page.route('**/api/galleries/7', (route) => {
+        if (route.request().method() === 'PATCH') statusPatches++;
+        return route.fulfill({ json: { gallery, photos: [], selections: [] } });
+    });
+    await page.goto('/galleries?mode=wedding');
+    await page.getByRole('button', { name: `${gallery.title} Edited Photos status: Draft` }).click();
+    await page.getByRole('group', { name: `${gallery.title} Edited Photos status options` }).getByRole('button', { name: 'Open' }).click();
+    const dialog = page.getByRole('dialog');
+    await expect(dialog).toBeVisible();
+    await expect(dialog.getByText('Sync checks the folder. Enter a delivery password below, then Save Edited Photos to publish and open client access.')).toBeVisible();
+    expect(statusPatches).toBe(0);
 });
 
 test('admin sees ZIP prebuild progress and can retry failed archives', async ({ page }) => {

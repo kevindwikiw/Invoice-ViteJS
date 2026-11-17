@@ -19,7 +19,8 @@ const WeddingGalleryRoute = lazyRouteComponent(() => import('./pages/ClientCulli
 export type ClientCullingSearch = {
     folder?: string
     view?: 'picked' | 'selfie' | 'edit-results'
-    filter?: 'submitted'
+    filter?: 'submitted' | 'female' | 'male' | 'camera1' | 'camera2'
+    sensitivity?: 'strict' | 'balanced' | 'wide'
     page?: number
     editedPage?: number
     selfieSource?: 'edited' | 'selection'
@@ -76,7 +77,8 @@ const clientCullingGalleryRoute = createRoute({
     validateSearch: (search: Record<string, unknown>): ClientCullingSearch => ({
         folder: typeof search.folder === 'string' && search.folder.length <= 256 ? search.folder : undefined,
         view: search.view === 'picked' || search.view === 'selfie' || search.view === 'edit-results' ? search.view : undefined,
-        filter: search.filter === 'submitted' ? 'submitted' : undefined,
+        filter: search.filter === 'submitted' || search.filter === 'female' || search.filter === 'male' || search.filter === 'camera1' || search.filter === 'camera2' ? search.filter : undefined,
+        sensitivity: search.sensitivity === 'strict' || search.sensitivity === 'balanced' || search.sensitivity === 'wide' ? search.sensitivity : undefined,
         page: positiveSearchPage(search.page),
         editedPage: positiveSearchPage(search.editedPage),
         selfieSource: search.selfieSource === 'edited' || search.selfieSource === 'selection' ? search.selfieSource : undefined,

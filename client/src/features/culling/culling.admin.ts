@@ -60,7 +60,7 @@ export async function createGallery(input: CreateGalleryInput): Promise<GalleryS
     return response.json();
 }
 
-export async function updateGallery(input: { id: number; editResultsStatus?: GalleryStatus; title?: string; comparisonEnabled?: boolean; comparisonPairs?: EditResultPair[]; driveFolderId?: string; driveFolderUrl?: string; editResultsFolderId?: string; editResultsZipFileId?: string; editResultsAccessDurationHours?: number | null; pin?: string; status?: GalleryStatus; contactWhatsappUrl?: string; maxSelections?: number; selectionDurationHours?: number; additionalSelectionLimit?: number; editAddonStatus?: string; editAddonPricingMode?: string; editAddonPrice?: number; editAddonPackageId?: number | null; qrisEnabled?: boolean }): Promise<{ status: string; editedSourceChanged?: boolean; comparisonApplied?: boolean; comparisonCount?: number }> {
+export async function updateGallery(input: { id: number; editResultsStatus?: GalleryStatus; title?: string; comparisonEnabled?: boolean; comparisonPairs?: EditResultPair[]; driveFolderId?: string; driveFolderUrl?: string; faceReferenceFileId?: string; faceReferenceFemaleIndex?: number; faceReferenceMaleIndex?: number; faceReferencePhotoVersion?: string; editResultsFolderId?: string; editResultsZipFileId?: string; editResultsAccessDurationHours?: number | null; pin?: string; status?: GalleryStatus; contactWhatsappUrl?: string; maxSelections?: number; selectionDurationHours?: number; additionalSelectionLimit?: number; editAddonStatus?: string; editAddonPricingMode?: string; editAddonPrice?: number; editAddonPackageId?: number | null; qrisEnabled?: boolean }): Promise<{ status: string; editedSourceChanged?: boolean; comparisonApplied?: boolean; comparisonCount?: number }> {
     const { id, ...body } = input;
     const response = await fetchWithAuth(`/galleries/${id}`, {
         method: 'PATCH',
@@ -68,6 +68,29 @@ export async function updateGallery(input: { id: number; editResultsStatus?: Gal
     });
     if (!response.ok) throw await parseError(response, 'Unable to update gallery.');
     return response.json();
+}
+
+export async function getGalleryReferenceFaces(id: number, fileId: string): Promise<{ sourceVersion: string; faces: Array<{ faceIndex: number; boundingBox: { x: number; y: number; width: number; height: number; imageWidth?: number; imageHeight?: number } | null }> }> {
+    const response = await fetchWithAuth(`/galleries/${id}/reference-faces?fileId=${encodeURIComponent(fileId)}`);
+    if (!response.ok) throw await parseError(response, 'Unable to load detected faces.');
+    return response.json();
+}
+
+export type OwnPhotoReviewCategory = 'female' | 'male';
+export type OwnPhotoReviewSensitivity = 'strict' | 'balanced' | 'wide';
+export type OwnPhotoReviewEntry = { driveFileId: string; filename: string; sourceVersion: string; excluded: boolean };
+export type OwnPhotoReview = { sensitivity: OwnPhotoReviewSensitivity; categories: Record<OwnPhotoReviewCategory, OwnPhotoReviewEntry[]>; counts: Record<OwnPhotoReviewCategory, number> };
+
+export async function getGalleryOwnPhotoReview(id: number, sensitivity: OwnPhotoReviewSensitivity): Promise<OwnPhotoReview> {
+    const response = await fetchWithAuth(`/galleries/${id}/own-photo-review?sensitivity=${sensitivity}`);
+    if (!response.ok) throw await parseError(response, 'Unable to load Foto Sendiri review.');
+    return response.json();
+}
+
+export async function setGalleryOwnPhotoExcluded(id: number, category: OwnPhotoReviewCategory, photo: OwnPhotoReviewEntry, excluded: boolean): Promise<void> {
+    const path = `/galleries/${id}/own-photo-exclusions/${category}/${encodeURIComponent(photo.driveFileId)}`;
+    const response = await fetchWithAuth(path, excluded ? { method: 'PUT', body: JSON.stringify({ sourceVersion: photo.sourceVersion }) } : { method: 'DELETE' });
+    if (!response.ok) throw await parseError(response, excluded ? 'Unable to exclude photo.' : 'Unable to restore photo.');
 }
 
 export async function listAddonRequests(page = 1, pageSize = 10): Promise<Paginated<AddonRequest>> {

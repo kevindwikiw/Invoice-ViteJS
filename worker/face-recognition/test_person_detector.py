@@ -42,10 +42,10 @@ class PersonDetectorTests(unittest.TestCase):
         decoded_boxes, scores = detector._decode([classes, boxes])
         self.assertEqual((decoded_boxes, scores), ([], []))
         classes[0, 0, 1] = 0
-        classes[0, 0, 0] = 0.18
+        classes[0, 0, 0] = 0.30
         decoded_boxes, scores = detector._decode([classes, boxes])
         self.assertEqual(len(decoded_boxes), 1)
-        self.assertAlmostEqual(scores[0], 0.18)
+        self.assertAlmostEqual(scores[0], 0.30)
 
     def test_decode_accepts_opencv5_grouped_outputs(self):
         detector = self.detector_without_model()

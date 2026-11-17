@@ -20,11 +20,21 @@ export interface GallerySummary {
     weddingSlug?: string | null;
     title: string;
     driveFolderId?: string;
+    camera1FolderId?: string | null;
+    camera2FolderId?: string | null;
+    faceReferenceFileId?: string | null;
+    faceReferenceFemaleIndex?: number | null;
+    faceReferenceMaleIndex?: number | null;
+    faceReferencePhotoVersion?: string | null;
+    ownPhotoReferenceFileId?: string | null;
+    ownPhotoStatus?: 'ready' | 'indexing' | 'needs_reference' | 'unavailable';
     status?: GalleryStatus;
     createdAt: string;
     updatedAt: string;
     syncedAt?: string | null;
     photoCount?: number;
+    camerasAvailable?: boolean;
+    cameraFolderCount?: 0 | 1 | 2;
     selectionCount?: number;
     selectionDurationHours?: number;
     selectionDurationDays?: number;
@@ -78,6 +88,7 @@ export interface GalleryPhoto extends GalleryDisplayPhoto {
     galleryId: number;
     mimeType: string;
     createdAt: string;
+    thumbnailUrl?: string | null;
 }
 
 export interface GallerySelection {
@@ -116,6 +127,8 @@ export interface PublicGallery {
     status: GalleryStatus;
     syncedAt?: string | null;
     photoCount?: number;
+    camerasAvailable?: boolean;
+    cameraFolderCount?: 0 | 1 | 2;
     selectionCount?: number;
     selectionDurationHours: number;
     selectionDurationDays: number;
@@ -171,6 +184,7 @@ export interface PublicGalleryPhotos {
     pageSize: number;
     total: number;
     totalPages: number;
+    ownPhotoStatus?: 'ready' | 'indexing' | 'unavailable';
     selectedDriveFileIds?: string[];
     selectedPhotos: Array<GalleryPhoto & { note?: string | null }>;
 }

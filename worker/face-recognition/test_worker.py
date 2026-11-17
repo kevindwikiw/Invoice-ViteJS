@@ -27,6 +27,12 @@ def blank_jpeg(size=(80, 60)):
 
 
 class ImageTests(unittest.TestCase):
+    def test_indexed_face_boxes_include_image_dimensions_for_admin_labelling(self):
+        face = Face(np.array([20, 30, 80, 110]), np.eye(1, 128, dtype=np.float32).reshape(-1))
+        record = main.photo_face_payloads([face], main.PhotoInput(driveFileId="reference"), image_size=(640, 480))[0]
+        self.assertEqual(record["faceIndex"], 0)
+        self.assertEqual(record["boundingBox"], {"x": 20.0, "y": 30.0, "width": 60.0, "height": 80.0, "imageWidth": 640, "imageHeight": 480})
+
     def test_selfie_retry_is_bounded_and_does_not_change_indexing(self):
         image = np.zeros((32, 32, 3), dtype=np.uint8)
         face = Face(np.array([0, 0, 10, 10]), np.ones(128))
@@ -254,6 +260,35 @@ class WorkerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual({item["driveFileId"]: item["isSolo"] for item in completed["indexedPhotos"]}, {
             "none": False, "group-face": False, "zero-person": False, "solo": True, "group-person": False,
         })
+
+    async def test_uncertain_one_face_photo_retries_at_high_resolution(self):
+        vector = np.ones(128, dtype=np.float32) / np.sqrt(128)
+        first = Face(np.array([0, 0, 10, 10]), vector)
+        second = Face(np.array([12, 0, 22, 10]), vector)
+        main.face_app = SimpleNamespace(get=Mock(side_effect=[[first], [first, second]]), count_people=Mock(return_value=2))
+        job = main.IndexJobInput(jobId=6, galleryId=1, modelVersion=MODEL_VERSION, photoSource="drive", photos=[main.PhotoInput(driveFileId="couple")])
+        fetch = AsyncMock(return_value=blank_jpeg())
+        report = AsyncMock()
+        with patch.object(main, "fetch_photo", fetch), patch.object(main, "callback", report):
+            await main.process_index_job(job)
+        self.assertEqual(fetch.await_count, 2)
+        self.assertEqual(fetch.call_args_list[1].args[2], main.RETRY_IMAGE_SIDE)
+        completed = next(call.args[2] for call in report.call_args_list if call.args[1].endswith("/complete"))
+        self.assertEqual(len(completed["embeddings"]), 2)
+        self.assertFalse(completed["indexedPhotos"][0]["isSolo"])
+
+    async def test_failed_high_resolution_retry_keeps_uncertain_photo_indexed(self):
+        vector = np.ones(128, dtype=np.float32) / np.sqrt(128)
+        face = Face(np.array([0, 0, 10, 10]), vector)
+        main.face_app = SimpleNamespace(get=Mock(return_value=[face]), count_people=Mock(return_value=2))
+        job = main.IndexJobInput(jobId=7, galleryId=1, modelVersion=MODEL_VERSION, photoSource="drive", photos=[main.PhotoInput(driveFileId="uncertain")])
+        fetch = AsyncMock(side_effect=[blank_jpeg(), RuntimeError("high resolution unavailable")])
+        report = AsyncMock()
+        with patch.object(main, "fetch_photo", fetch), patch.object(main, "callback", report):
+            await main.process_index_job(job)
+        completed = next(call.args[2] for call in report.call_args_list if call.args[1].endswith("/complete"))
+        self.assertEqual(len(completed["embeddings"]), 1)
+        self.assertFalse(completed["indexedPhotos"][0]["isSolo"])
 
     async def test_person_detector_failure_retries_and_does_not_publish(self):
         vector = np.ones(128, dtype=np.float32) / np.sqrt(128)

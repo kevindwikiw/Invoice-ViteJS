@@ -12,7 +12,7 @@ const fetched: Array<{ id: string; width?: number; thumbnail?: string }> = [];
 const metadataCalls: string[] = [];
 mock.module('../lib/google-drive', () => ({
     getReadonlyDriveToken: async () => ({ accessToken: 'test', expiresAt: Date.now() + 1000 }),
-    listDrivePhotos: async () => edited,
+    listDrivePhotos: async () => folderSnapshot.length ? edited.filter((photo) => photo.id !== 'bw' && photo.id !== 'nested-photo') : edited,
     listDrivePhotoTree: async () => {
         if (treeFails) throw new Error('Folder unavailable');
         return { rootName: 'Edited Source', folders: folderSnapshot, photos: edited.map((photo) => ({ ...photo, folderId: folderSnapshot.length ? photo.id === 'nested-photo' ? 'empty' : photo.id === 'bw' ? 'no-watermark' : null : null })) };
@@ -106,10 +106,23 @@ const pairs = [{ editedDriveFileId: 'color', beforeDriveFileId: 'before-a' }, { 
 assert.equal(validComparisonPairs(pairs, new Set(['color', 'bw']), new Set(['before-a'])).length, 2);
 assert.equal((await request('/admin/1', 'PATCH', { comparisonEnabled: true, comparisonPairs: pairs })).status, 200);
 assert.equal((await one<{ n: number }>('SELECT COUNT(*) as n FROM gallery_edit_result_photos'))!.n, 0);
+archiveWorkerOffline = true;
+const originalArchiveWarn = console.warn;
+console.warn = () => {};
 const publish = await request('/admin/1/edit-results/publish', 'POST', { password: 'edit' });
+console.warn = originalArchiveWarn;
 assert.equal(publish.status, 201, await publish.clone().text());
-assert.equal((await json(publish)).comparisonCount, 2);
-assert.deepEqual(metadataCalls, ['before-a']);
+const firstPublication = await json(publish);
+assert.equal(firstPublication.comparisonCount, 2);
+if (process.env.FACE_ARCHIVE_WORKER_URL) {
+    assert.match(firstPublication.warnings.join(' '), /ZIP downloads are paused/);
+    assert.equal(workerSnapshotUpdates.length, 0);
+    const blockedRepublish = await request('/admin/1/edit-results/publish', 'POST', { password: 'edit' });
+    assert.equal(blockedRepublish.status, 503);
+    assert.match((await blockedRepublish.text()), /Could not revoke existing ZIP links/);
+}
+archiveWorkerOffline = false;
+assert.deepEqual(metadataCalls, process.env.FACE_ARCHIVE_WORKER_URL ? ['before-a', 'before-a'] : ['before-a']);
 assert.equal((await request('/admin/1/edit-results/password', 'POST', { password: 'next' }, false)).status, 401);
 assert.equal((await request('/admin/1/edit-results/password', 'POST', { password: 'a'.repeat(65) })).status, 400);
 const tokenBeforePasswordChange = (await json(await request('/public/gallery/edit-results/verify', 'POST', { password: 'edit' }))).token;
@@ -249,8 +262,8 @@ const archiveStart = await request(`/public/gallery/edit-results/folders/no-wate
 if (process.env.FACE_ARCHIVE_WORKER_URL) {
     assert.equal(archiveStart.status, 202, await archiveStart.clone().text());
     assert.deepEqual(workerArchivePayload.photos, [
-        { driveFileId: 'bw', filename: 'bw.jpg', archivePath: 'No Watermark/bw.jpg' },
-        { driveFileId: 'nested-photo', filename: 'nested-photo.jpg', archivePath: 'No Watermark/Empty/nested-photo.jpg' },
+        { driveFileId: 'bw', filename: 'bw.jpg', folderId: 'no-watermark', archivePath: 'No Watermark/bw.jpg' },
+        { driveFileId: 'nested-photo', filename: 'nested-photo.jpg', folderId: 'empty', archivePath: 'No Watermark/Empty/nested-photo.jpg' },
     ]);
     assert.equal(workerArchivePayload.scope, 'subtree');
     const directArchiveStart = await request(`/public/gallery/edit-results/folders/no-watermark/archive/jobs?token=${token}&scope=direct`, 'POST');
@@ -258,12 +271,12 @@ if (process.env.FACE_ARCHIVE_WORKER_URL) {
     assert.equal(workerArchivePayload.scope, 'direct');
     assert.equal(workerArchivePayload.folderName, 'No Watermark');
     assert.deepEqual(workerArchivePayload.photos, [
-        { driveFileId: 'bw', filename: 'bw.jpg', archivePath: 'bw.jpg' },
+        { driveFileId: 'bw', filename: 'bw.jpg', folderId: 'no-watermark', archivePath: 'bw.jpg' },
     ]);
     const nestedDirectStart = await request(`/public/gallery/edit-results/folders/empty/archive/jobs?token=${token}&scope=direct`, 'POST');
     assert.equal(nestedDirectStart.status, 202, await nestedDirectStart.clone().text());
     assert.deepEqual(workerArchivePayload.photos, [
-        { driveFileId: 'nested-photo', filename: 'nested-photo.jpg', archivePath: 'nested-photo.jpg' },
+        { driveFileId: 'nested-photo', filename: 'nested-photo.jpg', folderId: 'empty', archivePath: 'nested-photo.jpg' },
     ]);
     const galleryArchiveStart = await request(`/public/gallery/edit-results/archive/jobs?token=${token}`, 'POST');
     assert.equal(galleryArchiveStart.status, 202, await galleryArchiveStart.clone().text());
@@ -278,7 +291,7 @@ if (process.env.FACE_ARCHIVE_WORKER_URL) {
     assert.equal(workerArchivePayload.folderId, '__all__');
     assert.equal(workerArchivePayload.scope, 'direct');
     assert.deepEqual(workerArchivePayload.photos, [
-        { driveFileId: 'color', filename: 'color.jpg', archivePath: 'color.jpg' },
+        { driveFileId: 'color', filename: 'color.jpg', folderId: null, archivePath: 'color.jpg' },
     ]);
     assert.equal((await request(`/public/gallery/edit-results/archive/jobs?token=${token}&scope=invalid`, 'POST')).status, 400);
     assert.equal((await request(`/public/gallery/edit-results/folders/not-published/archive/jobs?token=${token}`, 'POST')).status, 404);

@@ -50,7 +50,7 @@ async function setup(page: Page, theme = 'black', connection?: { saveData: boole
 async function openPicked(page: Page) {
     const allPhotos = page.getByRole('button', { name: 'All Photos', exact: true });
     await allPhotos.click();
-    if (await page.getByRole('menu', { name: 'All Photos views' }).count() === 0) await allPhotos.click();
+    if (await page.getByRole('menu', { name: 'Photo filters' }).count() === 0) await allPhotos.click();
     await page.getByRole('menuitemradio', { name: 'Picked', exact: true }).click();
 }
 

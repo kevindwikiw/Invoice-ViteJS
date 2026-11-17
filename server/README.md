@@ -6,10 +6,10 @@ To install dependencies:
 bun install
 ```
 
-To run:
+To run locally (including Windows system certificate authorities for Google Drive):
 
 ```bash
-bun run index.ts
+bun run dev
 ```
 
 This project was created using `bun init` in bun v1.3.7. [Bun](https://bun.com) is a fast all-in-one JavaScript runtime.

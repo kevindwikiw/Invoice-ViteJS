@@ -46,6 +46,10 @@ class DriveTests(unittest.IsolatedAsyncioTestCase):
         await self.source.fetch("next", "https://lh3.googleusercontent.com/image=s220", 1)
         self.assertEqual(self.issued, 1)
 
+    async def test_high_resolution_retry_requests_a_larger_authenticated_thumbnail(self):
+        self.assertEqual(await self.source.fetch("photo", "https://lh3.googleusercontent.com/image=s220", 1, 2048), b"image")
+        self.assertTrue(any("=w2048-rw" in str(request.url) for request in self.requests if request.url.host == "lh3.googleusercontent.com"))
+
     async def test_expiry_and_401_refresh(self):
         await self.source.token()
         self.source._expires_at = time.time() + 299

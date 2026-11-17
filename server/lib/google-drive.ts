@@ -149,38 +149,68 @@ async function discardResponse(response: Response): Promise<void> {
     catch { /* The response may already be closed. */ }
 }
 
+function trustedDriveUrl(value: string): string {
+    const url = new URL(value);
+    const host = url.hostname.toLowerCase();
+    if (url.protocol !== "https:" || url.username || url.password || url.port ||
+        !(host === "www.googleapis.com" || host === "drive.google.com" || host === "googleusercontent.com" || host.endsWith(".googleusercontent.com"))) {
+        throw new Error("Google Drive returned an untrusted image URL.");
+    }
+    return url.toString();
+}
+
 async function fetchDriveGet(url: string, input: { accept?: string; timeoutMs?: number; responseTimeoutMs?: number; maxAttempts?: number; range?: string } = {}): Promise<Response> {
+    const initialUrl = trustedDriveUrl(url);
     let lastError: unknown;
     let refreshedToken = false;
     const maxAttempts = Math.max(1, input.maxAttempts ?? 3);
-    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    attemptLoop: for (let attempt = 0; attempt < maxAttempts; attempt++) {
         try {
             const token = await getDriveAccessToken(refreshedToken);
             refreshedToken = false;
-            const responseController = input.responseTimeoutMs ? new AbortController() : undefined;
-            const responseTimeout = responseController
-                ? setTimeout(() => responseController.abort(new Error("Google Drive response timed out.")), input.responseTimeoutMs)
-                : undefined;
+            let requestUrl = initialUrl;
+            let redirects = 0;
             let response: Response;
-            try {
-                response = await fetch(url, {
-                    headers: {
-                        Authorization: `Bearer ${token}`,
-                        ...(input.accept ? { Accept: input.accept } : {}),
-                        ...(input.range ? { Range: input.range } : {}),
-                    },
-                    ...(responseController
-                        ? { signal: responseController.signal }
-                        : input.timeoutMs === 0 ? {} : { signal: AbortSignal.timeout(input.timeoutMs || 30_000) }),
-                });
-            } finally {
-                if (responseTimeout) clearTimeout(responseTimeout);
+            while (true) {
+                const responseController = input.responseTimeoutMs ? new AbortController() : undefined;
+                const responseTimeout = responseController
+                    ? setTimeout(() => responseController.abort(new Error("Google Drive response timed out.")), input.responseTimeoutMs)
+                    : undefined;
+                try {
+                    response = await fetch(requestUrl, {
+                        headers: {
+                            Authorization: `Bearer ${token}`,
+                            ...(input.accept ? { Accept: input.accept } : {}),
+                            ...(input.range ? { Range: input.range } : {}),
+                        },
+                        redirect: "manual",
+                        ...(responseController
+                            ? { signal: responseController.signal }
+                            : input.timeoutMs === 0 ? {} : { signal: AbortSignal.timeout(input.timeoutMs || 30_000) }),
+                    });
+                } finally {
+                    if (responseTimeout) clearTimeout(responseTimeout);
+                }
+                if (![301, 302, 303, 307, 308].includes(response.status)) break;
+                const location = response.headers.get("Location");
+                if (!location || redirects++ >= 3) {
+                    await discardResponse(response);
+                    throw new Error("Google Drive redirected too many times.");
+                }
+                let nextUrl: string;
+                try { nextUrl = trustedDriveUrl(new URL(location, requestUrl).toString()); }
+                catch {
+                    await discardResponse(response);
+                    throw new Error("Google Drive returned an untrusted redirect.");
+                }
+                await discardResponse(response);
+                requestUrl = nextUrl;
             }
             if (response.ok) return response;
             if (response.status === 401 && attempt < maxAttempts - 1) {
                 await discardResponse(response);
                 refreshedToken = true;
-                continue;
+                continue attemptLoop;
             }
             if (!DRIVE_RETRY_STATUSES.has(response.status) || attempt === maxAttempts - 1) return response;
             const delay = driveRetryDelay(response, attempt);
@@ -214,7 +244,7 @@ async function listDriveEntries(folderId: string, includeFolders = false): Promi
             q: driveSearchQuery(folderId, includeFolders, includeFolders),
             pageSize: "1000",
             orderBy: "name_natural",
-            fields: "nextPageToken,incompleteSearch,files(id,name,mimeType,thumbnailLink,webViewLink,webContentLink,resourceKey,copyRequiresWriterPermission,size,md5Checksum,modifiedTime,imageMediaMetadata(width,height))",
+            fields: "nextPageToken,incompleteSearch,files(id,name,mimeType,thumbnailLink,webViewLink,webContentLink,resourceKey,copyRequiresWriterPermission,capabilities(canDownload),downloadRestrictions(effectiveDownloadRestrictionWithContext),size,md5Checksum,modifiedTime,imageMediaMetadata(width,height))",
             supportsAllDrives: "true",
             includeItemsFromAllDrives: "true",
         });
@@ -224,7 +254,11 @@ async function listDriveEntries(folderId: string, includeFolders = false): Promi
         const data = await response.json().catch(() => ({})) as {
             nextPageToken?: string;
             incompleteSearch?: boolean;
-            files?: Array<DrivePhoto & { imageMediaMetadata?: { width?: number; height?: number } }>;
+            files?: Array<DrivePhoto & {
+                capabilities?: { canDownload?: boolean };
+                downloadRestrictions?: { effectiveDownloadRestrictionWithContext?: { restrictedForReaders?: boolean; restrictedForWriters?: boolean } };
+                imageMediaMetadata?: { width?: number; height?: number };
+            }>;
             error?: { message?: string };
         };
         if (!response.ok) throw new Error(data.error?.message || "Unable to list Google Drive photos.");
@@ -240,6 +274,9 @@ async function listDriveEntries(folderId: string, includeFolders = false): Promi
                 webContentLink: file.webContentLink,
                 resourceKey: file.resourceKey,
                 copyRequiresWriterPermission: file.copyRequiresWriterPermission,
+                canDownload: file.capabilities?.canDownload,
+                viewerDownloadRestricted: Boolean(file.downloadRestrictions?.effectiveDownloadRestrictionWithContext?.restrictedForReaders
+                    || file.downloadRestrictions?.effectiveDownloadRestrictionWithContext?.restrictedForWriters),
                 size: file.size,
                 md5Checksum: file.md5Checksum,
                 modifiedTime: file.modifiedTime,

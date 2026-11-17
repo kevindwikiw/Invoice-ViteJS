@@ -1,5 +1,5 @@
 import { memo, type ReactNode, type RefObject } from 'react';
-import { ChevronDown, ImageIcon, Images, Moon, ScanFace, Sun } from 'lucide-react';
+import { Camera, ChevronDown, ImageIcon, Images, Moon, ScanFace, Sun } from 'lucide-react';
 import clsx from 'clsx';
 
 import orbitLogo from '../../../assets/pdf/logo.png';
@@ -31,10 +31,11 @@ export function GalleryHeaderIdentity({ section, title }: { section: 'Photo Sele
     </div>;
 }
 
-export function GalleryViewTabs({ value, galleryLabel = 'All Photos', galleryAvailable = true, galleryUnavailableAction = false, editedAvailable, editedExpired = false, selfieAvailable = galleryAvailable, deliveryOnly = false, allPhotosMenuOpen = false, allPhotosButtonRef, onAllPhotos, onChange }: {
+export function GalleryViewTabs({ value, galleryLabel = 'All Photos', galleryAvailable = true, galleryActive = true, galleryUnavailableAction = false, editedAvailable, editedExpired = false, selfieAvailable = galleryAvailable, deliveryOnly = false, allPhotosMenuOpen = false, allPhotosButtonRef, onAllPhotos, onChange }: {
     value: GalleryView;
     galleryLabel?: string;
     galleryAvailable?: boolean;
+    galleryActive?: boolean;
     galleryUnavailableAction?: boolean;
     editedAvailable: boolean;
     editedExpired?: boolean;
@@ -45,8 +46,9 @@ export function GalleryViewTabs({ value, galleryLabel = 'All Photos', galleryAva
     onAllPhotos: () => void;
     onChange: (view: GalleryView) => void;
 }) {
+    const cameraFilterActive = galleryLabel === 'Kamera 1' || galleryLabel === 'Kamera 2';
     const views = [
-        { value: 'gallery', label: galleryLabel, compactLabel: galleryLabel === 'All Photos' ? 'All' : galleryLabel === 'Picked' ? 'Pick' : galleryLabel === 'Submitted' ? 'Sent' : galleryLabel, Icon: ImageIcon },
+        { value: 'gallery', label: galleryLabel, compactLabel: galleryLabel === 'All Photos' ? 'All' : galleryLabel === 'Picked' ? 'Pick' : galleryLabel === 'Submitted' ? 'Sent' : galleryLabel, Icon: cameraFilterActive ? Camera : ImageIcon },
         { value: 'edit-results', label: deliveryOnly ? 'Photos' : 'Edited Photos', compactLabel: deliveryOnly ? 'Photos' : 'Edited', Icon: Images },
         { value: 'selfie', label: 'Selfie', compactLabel: deliveryOnly ? 'Selfie' : '', Icon: ScanFace },
     ] as const;
@@ -60,12 +62,12 @@ export function GalleryViewTabs({ value, galleryLabel = 'All Photos', galleryAva
             ref={view === 'gallery' ? allPhotosButtonRef : undefined}
             type="button"
             aria-label={view === 'edit-results' && editedExpired ? 'Edited Photos access expired' : label}
-            aria-pressed={value === view}
+            aria-pressed={value === view && (view !== 'gallery' || galleryActive)}
             disabled={view === 'edit-results' ? !editedAvailable : view === 'selfie' ? !selfieAvailable : !galleryAvailable && !galleryUnavailableAction}
             title={view === 'selfie' ? selfieAvailable ? label : 'Selfie search is unavailable' : view === 'edit-results' ? editedExpired ? 'Edited Photos access expired' : !editedAvailable ? 'Edited photos are not published yet' : label : !galleryAvailable ? 'Ask Team Orbit to reopen Photo Selection' : label}
             onClick={() => view === 'gallery' ? onAllPhotos() : onChange(view)}
             aria-expanded={view === 'gallery' ? allPhotosMenuOpen : undefined}
-            className={clsx('inline-flex min-h-11 min-w-0 items-center justify-center gap-1 rounded-md border px-2 text-[11px] font-semibold transition-[color,background-color,border-color,transform] duration-150 enabled:active:scale-[0.98] motion-reduce:transition-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)] sm:gap-1.5 sm:px-3 sm:text-sm lg:text-[15px]', view === 'gallery' && 'max-sm:gap-0 max-sm:px-0.5', view === 'edit-results' && 'max-sm:px-1 max-sm:text-xs', (view === 'edit-results' && !editedAvailable) || (view === 'gallery' && !galleryAvailable && !galleryUnavailableAction) ? 'cursor-not-allowed border-[var(--border)] bg-transparent text-[var(--text-muted)] opacity-60' : value === view ? 'border-[var(--accent)] bg-[var(--accent)] text-[var(--bg-deep)]' : 'border-[var(--border)] bg-transparent text-[var(--text-secondary)] enabled:hover:border-[var(--text-muted)] enabled:hover:text-[var(--text-primary)]')}
+            className={clsx('inline-flex min-h-11 min-w-0 items-center justify-center gap-1 rounded-md border px-2 transition-[color,background-color,border-color,transform] duration-150 enabled:active:scale-[0.98] motion-reduce:transition-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)] sm:gap-1.5 sm:px-3', view === 'gallery' && cameraFilterActive ? 'text-xs font-medium sm:text-[13px]' : 'text-[11px] font-semibold sm:text-sm lg:text-[15px]', view === 'gallery' && 'max-sm:gap-0 max-sm:px-0.5', view === 'edit-results' && 'max-sm:px-1 max-sm:text-xs', (view === 'edit-results' && !editedAvailable) || (view === 'gallery' && !galleryUnavailableAction && !galleryAvailable) ? 'cursor-not-allowed border-[var(--border)] bg-transparent text-[var(--text-muted)] opacity-60' : value === view && (view !== 'gallery' || galleryActive) ? 'border-[var(--accent)] bg-[var(--accent)] text-[var(--bg-deep)]' : 'border-[var(--border)] bg-transparent text-[var(--text-secondary)] enabled:hover:border-[var(--text-muted)] enabled:hover:text-[var(--text-primary)]')}
         ><Icon size={view === 'selfie' ? 16 : 14} aria-hidden="true" className={clsx('shrink-0', deliveryOnly || view === 'selfie' ? 'block' : 'hidden sm:block')} /><span className={clsx('truncate sm:hidden', view === 'selfie' && !deliveryOnly && 'sr-only')}>{view === 'edit-results' && editedExpired ? 'Expired' : compactLabel}</span><span className="hidden sm:inline">{view === 'edit-results' && editedExpired ? 'Edited Photos expired' : label}</span>{view === 'gallery' && <ChevronDown size={12} aria-hidden="true" className={clsx('shrink-0 transition-transform duration-150', allPhotosMenuOpen && 'rotate-180')} />}</button>)}
     </nav>;
 }

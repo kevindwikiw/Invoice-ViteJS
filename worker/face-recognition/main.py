@@ -45,6 +45,7 @@ MAX_CONCURRENT = max(1, int(os.getenv("FACE_WORKER_MAX_CONCURRENT", "1")))
 PHOTO_CONCURRENCY = min(4, max(1, int(os.getenv("FACE_WORKER_PHOTO_CONCURRENCY", "3"))))
 INTRA_OP_THREADS = max(1, int(os.getenv("FACE_WORKER_INTRA_OP_THREADS", "2")))
 MAX_IMAGE_SIDE = 1280
+RETRY_IMAGE_SIDE = 2048
 MAX_IMAGE_BYTES = max(1, int(os.getenv("FACE_WORKER_MAX_IMAGE_BYTES", str(15 * 1024 * 1024))))
 MAX_IMAGE_PIXELS = max(1, int(os.getenv("FACE_WORKER_MAX_IMAGE_PIXELS", str(40_000_000))))
 MAX_PHOTOS_PER_JOB = max(1, int(os.getenv("FACE_WORKER_MAX_PHOTOS_PER_JOB", "10000")))
@@ -114,15 +115,15 @@ def bounded_payload(payload: bytes, label: str = "payload") -> bytes:
     return payload
 
 
-def decode_image(payload: bytes) -> np.ndarray:
+def decode_image(payload: bytes, max_side: int = MAX_IMAGE_SIDE) -> np.ndarray:
     with measure("decode_ms"):
         with Image.open(io_bytes(bounded_payload(payload, "image"))) as image:
             if image.width * image.height > MAX_IMAGE_PIXELS:
                 raise ValueError(f"image exceeds the {MAX_IMAGE_PIXELS} pixel limit")
-            image.draft("RGB", (MAX_IMAGE_SIDE, MAX_IMAGE_SIDE))
+            image.draft("RGB", (max_side, max_side))
             rgb = ImageOps.exif_transpose(image).convert("RGB")
     with measure("resize_ms"):
-        rgb.thumbnail((MAX_IMAGE_SIDE, MAX_IMAGE_SIDE), Image.Resampling.LANCZOS)
+        rgb.thumbnail((max_side, max_side), Image.Resampling.LANCZOS)
     with measure("color_ms"):
         return np.asarray(rgb)[:, :, ::-1].copy()
 
@@ -221,7 +222,7 @@ def normalized_embedding(face: Any) -> list[float]:
     return (vector / norm).astype(np.float32).tolist()
 
 
-def face_payload(face: Any, photo: PhotoInput, face_index: int, *, embedding: list[float] | None = None) -> dict[str, Any]:
+def face_payload(face: Any, photo: PhotoInput, face_index: int, *, embedding: list[float] | None = None, image_size: tuple[int, int] | None = None) -> dict[str, Any]:
     bbox = np.asarray(face.bbox, dtype=np.float32).tolist() if getattr(face, "bbox", None) is not None else []
     return {
         "driveFileId": photo.driveFileId,
@@ -232,19 +233,21 @@ def face_payload(face: Any, photo: PhotoInput, face_index: int, *, embedding: li
             "y": float(bbox[1]),
             "width": float(bbox[2] - bbox[0]),
             "height": float(bbox[3] - bbox[1]),
+            "imageWidth": image_size[0] if image_size else None,
+            "imageHeight": image_size[1] if image_size else None,
         } if len(bbox) >= 4 else None,
         "sourceVersion": photo.sourceVersion,
     }
 
 
-def photo_face_payloads(faces: list[Any], photo: PhotoInput, *, normalize_once: bool = False) -> list[dict[str, Any]]:
+def photo_face_payloads(faces: list[Any], photo: PhotoInput, *, normalize_once: bool = False, image_size: tuple[int, int] | None = None) -> list[dict[str, Any]]:
     if not normalize_once:
-        return [face_payload(face, photo, i) for i, face in enumerate(faces) if normalized_embedding(face)]
+        return [face_payload(face, photo, i, image_size=image_size) for i, face in enumerate(faces) if normalized_embedding(face)]
     records = []
     for i, face in enumerate(faces):
         embedding = normalized_embedding(face)
         if embedding:
-            records.append(face_payload(face, photo, i, embedding=embedding))
+            records.append(face_payload(face, photo, i, embedding=embedding, image_size=image_size))
     return records
 
 
@@ -260,12 +263,12 @@ def local_candidates(gallery_id: int, photo: PhotoInput) -> list[Path]:
     ]
 
 
-async def fetch_photo(job: IndexJobInput, photo: PhotoInput) -> bytes:
+async def fetch_photo(job: IndexJobInput, photo: PhotoInput, max_side: int = MAX_IMAGE_SIDE) -> bytes:
     if (job.photoSource or PHOTO_SOURCE) == "drive":
         callback_config()
         if drive_source is None:
             raise RuntimeError("drive_source_not_started")
-        return await drive_source.fetch(photo.driveFileId, photo.thumbnailUrl, job.jobId)
+        return await drive_source.fetch(photo.driveFileId, photo.thumbnailUrl, job.jobId, max_side)
     for candidate in local_candidates(job.galleryId, photo):
         try:
             resolved = candidate.resolve()
@@ -350,6 +353,18 @@ async def process_index_job(job: IndexJobInput) -> None:
                             faces_at = time.perf_counter()
                             with measure("person_ms"):
                                 people = await asyncio.to_thread(recognizer.count_people, image) if len(faces) == 1 else None
+                        if (job.photoSource or PHOTO_SOURCE) == "drive" and (not faces or (len(faces) == 1 and people != 1)):
+                            try:
+                                detailed_payload = await fetch_photo(job, photo, RETRY_IMAGE_SIDE)
+                                detailed_image = await asyncio.to_thread(decode_image, detailed_payload, RETRY_IMAGE_SIDE)
+                                async with inference_semaphore:
+                                    detailed_faces = await asyncio.to_thread(recognizer.get, detailed_image)
+                                    if len(detailed_faces) > len(faces):
+                                        image, faces = detailed_image, detailed_faces
+                                        people = await asyncio.to_thread(recognizer.count_people, image) if len(faces) == 1 else None
+                                logger.info("Job %s photo %s: high-resolution face retry found %s faces", job.jobId, photo.driveFileId, len(detailed_faces))
+                            except Exception as error:
+                                logger.warning("Job %s photo %s: high-resolution face retry unavailable (%s)", job.jobId, photo.driveFileId, type(error).__name__)
                         finished_at = time.perf_counter()
                         is_solo = len(faces) == 1 and people == 1
                         logger.info(
@@ -360,7 +375,7 @@ async def process_index_job(job: IndexJobInput) -> None:
                         )
                         annotate(faces=len(faces), people=people if people is not None else -1)
                         with measure("serialize_ms"):
-                            records = photo_face_payloads(faces, photo, normalize_once=NORMALIZE_ONCE)
+                            records = photo_face_payloads(faces, photo, normalize_once=NORMALIZE_ONCE, image_size=(image.shape[1], image.shape[0]))
                         return records, {"driveFileId": photo.driveFileId, "sourceVersion": photo.sourceVersion, "isSolo": is_solo}
                     except Exception as error:
                         last_error = error

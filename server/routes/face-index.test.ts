@@ -48,7 +48,7 @@ test("Drive token auth, scope isolation, expiry and refresh never expose issuer 
             expect(await response.json()).toMatchObject({ accessToken: "temporary-1", expiresAt: expect.any(Number) });
         }
         const { getDriveAccessToken } = await import("../lib/google-drive");
-        expect(await getDriveAccessToken()).toBe("temporary-2");
+        expect(await getDriveAccessToken(true)).toBe("temporary-2");
         expect(scopes[1]).toContain("https://www.googleapis.com/auth/drive.file");
         expect((await faceIndexRouter.request("/drive-token?refresh=1", { method: "POST", headers })).status).toBe(200);
         expect(scopes[2]).toBe("https://www.googleapis.com/auth/drive.readonly");

@@ -3,6 +3,10 @@
 CPU worker using Python and OpenCV Headless. YuNet detects faces, SFace creates
 identity embeddings, and NanoDet Plus checks person count for the optional solo
 filter.
+Indexing retries a 2048px thumbnail when the 1280px pass finds no face or one
+face with an uncertain person count. This helps distinguish a couple when the
+second face is small; unresolved one-face group photos stay outside the
+individual Foto Sendiri categories.
 The gallery/API still run on Hono/Bun. Installation uses ready-made binary
 wheels without Docker or a compiler. Tested locally with Python
 3.13 x64 on Windows; Ubuntu 24.04 ARM64 must still be validated on the VM.

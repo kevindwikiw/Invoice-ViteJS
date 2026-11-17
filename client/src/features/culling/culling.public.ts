@@ -171,7 +171,7 @@ export function editResultVideoUrl(galleryId: string, driveFileId: string, token
     return apiUrl(`/public/galleries/${encodeURIComponent(galleryId)}/edit-results/photos/${encodeURIComponent(driveFileId)}/video?${params.toString()}`);
 }
 
-export async function getPublicGalleryPhotos(id: string, token: string, page = 1, pageSize = 60, includeSelectedPhotos = false, includeSelections = false): Promise<PublicGalleryPhotos> {
+export async function getPublicGalleryPhotos(id: string, token: string, page = 1, pageSize = 60, includeSelectedPhotos = false, includeSelections = false, filter?: 'female' | 'male' | 'camera1' | 'camera2', sensitivity?: 'strict' | 'balanced' | 'wide'): Promise<PublicGalleryPhotos> {
     const params = new URLSearchParams({
         token,
         page: String(page),
@@ -179,6 +179,8 @@ export async function getPublicGalleryPhotos(id: string, token: string, page = 1
     });
     if (includeSelectedPhotos) params.set('includeSelectedPhotos', '1');
     if (includeSelections) params.set('includeSelections', '1');
+    if (filter) params.set('filter', filter);
+    if ((filter === 'female' || filter === 'male') && sensitivity) params.set('sensitivity', sensitivity);
     const response = await apiFetch(`/public/galleries/${id}/photos?${params.toString()}`);
     if (!response.ok) throw await parseError(response, 'Unable to load gallery photos.');
     return response.json();

@@ -3,7 +3,7 @@
   "type": "module",
   "private": true,
   "scripts": {
-    "dev": "bun --watch index.ts",
+    "dev": "bun --use-system-ca --watch index.ts",
     "start": "bun index.ts"
   },
   "dependencies": {
