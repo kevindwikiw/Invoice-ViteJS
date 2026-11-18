@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, useCallback } from 'react';
 import { useNavigate, useParams, useSearch } from '@tanstack/react-router';
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { AlertCircle, Camera, Check, CheckSquare, ChevronLeft, ChevronRight, HelpCircle, ImageIcon, ImagePlus, Images, Loader2, Lock, Plus, ScanFace, Send, X } from 'lucide-react';
+import { AlertCircle, Camera, Check, CheckSquare, ChevronLeft, ChevronRight, HelpCircle, ImageIcon, ImagePlus, Images, Loader2, Lock, Plus, ScanFace, Send, Video, X } from 'lucide-react';
 import clsx from 'clsx';
 
 import {
@@ -47,6 +47,7 @@ import { CountdownLabel } from '../features/culling/client-gallery/countdown';
 import { useSelectionCountdown } from '../features/culling/client-gallery/useSelectionCountdown';
 import { useGalleryStartup } from '../features/culling/client-gallery/useGalleryStartup';
 import { GalleryHeader, GalleryViewTabs, ThemeToggle, type GalleryView } from '../features/culling/client-gallery/GalleryChrome';
+import { OwnPhotoChooser } from '../features/culling/client-gallery/OwnPhotoChooser';
 import { PhotoTile } from '../features/culling/client-gallery/PhotoTile';
 import { GalleryLockedScreen, PinGate } from '../features/culling/client-gallery/AccessScreens';
 import { GalleryFooter } from '../features/culling/client-gallery/GalleryFooter';
@@ -227,6 +228,7 @@ function SelectionCullingGallery({ title, pathMode }: { title?: string; pathMode
     const [showFaceSearch, setShowFaceSearch] = useState(false);
     const [showOwnPhotoChooser, setShowOwnPhotoChooser] = useState(false);
     const [showRefine, setShowRefine] = useState(false);
+    const [showEditedMenu, setShowEditedMenu] = useState(false);
     const allPhotosMenuRef = useRef<HTMLDivElement>(null);
     const allPhotosButtonRef = useRef<HTMLButtonElement>(null);
     const allPhotosDropdownRef = useRef<HTMLDivElement>(null);
@@ -261,6 +263,7 @@ function SelectionCullingGallery({ title, pathMode }: { title?: string; pathMode
                     selfiePage: targetView === 'selfie' ? current.selfiePage ?? selfiePage : undefined,
                 }),
                 replace,
+                resetScroll: false,
             });
             return;
         }
@@ -275,6 +278,7 @@ function SelectionCullingGallery({ title, pathMode }: { title?: string; pathMode
                 selfieSource: targetView === 'selfie' ? 'selection' : undefined,
             }),
             replace,
+            resetScroll: false,
         });
     }, [editedPage, folder, galleryId, navigate, pathMode, selfiePage, urlView]);
     // Ref so the photos-cache effect can read current selection without adding it as a dep
@@ -454,6 +458,14 @@ function SelectionCullingGallery({ title, pathMode }: { title?: string; pathMode
 
     const openAllPhotosMenu = () => setShowRefine((current) => !current);
     useEffect(() => {
+        if (!showEditedMenu) return;
+        const closeOnOutside = (event: PointerEvent) => { if (!allPhotosMenuRef.current?.contains(event.target as Node)) setShowEditedMenu(false); };
+        const closeOnEscape = (event: KeyboardEvent) => { if (event.key === 'Escape') setShowEditedMenu(false); };
+        document.addEventListener('pointerdown', closeOnOutside);
+        document.addEventListener('keydown', closeOnEscape);
+        return () => { document.removeEventListener('pointerdown', closeOnOutside); document.removeEventListener('keydown', closeOnEscape); };
+    }, [showEditedMenu]);
+    useEffect(() => {
         if (!showRefine) return;
         const handlePointerDown = (event: PointerEvent) => {
             if (allPhotosMenuRef.current && !allPhotosMenuRef.current.contains(event.target as Node)) {
@@ -489,7 +501,7 @@ function SelectionCullingGallery({ title, pathMode }: { title?: string; pathMode
     useEffect(() => {
         if (showRefine) requestAnimationFrame(() => allPhotosDropdownRef.current?.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus());
     }, [showRefine]);
-    const chooseRefineMode = (mode: GalleryRefineMode) => {
+    const chooseRefineMode = (mode: GalleryRefineMode, sensitivity: OwnSensitivity = ownSensitivity) => {
         setShowRefine(false);
         setPage(1);
         setLightboxPhotoId(null);
@@ -509,7 +521,7 @@ function SelectionCullingGallery({ title, pathMode }: { title?: string; pathMode
         }
         setRefineMode(mode);
         setActiveTab('gallery');
-        syncGalleryUrl({ view: 'gallery', filter: mode, page: 1 });
+        syncGalleryUrl({ view: 'gallery', filter: mode, sensitivity, page: 1 });
     };
 
     const goToGalleryPage = useCallback((nextPage: number) => {
@@ -897,7 +909,7 @@ function SelectionCullingGallery({ title, pathMode }: { title?: string; pathMode
     if (preferEditedEntry) return <RouteTransition />;
 
     if (editedContext || preferEditedEntry) {
-        return <EditResultsGrid galleryId={galleryId} theme={theme} token={editResultsToken} onToken={updateEditResultsToken} onToggleTheme={toggleTheme} onRequestSelectionAccess={selectionUnavailable ? undefined : () => { setActiveTab('gallery'); syncGalleryUrl({ view: 'gallery', selfieSource: 'selection' }); }} selectionUnavailable={selectionUnavailable} selectionContactUrl={lockedContactUrl} standalone deliveryOnly={statusData?.workflow === 'delivery_only'} editedPath />;
+        return <EditResultsGrid galleryId={galleryId} theme={theme} token={editResultsToken} onToken={updateEditResultsToken} onToggleTheme={toggleTheme} onRequestSelectionAccess={selectionUnavailable ? undefined : (filter = 'none') => { setActiveTab(filter === 'picked' ? 'picked' : 'gallery'); syncGalleryUrl({ view: filter === 'picked' ? 'picked' : 'gallery', filter: filter === 'picked' ? 'none' : filter, selfieSource: 'selection' }); }} selectionCameraCount={displayGallery?.cameraFolderCount ?? (displayGallery?.camerasAvailable ? 2 : 0)} hasSubmittedPhotos={hasSubmittedPhotos} selectionUnavailable={selectionUnavailable} selectionContactUrl={lockedContactUrl} standalone deliveryOnly={statusData?.workflow === 'delivery_only'} editedPath />;
     }
 
     if (token && (countdown.isExpired || displayGallery?.isExpired || galleryLockCode)) {
@@ -915,24 +927,26 @@ function SelectionCullingGallery({ title, pathMode }: { title?: string; pathMode
             </a>
             
             <GalleryHeader section="Photo Selection" title={displayGallery?.title || title} theme={theme} utilities={<>
-                <div className="lg:pr-2"><CountdownLabel countdown={countdown} compact /></div>
-                <div className="flex items-center gap-2">
-                    <button type="button" onClick={() => setShowTutorial(true)} title="How to Submit" aria-label="How to Submit" className="flex h-11 w-11 shrink-0 items-center justify-center px-2 text-[var(--text-secondary)] transition-[color,transform] duration-150 hover:text-[var(--text-primary)] active:scale-[0.97] motion-reduce:transition-none"><HelpCircle size={16} aria-hidden="true" /></button>
-                    <ThemeToggle theme={theme} onToggle={toggleTheme} />
-                </div>
+                <div className="min-w-0 lg:pr-2"><CountdownLabel countdown={countdown} compact /></div>
+                <button type="button" onClick={() => setShowTutorial(true)} title="How to Submit" aria-label="How to Submit" className="flex h-11 w-11 shrink-0 items-center justify-center px-2 text-[var(--text-secondary)] transition-[color,transform] duration-150 hover:text-[var(--text-primary)] active:scale-[0.97] motion-reduce:transition-none"><HelpCircle size={16} aria-hidden="true" /></button>
+                <ThemeToggle theme={theme} onToggle={toggleTheme} />
             </>} />
 
             <div data-testid="gallery-toolbar" className="sticky top-20 z-30 select-none border-b border-[var(--border)] bg-[var(--bg-deep)] px-2.5 py-2 [touch-action:manipulation] sm:px-8 sm:py-2.5 lg:top-16">
                 <div data-testid="gallery-toolbar-inner" className="mx-auto flex max-w-[1600px] items-center gap-1 sm:gap-x-2">
                     <div ref={allPhotosMenuRef} className="relative flex min-w-0 flex-1 items-center">
                         <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto whitespace-nowrap pb-1 sm:gap-2">
-                            <div className="w-[180px] shrink-0 sm:w-auto"><GalleryViewTabs value={activeTab === 'picked' ? 'gallery' : activeTab} galleryAvailable={galleryAvailable} galleryActive={activeTab === 'gallery' && !isOwnMode(refineMode)} galleryLabel={activeTab === 'picked' ? 'Picked' : submittedOnly ? 'Submitted' : refineMode === 'camera1' ? 'Kamera 1' : refineMode === 'camera2' ? 'Kamera 2' : 'All Photos'} editedAvailable={editResultsStatusQuery.data?.available ?? Boolean(displayGallery?.hasEditResults)} editedExpired={Boolean(editResultsStatusQuery.data?.isExpired)} selfieAvailable={false} allPhotosMenuOpen={showRefine} allPhotosButtonRef={allPhotosButtonRef} onAllPhotos={openAllPhotosMenu} onChange={changeView} /></div>
-                            <button type="button" aria-pressed={activeTab === 'gallery' && isOwnMode(refineMode)} onClick={() => setShowOwnPhotoChooser(true)} className={clsx('inline-flex min-h-11 shrink-0 items-center gap-1 rounded-md border px-2.5 text-xs font-semibold focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)] sm:px-3 sm:text-sm', activeTab === 'gallery' && isOwnMode(refineMode) ? 'border-[var(--accent)] bg-[var(--accent)] text-[var(--bg-deep)]' : 'border-[var(--border)] text-[var(--text-secondary)]')}><ScanFace size={16} aria-hidden="true" />Foto Sendiri</button>
+                            <div className="w-max shrink-0 sm:w-auto"><GalleryViewTabs value={activeTab === 'picked' ? 'gallery' : activeTab} galleryAvailable={galleryAvailable} galleryActive={activeTab === 'gallery' && !isOwnMode(refineMode)} galleryLabel={activeTab === 'picked' ? 'Picked' : submittedOnly ? 'Submitted' : refineMode === 'camera1' ? 'Kamera 1' : refineMode === 'camera2' ? 'Kamera 2' : 'Photos'} editedAvailable={editResultsStatusQuery.data?.available ?? Boolean(displayGallery?.hasEditResults)} editedExpired={Boolean(editResultsStatusQuery.data?.isExpired)} selfieAvailable={false} allPhotosMenuOpen={showRefine} editedMenuOpen={showEditedMenu} allPhotosButtonRef={allPhotosButtonRef} onAllPhotos={() => { setShowEditedMenu(false); openAllPhotosMenu(); }} onChange={(next) => { if (next === 'edit-results') { setShowRefine(false); setShowEditedMenu((open) => !open); } else changeView(next); }} /></div>
+                            <button type="button" aria-label="Foto Sendiri" aria-pressed={activeTab === 'gallery' && isOwnMode(refineMode)} onClick={() => setShowOwnPhotoChooser(true)} className={clsx('inline-flex min-h-11 shrink-0 items-center gap-1 rounded-md border px-2.5 text-xs font-semibold focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)] sm:px-3 sm:text-sm', activeTab === 'gallery' && isOwnMode(refineMode) ? 'border-[var(--accent)] bg-[var(--accent)] text-[var(--bg-deep)]' : 'border-[var(--border)] text-[var(--text-secondary)]')}><ScanFace size={16} aria-hidden="true" /><span className="sm:hidden">Sendiri</span><span className="hidden sm:inline">Foto Sendiri</span></button>
                         </div>
+                        {showEditedMenu && <div role="group" aria-label="Edited Photos" className="absolute left-[90px] top-[calc(100%+8px)] z-[80] w-[min(224px,calc(100vw-16px))] origin-top-left rounded-lg border border-[var(--border)] bg-[var(--bg-deep)] p-1.5 shadow-xl sm:left-36">
+                            <button type="button" onClick={() => { setShowEditedMenu(false); changeView('edit-results'); }} className="flex min-h-11 w-full items-center gap-2 rounded-md px-2.5 text-left text-[13px] font-medium text-[var(--text-secondary)] hover:bg-[var(--bg-card)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)]"><Images size={15} aria-hidden="true" />Photos</button>
+                            <button type="button" onClick={() => { setShowEditedMenu(false); void navigate({ to: '/culling/$galleryId/edited', params: { galleryId }, search: { folder: '__videos__', editedPage: 1 }, resetScroll: false }); }} className="flex min-h-11 w-full items-center gap-2 rounded-md px-2.5 text-left text-[13px] font-medium text-[var(--text-secondary)] hover:bg-[var(--bg-card)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)]"><Video size={15} aria-hidden="true" />Videos</button>
+                        </div>}
                         {showRefine && (
                             <div ref={allPhotosDropdownRef} className="absolute left-0 top-[calc(100%+8px)] z-[80] max-h-[calc(100dvh-160px)] w-[min(224px,calc(100vw-16px))] overflow-y-auto rounded-lg border border-[var(--border)] bg-[var(--bg-deep)] p-1.5 shadow-xl transition-[opacity,transform] duration-150 motion-reduce:transition-none" role="menu" aria-label="Photo filters">
                                 <button type="button" role="menuitemradio" aria-checked={refineMode === 'none' && activeTab === 'gallery'} onClick={() => chooseRefineMode('none')} className={clsx('flex min-h-11 w-full items-center justify-between gap-2 rounded-md px-2.5 text-[13px] font-medium', refineMode === 'none' && activeTab === 'gallery' ? 'bg-[var(--accent)] text-[var(--bg-deep)]' : 'text-[var(--text-secondary)] hover:bg-[var(--bg-card)]')}>
-                                    <span className="flex items-center gap-2"><ImageIcon size={15} aria-hidden="true" />All Photos</span>{refineMode === 'none' && activeTab === 'gallery' && <Check size={14} aria-hidden="true" />}
+                                    <span className="flex items-center gap-2"><ImageIcon size={15} aria-hidden="true" />Photos</span>{refineMode === 'none' && activeTab === 'gallery' && <Check size={14} aria-hidden="true" />}
                                 </button>
                                 {(['camera1', 'camera2'] as const).slice(0, displayGallery?.cameraFolderCount ?? (displayGallery?.camerasAvailable ? 2 : 0)).map((mode) => <button key={mode} type="button" role="menuitemradio" aria-checked={activeTab === 'gallery' && refineMode === mode} onClick={() => chooseRefineMode(mode)} className={clsx('flex min-h-11 w-full items-center justify-between gap-2 rounded-md px-2.5 text-[13px] font-medium', activeTab === 'gallery' && refineMode === mode ? 'bg-[var(--accent)] text-[var(--bg-deep)]' : 'text-[var(--text-secondary)] hover:bg-[var(--bg-card)]')}><span className="flex items-center gap-2"><Camera size={15} aria-hidden="true" />{mode === 'camera1' ? 'Kamera 1' : 'Kamera 2'}</span>{activeTab === 'gallery' && refineMode === mode && <Check size={14} aria-hidden="true" />}</button>)}
                                 <button type="button" role="menuitemradio" aria-checked={activeTab === 'picked'} onClick={() => { setShowRefine(false); changeView('picked'); }} className={clsx('flex min-h-11 w-full items-center justify-between gap-2 rounded-md px-2.5 text-[13px] font-medium', activeTab === 'picked' ? 'bg-[var(--accent)] text-[var(--bg-deep)]' : 'text-[var(--text-secondary)] hover:bg-[var(--bg-card)]')}>
@@ -1124,14 +1138,14 @@ function SelectionCullingGallery({ title, pathMode }: { title?: string; pathMode
                     <div className="w-full max-w-md rounded-t-2xl border border-[var(--border)] bg-[var(--bg-deep)] p-4 shadow-2xl sm:rounded-xl">
                         <div className="mb-3 flex items-center justify-between">
                             <div>
-                                <p id="refine-title" className="text-sm font-semibold text-[var(--text-primary)]">All Photos</p>
+                                <p id="refine-title" className="text-sm font-semibold text-[var(--text-primary)]">Photos</p>
                                 <p className="mt-0.5 text-xs text-[var(--text-muted)]">Choose what you want to see.</p>
                             </div>
                             <button type="button" aria-label="Close refine filters" onClick={() => setShowRefine(false)} className="flex h-9 w-9 items-center justify-center rounded-md text-[var(--text-secondary)] hover:bg-[var(--bg-card)]"><X size={16} /></button>
                         </div>
                         <div className="grid gap-2">
                             <button type="button" onClick={() => chooseRefineMode('none')} className={clsx('flex min-h-11 items-center justify-between rounded-md border px-3 text-left text-sm', refineMode === 'none' ? 'border-[var(--accent)] bg-[var(--accent)] text-[var(--bg-deep)]' : 'border-[var(--border)] text-[var(--text-secondary)]')}>
-                                <span className="flex items-center gap-2"><ImageIcon size={16} />All Photos</span><span aria-hidden="true">{refineMode === 'none' && <Check size={15} />}</span>
+                                <span className="flex items-center gap-2"><ImageIcon size={16} />Photos</span><span aria-hidden="true">{refineMode === 'none' && <Check size={15} />}</span>
                             </button>
                             <button type="button" onClick={() => chooseRefineMode('submitted')} disabled={!hasSubmittedPhotos} className={clsx('flex min-h-11 items-center justify-between rounded-md border px-3 text-left text-sm disabled:opacity-40', refineMode === 'submitted' ? 'border-[var(--accent)] bg-[var(--accent)] text-[var(--bg-deep)]' : 'border-[var(--border)] text-[var(--text-secondary)]')}>
                                 <span className="flex items-center gap-2"><Send size={16} />Submitted</span><span aria-hidden="true">{refineMode === 'submitted' && <Check size={15} />}</span>
@@ -1145,15 +1159,7 @@ function SelectionCullingGallery({ title, pathMode }: { title?: string; pathMode
                 </div>
             )}
 
-            {showOwnPhotoChooser && <div className="fixed inset-0 z-[120] flex items-end justify-center bg-black/60 p-0 sm:items-center sm:p-4" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setShowOwnPhotoChooser(false); }}>
-                <div role="dialog" aria-modal="true" aria-labelledby="own-photo-title" className="w-full max-w-md rounded-t-2xl border border-[var(--border)] bg-[var(--bg-deep)] p-5 shadow-2xl sm:rounded-xl">
-                    <div className="mb-4 flex items-start justify-between gap-3"><div><h2 id="own-photo-title" className="font-display text-xl text-[var(--text-primary)]">Foto Sendiri</h2><p className="mt-1 text-xs text-[var(--text-muted)]">Temukan foto Cewe atau Cowo tanpa pasangannya, termasuk saat bersama tamu.</p></div><button type="button" aria-label="Tutup Foto Sendiri" onClick={() => setShowOwnPhotoChooser(false)} className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md text-[var(--text-secondary)]"><X size={18} /></button></div>
-                    <div className="grid gap-2">{(['female', 'male'] as const).map((mode) => <button key={mode} type="button" aria-pressed={refineMode === mode} onClick={() => { chooseRefineMode(mode); setShowOwnPhotoChooser(false); }} className={clsx('min-h-12 rounded-md border px-4 text-left text-sm font-semibold', refineMode === mode ? 'border-[var(--accent)] bg-[var(--accent)] text-[var(--bg-deep)]' : 'border-[var(--border)] text-[var(--text-primary)]')}>{mode === 'female' ? 'Foto Cewe' : 'Foto Cowo'}</button>)}</div>
-                    <p className="mt-5 mb-2 text-xs font-medium text-[var(--text-secondary)]">Tingkat kecocokan</p>
-                    <div role="group" aria-label="Tingkat kecocokan wajah" className="grid grid-cols-3 gap-2">{(['strict', 'balanced', 'wide'] as const).map((level) => <button key={level} type="button" aria-pressed={ownSensitivity === level} onClick={() => { setPage(1); syncGalleryUrl({ sensitivity: level, page: 1 }); }} className={clsx('min-h-11 rounded-md border px-2 text-xs font-semibold', ownSensitivity === level ? 'border-[var(--accent)] bg-[var(--accent)] text-[var(--bg-deep)]' : 'border-[var(--border)] text-[var(--text-secondary)]')}>{level === 'strict' ? 'Ketat' : level === 'balanced' ? 'Normal' : 'Luas'}</button>)}</div>
-                    <p className="mt-3 text-xs leading-5 text-[var(--text-muted)]">Foto Cewe dan Foto Cowo boleh memuat tamu, selama pasangannya tidak terlihat.</p>
-                </div>
-            </div>}
+            {showOwnPhotoChooser && <OwnPhotoChooser category={isOwnMode(refineMode) ? refineMode : null} sensitivity={ownSensitivity} onApply={(mode, sensitivity) => { chooseRefineMode(mode, sensitivity); setShowOwnPhotoChooser(false); }} onClear={() => { chooseRefineMode('none'); setShowOwnPhotoChooser(false); }} onClose={() => setShowOwnPhotoChooser(false)} />}
             {showFaceSearch && faceSearchControlVisible && (
                 <FaceSearchModal
                     theme={theme}

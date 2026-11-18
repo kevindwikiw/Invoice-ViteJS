@@ -9,6 +9,7 @@ export type DrivePhoto = {
     id: string;
     name: string;
     mimeType: string;
+    parents?: string[];
     thumbnailLink?: string;
     webViewLink?: string;
     webContentLink?: string;
@@ -235,6 +236,14 @@ export async function listDrivePhotos(folderId: string): Promise<DrivePhoto[]> {
     return listDriveEntries(folderId);
 }
 
+export async function listDriveSiblingVideos(folderId: string): Promise<DriveFolderPhoto[]> {
+    const folder = await getDrivePhotoMetadata(folderId);
+    const parentId = folder.parents?.[0];
+    if (!parentId) return [];
+    const siblings = await listDriveEntries(parentId, true);
+    return siblings.filter((entry) => entry.mimeType.startsWith('video/')).map((entry) => ({ ...entry, folderId: null }));
+}
+
 async function listDriveEntries(folderId: string, includeFolders = false): Promise<DrivePhoto[]> {
     const photos: DrivePhoto[] = [];
     let pageToken = "";
@@ -329,7 +338,7 @@ export async function fetchDriveVideo(fileId: string, range?: string, responseTi
 }
 
 export async function getDrivePhotoMetadata(fileId: string, requestOptions: { timeoutMs?: number; maxAttempts?: number } = {}): Promise<DrivePhoto> {
-    const response = await fetchDriveGet(`${DRIVE_API_BASE}/files/${encodeURIComponent(fileId)}?supportsAllDrives=true&fields=id,name,mimeType,thumbnailLink,webViewLink,webContentLink,resourceKey,copyRequiresWriterPermission,capabilities(canDownload),downloadRestrictions(effectiveDownloadRestrictionWithContext),size,imageMediaMetadata(width,height)`, requestOptions);
+    const response = await fetchDriveGet(`${DRIVE_API_BASE}/files/${encodeURIComponent(fileId)}?supportsAllDrives=true&fields=id,name,mimeType,parents,thumbnailLink,webViewLink,webContentLink,resourceKey,copyRequiresWriterPermission,capabilities(canDownload),downloadRestrictions(effectiveDownloadRestrictionWithContext),size,imageMediaMetadata(width,height)`, requestOptions);
     const data = await response.json().catch(() => ({})) as DrivePhoto & {
         error?: { message?: string };
         capabilities?: { canDownload?: boolean };
@@ -341,6 +350,7 @@ export async function getDrivePhotoMetadata(fileId: string, requestOptions: { ti
         id: data.id,
         name: data.name,
         mimeType: data.mimeType,
+        parents: data.parents,
         thumbnailLink: data.thumbnailLink,
         webViewLink: data.webViewLink,
         webContentLink: data.webContentLink,

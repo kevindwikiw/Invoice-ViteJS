@@ -9,6 +9,7 @@ mock.module('../lib/google-drive', () => ({
     hasAnyoneViewerFolderAccess: async () => true,
     listDrivePhotoTree: async () => ({ rootName: 'Edited Source', photos: [drivePhoto('edited-a', 'portraits'), drivePhoto('edited-b', 'nested')], folders: [{ id: 'portraits', parentId: null, name: 'Portraits' }, { id: 'nested', parentId: 'portraits', name: 'Family' }] }),
     listDrivePhotos: async () => [drivePhoto('raw-a')],
+    listDriveSiblingVideos: async () => [],
     getDrivePhotoMetadata: async (id: string) => drivePhoto(id),
     fetchDriveFile: async () => new Response('image', { headers: { 'content-type': 'image/jpeg' } }),
     fetchDriveVideo: async (_id: string, range?: string) => {

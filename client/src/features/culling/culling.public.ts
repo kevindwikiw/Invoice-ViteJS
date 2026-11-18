@@ -19,6 +19,12 @@ export async function parseError(response: Response, fallback: string): Promise<
     return error;
 }
 
+export async function getEditedOwnPhotos(id: string, token: string, category: 'female' | 'male', sensitivity: 'strict' | 'balanced' | 'wide'): Promise<{ status: 'ready' | 'indexing' | 'unavailable'; sourceVersion: string | null; ids: string[] }> {
+    const response = await apiFetch(`/public/galleries/${encodeURIComponent(id)}/edit-results/own-photo?category=${category}&sensitivity=${sensitivity}`, { headers: { 'x-edit-results-token': token } });
+    if (!response.ok) throw await parseError(response, 'Unable to load Foto Sendiri.');
+    return response.json();
+}
+
 // 2. Logika Diskon yang Dinamis
 export function calculateAddonQuote(count: number, unitPrice: number, rules?: DiscountRule[]) {
     let discountPercent = 0;

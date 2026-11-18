@@ -47,6 +47,7 @@ function PhotoTileView<T extends GalleryDisplayPhoto>({
     const prefetchTimerRef = useRef<number | null>(null);
     const thumbnailRetryTimerRef = useRef<number | null>(null);
     const displayLabel = displayPhotoLabel(photo, displayIndex);
+    const isVideo = mode === 'delivery' && photo.mimeType?.toLowerCase().startsWith('video/');
 
     const cancelScheduledPrefetch = () => {
         if (prefetchTimerRef.current == null) return;
@@ -72,7 +73,7 @@ function PhotoTileView<T extends GalleryDisplayPhoto>({
             <div className="relative aspect-[4/3] overflow-hidden">
                 <button
                     type="button"
-                    onClick={() => !hasError && onOpen(photo.driveFileId)}
+                    onClick={() => (!hasError || isVideo) && onOpen(photo.driveFileId)}
                     onContextMenu={(event) => event.preventDefault()}
                     onFocus={(event) => { if (event.currentTarget.matches(':focus-visible') && !hasError) onPrefetch(photo); }}
                     onPointerEnter={(event) => { if (event.pointerType === 'mouse' && !hasError) schedulePrefetch(); }}
@@ -83,7 +84,7 @@ function PhotoTileView<T extends GalleryDisplayPhoto>({
                         if (event.pointerType !== 'touch' && !hasError) onPrefetch(photo);
                     }}
                     className="h-full w-full select-none bg-[var(--bg-card)] text-left focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-[var(--accent)] [-webkit-touch-callout:none]"
-                    aria-label={`Open ${displayLabel}`}
+                    aria-label={`${isVideo ? 'Play video' : 'Open photo'}: ${displayLabel}`}
                 >
                     {/* Skip offscreen media painting without estimating the tile's height. */}
                     <span className="absolute inset-0 block [content-visibility:auto]">
@@ -113,9 +114,9 @@ function PhotoTileView<T extends GalleryDisplayPhoto>({
                             />
                         ) : (
                             <span className="flex h-full w-full flex-col items-center justify-center bg-[var(--bg-elevated)] text-[var(--text-muted)]">
-                                <ImageOff size={24} className="mb-2 opacity-50" />
+                                {isVideo ? <Play size={24} className="mb-2 opacity-50" /> : <ImageOff size={24} className="mb-2 opacity-50" />}
                                 <span className="text-[9px] font-bold uppercase tracking-[0.16em] opacity-60">
-                                    Failed to load
+                                    {isVideo ? 'Play video' : 'Failed to load'}
                                 </span>
                             </span>
                         )}

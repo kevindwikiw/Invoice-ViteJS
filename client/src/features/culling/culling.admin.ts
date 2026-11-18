@@ -217,7 +217,7 @@ export async function changeEditResultsPassword(input: { id: number; password: s
     return response.json();
 }
 
-export async function syncEditResults(id: number): Promise<{ status: 'synced' | 'validated'; published: boolean; photoCount: number; folderCount?: number; warnings?: string[] }> {
+export async function syncEditResults(id: number): Promise<{ status: 'synced' | 'validated'; published: boolean; photoCount: number; videoCount: number; folderCount?: number; warnings?: string[] }> {
     const response = await fetchWithAuth(`/galleries/${id}/edit-results/sync`, { method: 'POST' });
     if (!response.ok) throw await parseError(response, 'Unable to sync edited photos folder.');
     return response.json();

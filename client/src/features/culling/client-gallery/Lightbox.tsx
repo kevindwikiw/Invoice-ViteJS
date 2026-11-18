@@ -211,8 +211,8 @@ function LightboxView<T extends GalleryDisplayPhoto>({
     if (!photo || currentIndex < 0) return null;
 
     return (
-        <div ref={dialogRef} tabIndex={-1} role="dialog" aria-modal="true" aria-label={`Photo preview: ${displayLabel}`} className="fixed inset-0 z-[120] bg-black/95 text-white outline-none">
-            <button ref={closeButtonRef} type="button" aria-label="Close photo preview" onClick={closeLightbox} className="absolute right-2 top-2 z-30 flex h-11 w-11 items-center justify-center rounded-full border border-white/20 bg-black/40 text-white backdrop-blur transition-colors hover:border-[var(--accent)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-white sm:right-4 sm:top-4">
+        <div ref={dialogRef} tabIndex={-1} role="dialog" aria-modal="true" aria-label={`${isVideo ? 'Video' : 'Photo'} preview: ${displayLabel}`} className="fixed inset-0 z-[120] bg-black/95 text-white outline-none">
+            <button ref={closeButtonRef} type="button" aria-label={`Close ${isVideo ? 'video' : 'photo'} preview`} onClick={closeLightbox} className="absolute right-2 top-2 z-30 flex h-11 w-11 items-center justify-center rounded-full border border-white/20 bg-black/40 text-white backdrop-blur transition-colors hover:border-[var(--accent)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-white sm:right-4 sm:top-4">
                 <X size={16} aria-hidden="true" />
             </button>
 

@@ -13,6 +13,7 @@ const metadataCalls: string[] = [];
 mock.module('../lib/google-drive', () => ({
     getReadonlyDriveToken: async () => ({ accessToken: 'test', expiresAt: Date.now() + 1000 }),
     listDrivePhotos: async () => folderSnapshot.length ? edited.filter((photo) => photo.id !== 'bw' && photo.id !== 'nested-photo') : edited,
+    listDriveSiblingVideos: async () => [],
     listDrivePhotoTree: async () => {
         if (treeFails) throw new Error('Folder unavailable');
         return { rootName: 'Edited Source', folders: folderSnapshot, photos: edited.map((photo) => ({ ...photo, folderId: folderSnapshot.length ? photo.id === 'nested-photo' ? 'empty' : photo.id === 'bw' ? 'no-watermark' : null : null })) };
@@ -88,7 +89,7 @@ globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) =>
     if (url.endsWith('/readyz')) return Response.json({ code: 'worker_not_ready' }, { status: 503 });
     return Response.json({ error: 'not_found' }, { status: 404 });
 }) as typeof fetch;
-type Archive = { filename: string; downloadUrl: string; downloadResolveUrl: string };
+type Archive = { filename: string; downloadResolveUrl: string };
 type Payload = { archive: Archive | null; code?: string; downloadUrl?: string; filename?: string; rootFolderName?: string; submitted: Array<{ driveFileId: string }>; edited: Array<{ driveFileId: string; thumbnailUrl: string }>; comparisonEnabled: boolean; comparisonCount: number; token: string; warnings: string[]; photos: Array<{ driveFileId?: string; downloadResolveUrl?: string; comparison: { previewUrl: string } | null }> };
 const json = async (response: Response) => await response.json() as Payload;
 assert.equal((await request('/admin/1/edit-results/pairing', 'GET', undefined, false)).status, 401);
@@ -150,7 +151,7 @@ assert.equal(list.photos.length, 3);
 assert.equal(list.photos[2]!.comparison, null);
 assert.ok(list.photos[0]!.comparison!.previewUrl.includes('/color/before/preview'));
 assert.equal((list.photos[0] as any).driveFileId, 'color');
-assert.equal((list.photos[0] as any).downloadUrl, drivePhoto('color').webContentLink);
+assert.equal((list.photos[0] as any).downloadUrl, undefined);
 assert.ok((list.photos[0] as any).downloadResolveUrl.includes('/photos/color/download-url?token='));
 const resolvedPhoto = await json(await request(`/public/gallery/edit-results/photos/color/download-url?token=${token}`));
 assert.equal(resolvedPhoto.downloadUrl, drivePhoto('color').webContentLink);
@@ -177,6 +178,7 @@ assert.equal((await listing()).status, 401);
 token = await login();
 const withArchive = await json(await listing());
 assert.ok(withArchive.archive?.downloadResolveUrl.includes('/archive/download-url?token='));
+assert.equal((withArchive.archive as any).downloadUrl, undefined);
 const resolvedArchive = await json(await request(`/public/gallery/edit-results/archive/download-url?token=${token}`));
 assert.equal(resolvedArchive.downloadUrl, drivePhoto('archive').webContentLink);
 assert.equal(resolvedArchive.filename, 'backup.zip');

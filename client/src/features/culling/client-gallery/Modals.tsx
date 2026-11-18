@@ -390,7 +390,7 @@ export function TutorialModal({ galleryId, token, tutorialSampleSlots, tutorialS
                                 {[
                                     { icon: <Images size={18} />, title: 'Browse the Gallery', text: 'Scroll through the gallery and open any photo for a closer look.' },
                                     { icon: <ScanFace size={18} />, title: 'Find and Choose Favorites', text: 'Tap Foto Sendiri, choose Foto Cewe or Foto Cowo, then pick the photos you want to keep.' },
-                                    { icon: <CheckSquare size={18} />, title: 'Review Picked', text: 'Use All Photos, Picked, or Submitted to move between views.' },
+                                    { icon: <CheckSquare size={18} />, title: 'Review Picked', text: 'Use Photos, Picked, or Submitted to move between views.' },
                                     { icon: <Send size={18} />, title: 'Submit Your Selection', text: 'Confirm the final count. You can revise and submit again later.' },
                                     { icon: <Images size={18} />, title: 'Review Edited Photos', text: 'Open Edited Photos to compare your final images with Before / After.' },
                                     { icon: <Clock3 size={18} />, title: 'Keep An Eye On Time', text: 'The countdown shows how long your gallery remains available.' },

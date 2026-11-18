@@ -157,7 +157,6 @@ export interface EditResultPhoto extends GalleryDisplayPhoto {
     mimeType: string;
     thumbnailUrl: string;
     previewUrl: string;
-    downloadUrl: string;
     downloadResolveUrl: string;
     comparison?: { thumbnailUrl: string; previewUrl: string } | null;
 }
@@ -174,7 +173,7 @@ export interface EditResults {
     publishedAt: string;
     expiresAt: string | null;
     expiresIn: number | null;
-    archive: { filename: string; downloadUrl: string; downloadResolveUrl: string } | null;
+    archive: { filename: string; downloadResolveUrl: string } | null;
 }
 
 export interface PublicGalleryPhotos {

@@ -1160,7 +1160,7 @@ function GalleryDetailEditor({ data, photos, close, initialMode, focusSelectionD
   const editSync = useMutation({
     mutationFn: syncEditResults,
     onSuccess: (result) => {
-      addToast(result.published ? `Published snapshot updated with ${result.photoCount} edited items. Access settings unchanged.` : `${result.photoCount} edited items found. Publish to make them available to clients.`, 'success');
+      addToast(result.published ? `Published snapshot updated: ${result.photoCount} items, ${result.videoCount} videos. Access settings unchanged.` : `${result.photoCount} edited items found, including ${result.videoCount} videos. Publish to make them available to clients.`, 'success');
       setPublishWarnings(result.warnings || []);
       if (result.published) setEditedSyncPending(false);
       void qc.invalidateQueries({ queryKey: ['galleries'] });

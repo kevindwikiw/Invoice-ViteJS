@@ -23,6 +23,7 @@ mock.module('../lib/google-drive', () => ({
         ], folders: [{ id: 'ceremony-folder', parentId: null, name: 'Ceremony' }] };
     },
     listDrivePhotos: async () => [photo('source')],
+    listDriveSiblingVideos: async () => [],
     getDrivePhotoMetadata: async (id: string) => photo(id),
     fetchDriveFile: async () => new Response('image', { headers: { 'content-type': 'image/jpeg' } }),
     fetchDriveVideo: async () => new Response('video', { headers: { 'content-type': 'video/mp4' } }),

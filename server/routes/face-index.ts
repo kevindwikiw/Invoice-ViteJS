@@ -686,6 +686,41 @@ faceIndexRouter.post("/search", async (c) => {
 
 export { createOrReuseJob, currentJob, MODEL_VERSION, INTERNAL_TOKEN };
 
+export async function editedOwnPhotoMatches(galleryId: number): Promise<{ status: 'ready' | 'indexing' | 'unavailable'; sourceVersion?: string; matches?: ReturnType<typeof buildOwnPhotoResults> }> {
+    let editedJob = await currentJob(galleryId, 'edited');
+    if (!editedJob) {
+        await prepareGalleryFaceIndex(galleryId, 'edited');
+        editedJob = await currentJob(galleryId, 'edited');
+    }
+    if (editedJob?.status !== 'completed') return { status: editedJob?.status === 'queued' || editedJob?.status === 'running' ? 'indexing' : 'unavailable' };
+    const identity = await galleryOne<{ fileId: string | null; femaleIndex: number | null; maleIndex: number | null; photoVersion: string | null }>(
+        'SELECT face_reference_file_id as "fileId", face_reference_female_index as "femaleIndex", face_reference_male_index as "maleIndex", face_reference_photo_version as "photoVersion" FROM galleries WHERE id = ?', [galleryId],
+    );
+    if (!identity?.fileId || identity.femaleIndex == null || identity.maleIndex == null || !identity.photoVersion) return { status: 'unavailable' };
+    const reference = await galleryOne<{ sourceVersion: string }>('SELECT source_version as "sourceVersion" FROM gallery_photos WHERE gallery_id = ? AND drive_file_id = ?', [galleryId, identity.fileId]);
+    if (reference?.sourceVersion !== identity.photoVersion) return { status: 'unavailable' };
+    const referenceFaces = await galleryAll<{ faceIndex: number; embedding: string }>(
+        'SELECT face_index as "faceIndex", embedding FROM face_embeddings WHERE gallery_id = ? AND source_scope = ? AND model_version = ? AND drive_file_id = ? AND source_version = ?',
+        [galleryId, 'selection', MODEL_VERSION, identity.fileId, identity.photoVersion],
+    );
+    const editedPhotos = await galleryAll<{ driveFileId: string }>('SELECT drive_file_id as "driveFileId" FROM gallery_edit_result_photos WHERE gallery_id = ? ORDER BY display_order, filename', [galleryId]);
+    const editedFaces = await galleryAll<{ driveFileId: string; faceIndex: number; embedding: string }>(
+        'SELECT e.drive_file_id as "driveFileId", e.face_index as "faceIndex", e.embedding FROM face_embeddings e JOIN gallery_edit_result_photos p ON p.gallery_id = e.gallery_id AND p.drive_file_id = e.drive_file_id AND p.source_version = e.source_version WHERE e.gallery_id = ? AND e.source_scope = ? AND e.model_version = ?',
+        [galleryId, 'edited', MODEL_VERSION],
+    );
+    const solo = await galleryAll<{ driveFileId: string }>(
+        'SELECT p.drive_file_id as "driveFileId" FROM face_index_photos p JOIN gallery_edit_result_photos e ON e.gallery_id = p.gallery_id AND e.drive_file_id = p.drive_file_id AND e.source_version = p.source_version WHERE p.gallery_id = ? AND p.source_scope = ? AND p.model_version = ? AND p.is_solo = 1',
+        [galleryId, 'edited', MODEL_VERSION],
+    );
+    const referenceId = `__reference__:${identity.fileId}`;
+    const faces: IndexedFace[] = [
+        ...referenceFaces.map((face) => ({ driveFileId: referenceId, faceIndex: face.faceIndex, embedding: JSON.parse(face.embedding) as number[] })),
+        ...editedFaces.map((face) => ({ driveFileId: face.driveFileId, faceIndex: face.faceIndex, embedding: JSON.parse(face.embedding) as number[] })),
+    ];
+    const matches = buildOwnPhotoResults(editedPhotos.map((photo) => photo.driveFileId), faces, referenceId, identity.femaleIndex, identity.maleIndex, new Set(solo.map((photo) => photo.driveFileId)));
+    return matches ? { status: 'ready', sourceVersion: editedJob.sourceVersion, matches } : { status: 'unavailable' };
+}
+
 export async function rebuildOwnPhotoResults(galleryId: number): Promise<boolean> {
     const job = await currentJob(galleryId, 'selection');
     if (!job || job.status !== 'completed') return false;

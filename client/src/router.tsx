@@ -63,6 +63,8 @@ const weddingGalleryRoute = createRoute({
     validateSearch: (search: Record<string, unknown>): ClientCullingSearch => ({
         folder: typeof search.folder === 'string' && search.folder.length <= 256 ? search.folder : undefined,
         view: search.view === 'selfie' || search.view === 'edit-results' ? search.view : undefined,
+        filter: search.filter === 'female' || search.filter === 'male' ? search.filter : undefined,
+        sensitivity: search.sensitivity === 'strict' || search.sensitivity === 'balanced' || search.sensitivity === 'wide' ? search.sensitivity : undefined,
         editedPage: positiveSearchPage(search.editedPage),
         selfiePage: positiveSearchPage(search.selfiePage),
         selfieSource: search.selfieSource === 'edited' ? 'edited' : undefined,
