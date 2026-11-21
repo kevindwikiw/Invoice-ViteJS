@@ -18,9 +18,9 @@ export function EditedPhotosGuide({ open, onClose, theme, hasFolders, hasArchive
     const closeRef = useRef<HTMLButtonElement>(null);
     const [step, setStep] = useState(0);
     const steps: GuideStep[] = hasFolders ? [
-        { title: 'Open a folder', description: 'Choose a folder to see the photos inside. Use the back arrow to return to its parent folder.', icon: Folder },
-        { title: 'Switch folders', description: 'Inside a folder, use the folder button at the bottom to jump directly to another folder.', icon: FolderOpen },
-        { title: 'View and download', description: hasArchive ? 'Open a photo to view or download it. Download Photos Here saves only photos directly in the current folder.' : 'Open a photo to view it full size or download it.', icon: Download },
+        { title: 'Open a folder', description: 'Choose a folder to see the photos inside. Use the path above the photos to return to a parent folder.', icon: Folder },
+        { title: 'Download a folder', description: 'Use the download button beside a folder to save it and its subfolders as a ZIP.', icon: FolderOpen },
+        { title: 'View and download', description: hasArchive ? 'Open a photo to view or download it. Download All Photos saves photos across the folders; videos stay separate.' : 'Open a photo to view it full size or download it.', icon: Download },
     ] : [
         { title: 'Browse your photos', description: 'Select a thumbnail to open the finished photo in the full-size viewer.', icon: Images },
         { title: 'Download your photos', description: hasArchive ? 'Download individual photos, or use Download All Photos to save photos directly in the gallery root.' : 'Open a photo and use its download button to save it.', icon: Download },

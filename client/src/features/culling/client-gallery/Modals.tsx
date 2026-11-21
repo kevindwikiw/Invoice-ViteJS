@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { AlertCircle, Check, CheckSquare, ChevronLeft, ChevronRight, Clock3, Images, Loader2, MessageCircle, QrCode, ScanFace, Send, X } from 'lucide-react';
+import { OWN_PHOTO_SEARCH_ENABLED } from './own-photo-availability';
 import clsx from 'clsx';
 import { GalleryModal } from '../../../components/GalleryModal';
 
@@ -389,7 +390,9 @@ export function TutorialModal({ galleryId, token, tutorialSampleSlots, tutorialS
                             <ol data-testid="tutorial-submit-steps" className="mt-3 divide-y divide-[var(--border)] border-y border-[var(--border)] sm:mt-4">
                                 {[
                                     { icon: <Images size={18} />, title: 'Browse the Gallery', text: 'Scroll through the gallery and open any photo for a closer look.' },
-                                    { icon: <ScanFace size={18} />, title: 'Find and Choose Favorites', text: 'Tap Foto Sendiri, choose Foto Cewe or Foto Cowo, then pick the photos you want to keep.' },
+                                    OWN_PHOTO_SEARCH_ENABLED
+                                        ? { icon: <ScanFace size={18} />, title: 'Find and Choose Favorites', text: 'Tap Foto Sendiri, choose Foto Cewe or Foto Cowo, then pick the photos you want to keep.' }
+                                        : { icon: <Images size={18} />, title: 'Browse by Camera', text: 'Open Photos to view everything or switch to Kamera 1 or Kamera 2 when available.' },
                                     { icon: <CheckSquare size={18} />, title: 'Review Picked', text: 'Use Photos, Picked, or Submitted to move between views.' },
                                     { icon: <Send size={18} />, title: 'Submit Your Selection', text: 'Confirm the final count. You can revise and submit again later.' },
                                     { icon: <Images size={18} />, title: 'Review Edited Photos', text: 'Open Edited Photos to compare your final images with Before / After.' },
