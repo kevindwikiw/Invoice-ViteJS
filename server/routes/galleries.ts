@@ -1667,10 +1667,13 @@ async function setArchiveGallerySnapshot(galleryId: number, snapshotVersion: str
             method: "PUT",
             headers: { Authorization: `Bearer ${ARCHIVE_WORKER_TOKEN}`, "Content-Type": "application/json" },
             body: JSON.stringify({ snapshotVersion }),
-            signal: AbortSignal.timeout(10_000),
+            signal: AbortSignal.timeout(30_000),
         });
-        return response.ok;
-    } catch {
+        if (response.ok) return true;
+        console.warn(`[edited photos] Archive snapshot update failed for gallery ${galleryId}: HTTP ${response.status}.`);
+        return false;
+    } catch (error) {
+        console.warn(`[edited photos] Archive snapshot update failed for gallery ${galleryId}:`, error instanceof Error ? error.message : error);
         return false;
     }
 }
@@ -2067,7 +2070,7 @@ adminGalleriesRouter.post("/:id/sync", async (c) => {
     )`, params: [id] });
     await galleryBatch(syncStatements);
     await getFaceSourceVersion(id);
-    void prepareGalleryFaceIndex(id);
+    await prepareGalleryFaceIndex(id);
     void rebuildOwnPhotoResults(id).catch((error) => console.error('[own-photo] Preparation failed:', error));
     return c.json({ status: "synced", photoCount: photos.length, changes: photoChanges });
 });

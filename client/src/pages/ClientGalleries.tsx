@@ -973,7 +973,8 @@ function GalleryDetailEditor({ data, photos, close, initialMode, focusSelectionD
   const [faceRole, setFaceRole] = useState<'female' | 'male'>('female');
   const referencePreview = photos.find((photo) => photo.driveFileId === (referenceChoice || data.ownPhotoReferenceFileId));
   const deliveryOnly = data.workflow === 'delivery_only';
-  const referenceFaces = useQuery({ queryKey: ['gallery-reference-faces', data.id, referenceChoice], queryFn: () => getGalleryReferenceFaces(data.id, referenceChoice), enabled: Boolean(referenceChoice) && !deliveryOnly, retry: false });
+  const selectionIndexReady = data.ownPhotoStatus === 'ready' || data.ownPhotoStatus === 'needs_reference';
+  const referenceFaces = useQuery({ queryKey: ['gallery-reference-faces', data.id, referenceChoice, data.ownPhotoStatus], queryFn: () => getGalleryReferenceFaces(data.id, referenceChoice), enabled: Boolean(referenceChoice) && !deliveryOnly && selectionIndexReady, retry: false });
   useEffect(() => {
     if (!referenceChoiceTouched && !referenceChoice && (data.faceReferenceFileId || data.ownPhotoReferenceFileId)) {
       setReferenceChoice(data.faceReferenceFileId || data.ownPhotoReferenceFileId || '');
@@ -1434,10 +1435,10 @@ function GalleryDetailEditor({ data, photos, close, initialMode, focusSelectionD
                 </div>
                 {referenceImageFailed && <p role="alert">Preview foto referensi gagal dimuat. Sync galeri, lalu coba lagi.</p>}
                 {referenceFaces.data && <div className="flex flex-wrap gap-2">{referenceFaces.data.faces.map((face) => <button key={face.faceIndex} type="button" onClick={() => markReferenceFace(face.faceIndex)} className="min-h-9 rounded border border-[var(--border)] px-2">Wajah {face.faceIndex + 1}{femaleFaceIndex === face.faceIndex ? ' · Cewe' : maleFaceIndex === face.faceIndex ? ' · Cowo' : ''}</button>)}</div>}
-                {referenceFaces.isError && <p role="alert">Deteksi wajah belum tersedia. Sync galeri dan tunggu indeks selesai.</p>}
+                {referenceFaces.isError && <div role="alert" className="flex flex-wrap items-center gap-2"><span>Deteksi wajah gagal dimuat.</span><button type="button" onClick={() => void referenceFaces.refetch()} className="min-h-10 rounded-md border border-[var(--border)] px-3 font-semibold focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)]">Coba lagi</button></div>}
                 {referenceFaces.data?.faces.length === 0 && <p role="status">Tidak ada wajah terdeteksi di foto ini. Pilih foto referensi lain.</p>}
               </div>}
-              <p role="status" className="text-xs text-[var(--text-secondary)]">Foto Sendiri: {data.ownPhotoStatus === 'ready' ? 'siap' : data.ownPhotoStatus === 'needs_reference' ? 'tandai wajah Cewe dan Cowo, lalu simpan' : data.ownPhotoStatus === 'indexing' ? 'sedang diproses' : 'indeks wajah belum tersedia'}</p>
+              <p role="status" className="text-xs text-[var(--text-secondary)]">Foto Sendiri: {data.ownPhotoStatus === 'ready' ? 'siap' : data.ownPhotoStatus === 'needs_reference' ? 'tandai wajah Cewe dan Cowo, lalu simpan' : data.ownPhotoStatus === 'indexing' ? 'indeks Photo Selection sedang diproses' : dirty ? 'simpan perubahan, lalu klik Sync di Photo Selection' : 'indeks Photo Selection belum tersedia; klik Sync di Photo Selection'}</p>
               <p className="text-xs leading-5 text-[var(--text-muted)]">Sync folder Drive utama, lalu pilih dua wajah klien di foto referensi; foto dengan tamu tetap akan ditemukan.</p>
               <div className="grid gap-4 sm:grid-cols-3">
                 <div className="min-w-0 space-y-2">

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { createPortal } from 'react-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useRouter, useSearch } from '@tanstack/react-router';
-import { AlertCircle, ArrowLeft, Camera, Check, CheckSquare, ChevronLeft, ChevronRight, Clock3, Download, Folder, FolderOpen, HelpCircle, ImageIcon, Images, Loader2, Lock, MessageCircle, RotateCcw, ScanFace, Send, Video, X } from 'lucide-react';
+import { AlertCircle, ArrowLeft, Camera, Check, CheckSquare, ChevronLeft, ChevronRight, ChevronUp, Clock3, Download, Folder, FolderOpen, HelpCircle, ImageIcon, Images, Loader2, Lock, MessageCircle, RotateCcw, ScanFace, Send, Video, X } from 'lucide-react';
 import clsx from 'clsx';
 
 import { editResultVideoUrl, getEditedOwnPhotos, getEditFolderArchiveJob, getEditResults, getEditResultsStatus, resolveEditResultDownload, startEditFolderArchive, startEditGalleryArchive, verifyEditResultsPassword, type EditFolderArchiveScope } from '../culling.public';
@@ -140,6 +140,9 @@ export function EditResultsGrid({
     const ownSensitivity = searchSensitivity ?? 'balanced';
     const [showOwnPhotoChooser, setShowOwnPhotoChooser] = useState(false);
     const [showSelectionInfo, setShowSelectionInfo] = useState(false);
+    const [folderJumpOpen, setFolderJumpOpen] = useState(false);
+    const folderJumpRef = useRef<HTMLElement>(null);
+    const folderJumpButtonRef = useRef<HTMLButtonElement>(null);
     const selfieResults = useQuery<EditedOwnMatches>({ queryKey: ['public-edited-own-photo', galleryId, token, ownCategory, ownSensitivity], queryFn: () => getEditedOwnPhotos(galleryId, token, ownCategory, ownSensitivity), enabled: Boolean(token) && isSelfieView, staleTime: 60_000, refetchInterval: (query) => query.state.data?.status === 'indexing' ? 10_000 : false });
     const [editedMenuOpen, setEditedMenuOpen] = useState(false);
     const [allMenuOpen, setAllMenuOpen] = useState(false);
@@ -252,6 +255,45 @@ export function EditResultsGrid({
     const childFolders = useMemo(() => deliveryOnly && !isSelfieView && !isVideoView
         ? folders.filter((folder) => folder.parentId === folderId).sort((left, right) => compareFolderNames(left.name, right.name))
         : [], [deliveryOnly, folders, folderId, isSelfieView, isVideoView]);
+    const folderOptions = useMemo(() => {
+        const children = new Map<string | null, typeof folders>();
+        const knownFolderIds = new Set(folders.map((folder) => folder.id));
+        for (const folder of folders) {
+            const parentId = folder.parentId && knownFolderIds.has(folder.parentId) ? folder.parentId : null;
+            children.set(parentId, [...(children.get(parentId) ?? []), folder]);
+        }
+        const ordered: Array<{ folder: (typeof folders)[number]; depth: number; path: string }> = [];
+        const visited = new Set<string>();
+        const visit = (parentId: string | null, depth: number, path: string) => {
+            for (const folder of (children.get(parentId) ?? []).sort((left, right) => compareFolderNames(left.name, right.name))) {
+                if (visited.has(folder.id)) continue;
+                visited.add(folder.id);
+                const folderPath = path ? `${path} / ${folder.name}` : folder.name;
+                ordered.push({ folder, depth, path: folderPath });
+                visit(folder.id, depth + 1, folderPath);
+            }
+        };
+        visit(null, 0, '');
+        return ordered;
+    }, [folders]);
+    useEffect(() => {
+        if (!folderJumpOpen) return;
+        const closeOnOutside = (event: PointerEvent) => {
+            if (!folderJumpRef.current?.contains(event.target as Node)) setFolderJumpOpen(false);
+        };
+        const closeOnEscape = (event: KeyboardEvent) => {
+            if (event.key !== 'Escape') return;
+            setFolderJumpOpen(false);
+            folderJumpButtonRef.current?.focus({ preventScroll: true });
+        };
+        document.addEventListener('pointerdown', closeOnOutside);
+        document.addEventListener('keydown', closeOnEscape);
+        return () => {
+            document.removeEventListener('pointerdown', closeOnOutside);
+            document.removeEventListener('keydown', closeOnEscape);
+        };
+    }, [folderJumpOpen]);
+    useEffect(() => setFolderJumpOpen(false), [folderId, isVideoView]);
     const folderBreadcrumbs = useMemo(() => {
         const byId = new Map(folders.map((folder) => [folder.id, folder]));
         const trail: typeof folders = [];
@@ -426,6 +468,14 @@ export function EditResultsGrid({
         void navigateEdited((current) => ({ ...current, view: next === 'selfie' ? 'selfie' : undefined, selfieSource: undefined }), { resetScroll: false });
     };
 
+    const folderNavigation = deliveryOnly && !isSelfieView && !isVideoView && folderOptions.length > 0 && <nav ref={folderJumpRef} aria-label="Choose photo folder" className="relative w-full font-sans sm:w-72 lg:w-56">
+        <button ref={folderJumpButtonRef} type="button" aria-expanded={folderJumpOpen} aria-controls={folderJumpOpen ? 'edited-folder-jump-options' : undefined} aria-label={`Choose folder. Current folder: ${currentFolder?.name ?? 'All folders'}`} onClick={() => setFolderJumpOpen((open) => !open)} className="flex min-h-11 w-full min-w-0 items-center gap-2.5 rounded-md border border-[var(--border)] bg-[var(--bg-card)] px-3 text-left text-[13px] font-medium text-[var(--text-primary)] hover:border-[var(--text-muted)] hover:bg-[var(--bg-elevated)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)]"><FolderOpen size={17} aria-hidden="true" className="shrink-0 text-[var(--text-secondary)]" /><span className="min-w-0 flex-1 truncate">{currentFolder?.name ?? 'All folders'}</span><ChevronUp size={16} aria-hidden="true" className={clsx('shrink-0 text-[var(--text-secondary)]', folderJumpOpen && 'rotate-180')} /></button>
+        {folderJumpOpen && <div id="edited-folder-jump-options" className="absolute inset-x-0 bottom-[calc(100%+8px)] z-50 max-h-[min(22rem,55dvh)] origin-bottom overflow-y-auto overscroll-contain rounded-md border border-[var(--border)] bg-[var(--bg-deep)] p-1.5 shadow-xl">
+            <EditedGalleryLink galleryId={galleryId} weddingSlug={weddingSlug} search={(current) => ({ ...current, folder: undefined, editedPage: 1 })} resetScroll onClick={() => { closePhoto(); setFolderJumpOpen(false); }} aria-current={!currentFolder ? 'page' : undefined} className={clsx('flex min-h-11 items-center gap-2 rounded-md px-2.5 text-[13px] font-medium focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)]', !currentFolder ? 'bg-[var(--accent)] text-[var(--bg-deep)]' : 'text-[var(--text-secondary)] hover:bg-[var(--bg-card)] hover:text-[var(--text-primary)]')}><FolderOpen size={15} aria-hidden="true" className="shrink-0" /><span className="min-w-0 flex-1 truncate">All folders</span>{!currentFolder && <Check size={15} aria-hidden="true" className="shrink-0" />}</EditedGalleryLink>
+            {folderOptions.map(({ folder, depth, path }) => <EditedGalleryLink key={folder.id} galleryId={galleryId} weddingSlug={weddingSlug} search={(current) => ({ ...current, folder: folder.id, editedPage: 1 })} resetScroll onClick={() => { closePhoto(); setFolderJumpOpen(false); }} aria-current={folder.id === folderId ? 'page' : undefined} title={path} className={clsx('flex min-h-11 min-w-0 items-center gap-2 rounded-md pr-2.5 text-[13px] font-medium focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)]', folder.id === folderId ? 'bg-[var(--accent)] text-[var(--bg-deep)]' : 'text-[var(--text-secondary)] hover:bg-[var(--bg-card)] hover:text-[var(--text-primary)]')}><span aria-hidden="true" className="shrink-0" style={{ width: `${10 + Math.min(depth, 3) * 12}px` }} /><Folder size={15} aria-hidden="true" className="shrink-0" /><span className="min-w-0 flex-1 truncate">{folder.name}</span>{folder.id === folderId && <Check size={15} aria-hidden="true" className="shrink-0" />}</EditedGalleryLink>)}
+        </div>}
+    </nav>;
+
     const content = unavailable ? (
         <section role="status" className="mx-auto flex min-h-[60vh] max-w-md flex-col items-center justify-center gap-4 px-5 py-10 text-center">
             <Lock size={24} aria-hidden="true" />
@@ -471,7 +521,7 @@ export function EditResultsGrid({
                 {folderBreadcrumbs.map((folder, index) => <span key={folder.id} className="inline-flex min-w-0 items-center gap-1.5"><ChevronRight size={13} aria-hidden="true" className="shrink-0" />{index === folderBreadcrumbs.length - 1 ? <span aria-current="page" className="max-w-48 truncate font-semibold text-[var(--text-primary)]">{folder.name}</span> : <EditedGalleryLink galleryId={galleryId} weddingSlug={weddingSlug} search={(current) => ({ ...current, folder: folder.id, editedPage: 1 })} resetScroll onClick={closePhoto} className="inline-flex min-h-11 max-w-40 items-center truncate rounded-md px-1 hover:text-[var(--text-primary)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)]">{folder.name}</EditedGalleryLink>}</span>)}
             </nav>}
             {deliveryOnly && !isSelfieView && !isVideoView && childFolders.length > 0 && <section aria-label="Photo folders" className={photos.length ? 'mb-5' : undefined}>
-                <h2 className="mb-2 flex items-center gap-2 text-xs font-semibold text-[var(--text-secondary)] sm:text-sm"><Folder size={15} aria-hidden="true" />Folders</h2>
+                <h2 className="mb-2 flex items-center gap-2 font-body text-[13px] font-semibold leading-5 text-[var(--text-secondary)] sm:text-sm"><Folder size={15} aria-hidden="true" />Folders</h2>
                 <div data-testid="edited-folder-tiles" className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
                     {childFolders.map((folder) => {
                         const count = folderContents.get(folder.id) ?? { photos: 0, folders: 0 };
@@ -484,7 +534,7 @@ export function EditResultsGrid({
                     })}
                 </div>
             </section>}
-            {deliveryOnly && !isSelfieView && !isVideoView && photos.length > 0 && (childFolders.length > 0 || currentFolder) && <h2 className="mb-3 border-t border-[var(--border)] pt-3 text-xs font-semibold text-[var(--text-secondary)] sm:text-sm">Photos</h2>}
+            {deliveryOnly && !isSelfieView && !isVideoView && photos.length > 0 && (childFolders.length > 0 || currentFolder) && <h2 className="mb-3 border-t border-[var(--border)] pt-3 font-body text-[13px] font-semibold leading-5 text-[var(--text-secondary)] sm:text-sm">Photos</h2>}
             {photos.length ? <div ref={gridRef} data-testid="edited-gallery-grid" className="grid scroll-mt-36 grid-cols-2 gap-1.5 sm:grid-cols-3 sm:gap-2 md:grid-cols-4 md:gap-3 xl:grid-cols-5 2xl:grid-cols-6">
                 {visiblePhotos.map((photo, index) => <PhotoTile
                     key={photo.driveFileId}
@@ -558,7 +608,7 @@ export function EditResultsGrid({
             </div>
         </div>}
         <div id="edited-gallery-content" tabIndex={-1} className="flex-1 scroll-mt-44 outline-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--accent)] lg:scroll-mt-36">{content}</div>
-        <GalleryFooter />
+        <GalleryFooter navigation={folderNavigation} />
         {guide}
         {ownChooser}
         {showSelectionInfo && <div className="fixed inset-0 z-[150] flex items-center justify-center overscroll-contain bg-black/60 p-4 [touch-action:manipulation]" onMouseDown={(event) => { if (event.target === event.currentTarget) { setShowSelectionInfo(false); selectionInfoTriggerRef.current?.focus({ preventScroll: true }); } }}>
